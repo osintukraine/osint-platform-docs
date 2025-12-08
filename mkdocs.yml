@@ -1,0 +1,136 @@
+site_name: OSINT Intelligence Platform
+site_description: Production-ready system for archiving, enriching, and analyzing Telegram channels with multi-model AI enrichment
+site_author: OSINT Ukraine Team
+site_url: https://docs.osint-platform.local
+
+repo_name: osintukraine/osint-intelligence-platform
+repo_url: https://github.com/osintukraine/osint-intelligence-platform
+
+theme:
+  name: material
+  palette:
+    # Light mode
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - search.share
+    - toc.follow
+    - toc.integrate
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search:
+      lang: en
+  - minify:
+      minify_html: true
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - codehilite:
+      guess_lang: false
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - def_list
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+extra:
+  version:
+    provider: mike
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/osintukraine/osint-intelligence-platform
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - getting-started/index.md
+      - What is OSINT Platform?: getting-started/what-is-osint-platform.md
+      - Quick Start: getting-started/quick-start.md
+      - Core Concepts: getting-started/concepts.md
+  - User Guide:
+      - user-guide/index.md
+      - Searching Messages: user-guide/searching.md
+      - RSS Feed Management: user-guide/rss-feeds.md
+      - Entity Exploration: user-guide/entities.md
+      - Social Graph Analysis: user-guide/social-graph.md
+      - Notifications & Alerts: user-guide/notifications.md
+  - Operator Guide:
+      - operator-guide/index.md
+      - Installation: operator-guide/installation.md
+      - Configuration: operator-guide/configuration.md
+      - Telegram Setup: operator-guide/telegram-setup.md
+      - Monitoring & Metrics: operator-guide/monitoring.md
+      - Backup & Restore: operator-guide/backup-restore.md
+      - Troubleshooting: operator-guide/troubleshooting.md
+  - Developer Guide:
+      - developer-guide/index.md
+      - Architecture Overview: developer-guide/architecture.md
+      - Services Deep Dive: developer-guide/services/index.md
+      - Shared Libraries: developer-guide/shared-libraries.md
+      - Database Schema: developer-guide/database-schema.md
+      - Adding Features: developer-guide/adding-features.md
+      - Contributing: developer-guide/contributing.md
+  - Security Guide:
+      - security-guide/index.md
+      - Authentication: security-guide/authentication.md
+      - Authorization: security-guide/authorization.md
+      - CrowdSec Integration: security-guide/crowdsec.md
+      - Security Hardening: security-guide/hardening.md
+  - Tutorials:
+      - tutorials/index.md
+      - Add a Telegram Channel: tutorials/add-telegram-channel.md
+      - Create Custom RSS Feed: tutorials/create-custom-rss-feed.md
+      - Setup Discord Alerts: tutorials/setup-discord-alerts.md
+      - Deploy to Production: tutorials/deploy-to-production.md
+  - Reference:
+      - reference/index.md
+      - API Endpoints: reference/api-endpoints.md
+      - Environment Variables: reference/environment-vars.md
+      - Database Tables: reference/database-tables.md
+      - Docker Services: reference/docker-services.md
+
+copyright: Copyright &copy; 2025 OSINT Ukraine
