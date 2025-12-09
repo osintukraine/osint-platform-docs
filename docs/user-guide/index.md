@@ -1,72 +1,134 @@
 # User Guide
 
-Learn how to use the OSINT Intelligence Platform's features for intelligence gathering, analysis, and monitoring.
+Welcome to the OSINT Intelligence Platform user guide. This documentation will help you get the most out of the platform's features for intelligence gathering, analysis, and monitoring.
 
 ## Overview
 
-This guide covers the platform's user-facing features and workflows for end users who consume intelligence data.
+The OSINT Intelligence Platform is a comprehensive system for archiving, enriching, and analyzing Telegram content with AI-powered intelligence assessment. This guide covers all user-facing features for analysts and researchers.
 
-## What You'll Learn
+## Key Features
 
-- [Searching Messages](searching.md) - Advanced search with filters and semantic search
-- [RSS Feed Management](rss-feeds.md) - Create and manage custom RSS feeds
-- [Entity Exploration](entities.md) - Browse and analyze tracked entities
-- [Social Graph Analysis](social-graph.md) - Explore relationships and networks
-- [Notifications & Alerts](notifications.md) - Configure Discord/Telegram notifications
+### Intelligence Analysis
+- **Smart Search** - Full-text and AI-powered semantic search across all content
+- **Entity Tracking** - Curated and automatically detected entities (people, equipment, organizations)
+- **Social Graph** - Visualize relationships, forwards, and influence patterns
+- **AI Classification** - Automatic topic detection and importance scoring
+
+### Content Management
+- **Filtered Views** - Filter by channel, date, topic, importance, and media type
+- **RSS Feeds** - Subscribe to any search with custom filters
+- **Multi-format Support** - RSS 2.0, Atom 1.0, and JSON Feed
+
+### Monitoring & Alerts
+- **Real-time Updates** - Live notifications via ntfy.sh
+- **Custom Subscriptions** - Get alerts for specific topics or channels
+- **Mobile Support** - Push notifications to your phone
 
 ## Who This Is For
 
-- Intelligence analysts
-- Researchers
-- Content moderators
-- Anyone consuming intelligence from the platform
+- **Intelligence Analysts** - Track military activities, equipment, and personnel
+- **Researchers** - Study propaganda, influence operations, and information warfare
+- **Content Moderators** - Monitor channels for policy violations
+- **Data Scientists** - Export structured data for analysis
 
 ## Quick Navigation
 
-<div class="grid cards" markdown>
+### Getting Started
 
--   :material-magnify:{ .lg .middle } __Search Messages__
+1. **[Searching Messages](searching.md)** - Learn advanced search techniques
+2. **[Entity Exploration](entities.md)** - Understand entity types and profiles
+3. **[RSS Feeds](rss-feeds.md)** - Set up custom feeds for your workflow
 
-    ---
+### Advanced Features
 
-    Master advanced search, filters, and semantic search
+4. **[Social Graph Analysis](social-graph.md)** - Analyze channel relationships
+5. **[Notifications](notifications.md)** - Configure real-time alerts
 
-    [:octicons-arrow-right-24: Search Guide](searching.md)
+## Common Workflows
 
--   :material-rss:{ .lg .middle } __RSS Feeds__
+### Find High-Priority Intelligence
 
-    ---
+1. Go to the Browse Messages page
+2. Set **Importance Level** to "High Priority"
+3. Filter by **Topic** (e.g., "Combat", "Equipment")
+4. Sort by **Date** to see newest first
+5. Subscribe to the RSS feed to monitor ongoing
 
-    Create custom feeds with advanced filtering
+### Track a Specific Entity
 
-    [:octicons-arrow-right-24: RSS Guide](rss-feeds.md)
+1. Use **Search** to find mentions (e.g., "T-90 tank")
+2. Click on entity badges in messages
+3. View the **Entity Profile** page
+4. Explore **Relationships** tab for connections
+5. Check **Messages** tab for all mentions
 
--   :material-account-group:{ .lg .middle } __Entities__
+### Monitor Channel Activity
 
-    ---
+1. Browse messages and filter by **Channel**
+2. Use **Country Filter** for Ukrainian or Russian channels
+3. Set **Minimum Views** to find viral content
+4. Enable **Semantic Search** for concept-based matching
 
-    Explore tracked persons, organizations, and locations
+## Platform Structure
 
-    [:octicons-arrow-right-24: Entity Guide](entities.md)
+```
+Home (/)
+├── Browse Messages - Main feed with advanced filters
+├── Search (/search) - Unified search across all content
+├── Entities (/entities) - Browse tracked entities
+└── Settings
+    └── Feed Tokens - Manage RSS authentication
+```
 
--   :material-graph:{ .lg .middle } __Social Graph__
+## Understanding Content Types
 
-    ---
+### Messages
+- Telegram channel posts archived in real-time
+- Includes text, media, translations, and metadata
+- AI-enriched with topics, entities, and importance scores
 
-    Analyze relationships and network connections
+### Events
+- Curated intelligence reports from ODIN
+- Structured event data with timestamps and locations
+- Linked to relevant entities
 
-    [:octicons-arrow-right-24: Graph Guide](social-graph.md)
+### RSS Articles
+- External news sources monitored for keywords
+- Filtered by relevance and source credibility
 
--   :material-bell:{ .lg .middle } __Notifications__
+### Entities
+- **Curated** - Manually verified (ArmyGuide, Root.NK, ODIN)
+- **OpenSanctions** - Sanctions lists and politically exposed persons (PEPs)
+- **Auto-detected** - Extracted from messages via AI
 
-    ---
+## Data Freshness
 
-    Configure alerts for critical intelligence
+- **Real-time** - New messages appear within seconds
+- **AI Enrichment** - Processed within 1-5 minutes
+- **Translations** - Generated on-demand (DeepL Pro)
+- **Entity Linking** - Background task, runs every 15 minutes
 
-    [:octicons-arrow-right-24: Notification Guide](notifications.md)
+## Getting Help
 
-</div>
+### Interface Questions
+- Hover over field labels for tooltips
+- Look for "?" icons for explanations
+- Check filter descriptions under dropdown menus
+
+### Technical Issues
+- Check the [Operations Guide](../operations/index.md) for admin tasks
+- Review [Architecture](../architecture/index.md) for system design
+- See [API Reference](../api/index.md) for programmatic access
+
+## Privacy & Ethics
+
+This platform archives **public** Telegram channels only. No private chats or groups are monitored. All data is:
+
+- Sourced from publicly accessible channels
+- Stored with full metadata for verification
+- Available for research and analysis
+- Subject to responsible use guidelines
 
 ---
 
-**TODO: Content to be generated from codebase analysis and frontend features**
+**Ready to start?** Begin with [Searching Messages](searching.md) to learn the core features.

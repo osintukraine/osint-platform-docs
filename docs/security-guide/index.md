@@ -1,88 +1,229 @@
 # Security Guide
 
-Comprehensive security documentation for the OSINT Intelligence Platform.
+Comprehensive security documentation for protecting the OSINT Intelligence Platform against reconnaissance, abuse, and unauthorized access.
 
 ## Overview
 
-This guide covers all aspects of securing the platform including authentication, authorization, network security, and security hardening.
+The OSINT Intelligence Platform implements a multi-layered security architecture designed for self-hosted deployments that handle sensitive intelligence data. This guide covers all aspects of securing the platform from authentication to network hardening.
 
-## What You'll Learn
+## Security Architecture
 
-- [Authentication](authentication.md) - User authentication and identity management
-- [Authorization](authorization.md) - Role-based access control and permissions
-- [CrowdSec Integration](crowdsec.md) - Intrusion prevention and threat detection
-- [Security Hardening](hardening.md) - Best practices for production deployments
+The platform uses a defense-in-depth approach with multiple security layers:
 
-## Who This Is For
-
-- Security administrators
-- DevSecOps engineers
-- Platform operators
-- Compliance officers
+```mermaid
+graph TD
+    A[Internet Traffic] --> B[Firewall/CrowdSec]
+    B --> C[Reverse Proxy/Caddy]
+    C --> D[Authentication Layer]
+    D --> E[Authorization Layer]
+    E --> F[Application Services]
+    F --> G[Encrypted Storage]
+```
 
 ## Security Principles
 
-**TODO: Document security principles:**
+The platform follows these core security principles:
 
-- Defense in depth
-- Least privilege
-- Secure by default
-- Regular updates
-- Audit logging
+**Defense in Depth**
+Multiple layers of security controls ensure that if one layer fails, others continue to protect the system.
 
-## Quick Navigation
+**Least Privilege**
+Users and services operate with the minimum permissions required for their function.
 
-<div class="grid cards" markdown>
+**Secure by Default**
+Default configurations prioritize security over convenience. Optional features must be explicitly enabled.
 
--   :material-account-key:{ .lg .middle } __Authentication__
+**Zero Trust**
+All requests are authenticated and authorized, even from internal services.
 
-    ---
+**Audit Everything**
+All authentication events, authorization failures, and admin actions are logged for forensic analysis.
 
-    Configure user authentication and identity management
+## What You'll Learn
 
-    [:octicons-arrow-right-24: Authentication Guide](authentication.md)
+This guide is organized into four main sections:
 
--   :material-shield-account:{ .lg .middle } __Authorization__
+### [Authentication](authentication.md)
+User authentication and identity management using Ory Kratos or JWT.
 
-    ---
+- 4 authentication modes (None, JWT, Cloudron, Ory)
+- Session management with Redis
+- OAuth2 integration (Google, GitHub)
+- Feed token authentication for RSS
+- Password policies and MFA
 
-    Implement role-based access control and permissions
+### [Authorization](authorization.md)
+Role-based access control and permissions management.
 
-    [:octicons-arrow-right-24: Authorization Guide](authorization.md)
+- Admin vs user roles
+- API endpoint protection
+- Feed token scopes
+- Future: Ory Keto integration
 
--   :material-security:{ .lg .middle } __CrowdSec__
+### [CrowdSec Integration](crowdsec.md)
+Intrusion prevention and threat detection for production deployments.
 
-    ---
+- Real-time threat detection
+- Custom OSINT platform scenarios
+- Caddy bouncer for IP blocking
+- API abuse protection
+- Monitoring and management
 
-    Deploy intrusion prevention and threat detection
+### [Security Hardening](hardening.md)
+Production security best practices and deployment checklist.
 
-    [:octicons-arrow-right-24: CrowdSec Guide](crowdsec.md)
+- Network security and firewall rules
+- Docker container security
+- TLS/SSL configuration
+- Secrets management
+- Backup encryption
+- Security monitoring
 
--   :material-shield-check:{ .lg .middle } __Security Hardening__
+## Who This Is For
 
-    ---
+This guide is designed for:
 
-    Apply security best practices for production
+- **Security Administrators** - Implementing authentication and access controls
+- **DevSecOps Engineers** - Deploying secure production environments
+- **Platform Operators** - Managing security monitoring and incident response
+- **Compliance Officers** - Understanding data protection measures
 
-    [:octicons-arrow-right-24: Hardening Guide](hardening.md)
+## Quick Start Security Checklist
 
-</div>
+Use this checklist to verify your deployment meets minimum security requirements:
 
-## Security Checklist
+### Pre-Production Security Checklist
 
-**TODO: Create comprehensive security checklist:**
+- [ ] **Authentication configured** - Choose and enable auth provider
+- [ ] **Strong secrets** - Generate random 256-bit keys for JWT/Kratos
+- [ ] **HTTPS enabled** - Configure TLS certificates (Let's Encrypt)
+- [ ] **Firewall rules** - Block direct database/Redis access from internet
+- [ ] **CrowdSec deployed** - Enable intrusion prevention (production)
+- [ ] **Password policies** - Enforce strong passwords (12+ chars, bcrypt)
+- [ ] **Secrets not in git** - Verify `.env` is gitignored
+- [ ] **Backup encryption** - Encrypt database backups
+- [ ] **Audit logging** - Enable authentication event logging
+- [ ] **Network segmentation** - Use Docker networks to isolate services
 
-- [ ] Configure authentication
-- [ ] Set up RBAC
-- [ ] Enable HTTPS/TLS
-- [ ] Configure firewall rules
-- [ ] Deploy CrowdSec
-- [ ] Enable audit logging
-- [ ] Regular security updates
-- [ ] Backup encryption
-- [ ] Secret management
-- [ ] Network segmentation
+### Production Security Checklist
+
+- [ ] **AUTH_PROVIDER=ory** or **jwt** (never "none")
+- [ ] **AUTH_REQUIRED=true** - Enforce authentication
+- [ ] **POSTGRES_PASSWORD** - Strong random password
+- [ ] **REDIS_PASSWORD** - Strong random password
+- [ ] **JWT_SECRET_KEY** - Random 256-bit key
+- [ ] **KRATOS_SECRET_COOKIE** - Random base64 secret
+- [ ] **KRATOS_SECRET_CIPHER** - Exactly 32 characters
+- [ ] **MINIO_ACCESS_KEY** - Strong credentials
+- [ ] **MINIO_SECRET_KEY** - Minimum 32 characters
+- [ ] **CrowdSec API keys** - Generated and configured
+- [ ] **Regular security updates** - Container image updates enabled
+
+## Security Features by Deployment Mode
+
+### Development Mode (Local)
+
+- **Authentication**: Optional (AUTH_PROVIDER=none)
+- **HTTPS**: Not required (HTTP is acceptable)
+- **Firewall**: Host firewall only
+- **Secrets**: Simple passwords acceptable
+- **Monitoring**: Optional
+
+!!! warning "Development Only"
+    Never use development mode settings in production. All endpoints become publicly accessible.
+
+### Production Mode
+
+- **Authentication**: Required (Ory Kratos or JWT)
+- **HTTPS**: Required (Caddy with Let's Encrypt)
+- **Firewall**: Host firewall + CrowdSec
+- **Secrets**: Strong random keys (256-bit minimum)
+- **Monitoring**: Mandatory (Prometheus + Grafana)
+
+## Threat Model
+
+The OSINT Intelligence Platform is designed to protect against:
+
+**External Threats:**
+
+- **Reconnaissance attacks** - Automated scanning and enumeration
+- **Brute force attacks** - Credential guessing against login endpoints
+- **API abuse** - Automated scraping of intelligence data
+- **DDoS attacks** - Application-layer attacks on search/API endpoints
+- **Bot traffic** - Automated tools attempting to harvest data
+- **Data extraction** - Bulk download attempts
+
+**Internal Threats:**
+
+- **Privilege escalation** - Unauthorized access to admin functions
+- **Data exfiltration** - Unauthorized bulk export of intelligence
+- **Configuration tampering** - Unauthorized changes to system settings
+- **Credential theft** - Session hijacking or token theft
+
+## Security Components
+
+### Authentication Layer
+
+- **Ory Kratos** - Production-grade identity management
+- **JWT tokens** - Lightweight authentication for small deployments
+- **Session cookies** - Redis-backed session storage
+- **Feed tokens** - HMAC-signed URLs for RSS subscriptions
+
+### Authorization Layer
+
+- **Role-based access** - Admin vs authenticated vs anonymous
+- **Endpoint protection** - FastAPI dependency injection
+- **Feed token scopes** - Per-token permissions for RSS feeds
+
+### Network Security
+
+- **CrowdSec** - Intrusion prevention system
+- **Caddy reverse proxy** - TLS termination and security headers
+- **Docker networks** - Service isolation (frontend/backend)
+- **Firewall rules** - UFW/iptables for host protection
+
+### Data Security
+
+- **PostgreSQL** - Row-level security (future)
+- **MinIO** - Encrypted object storage
+- **Redis** - Password-protected sessions
+- **Backups** - GPG-encrypted database dumps
+
+## Getting Help
+
+**Security Questions:**
+
+- Review relevant sections of this guide
+- Check [Troubleshooting Guide](../operator-guide/troubleshooting.md)
+- Review [Security Hardening](hardening.md) best practices
+
+**Security Issues:**
+
+If you discover a security vulnerability, please report it responsibly:
+
+1. **Do NOT** open a public GitHub issue
+2. Email security concerns to project maintainers
+3. Include detailed reproduction steps
+4. Allow 90 days for patch development
+
+## Additional Resources
+
+**Official Documentation:**
+
+- [Ory Kratos Documentation](https://www.ory.sh/docs/kratos/)
+- [CrowdSec Documentation](https://doc.crowdsec.net/)
+- [Caddy Security](https://caddyserver.com/docs/security)
+
+**Platform Documentation:**
+
+- [Installation Guide](../operator-guide/installation.md)
+- [Configuration Reference](../operator-guide/configuration.md)
+- [Monitoring Guide](../operator-guide/monitoring.md)
 
 ---
 
-**TODO: Content to be generated from codebase analysis and security documentation**
+!!! tip "Security is a Process"
+    Security is not a one-time configuration - it requires ongoing monitoring, updates, and adaptation to new threats. Review this guide regularly and keep all components updated.
+
+!!! info "Self-Hosted Philosophy"
+    This platform prioritizes self-hosted deployments with no cloud dependencies. All security components can run on a single server or VPS without external services.

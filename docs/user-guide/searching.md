@@ -1,71 +1,373 @@
 # Searching Messages
 
-Master advanced search capabilities including text search, filters, and semantic vector search.
+Master the platform's powerful search and filtering capabilities to find the intelligence you need.
 
 ## Overview
 
-**TODO: Content to be generated from codebase analysis**
+The platform offers two complementary search interfaces:
 
-This page will cover:
+1. **Browse Messages** (`/`) - Filter-first approach with live updates
+2. **Unified Search** (`/search`) - Search-first approach across all content types
 
-- Basic text search
-- Advanced filters (date range, channels, entities, tags)
-- Semantic search with vector embeddings
-- Search operators and syntax
-- Saving and sharing searches
-- Export search results
+## Browse Messages Interface
 
-## Basic Search
+### Search Bar
 
-**TODO: Add screenshots and examples of basic search**
+Located at the top of the Browse Messages page, the search bar supports:
 
-## Advanced Filters
-
-### Date Range Filtering
-
-**TODO: Explain date range picker and relative dates**
-
-### Channel Filtering
-
-**TODO: Explain how to filter by specific channels or channel groups**
-
-### Entity Filtering
-
-**TODO: Explain filtering by mentioned entities**
-
-### Tag Filtering
-
-**TODO: Explain AI tag filtering (threat level, categories)**
-
-## Semantic Search
-
-**TODO: Explain how vector search works and when to use it**
-
-### Example Queries
-
-**TODO: Provide example semantic queries and expected results**
-
-## Search Operators
-
-**TODO: Document search syntax and operators**
-
+**Full-Text Search**
 ```
-# Examples:
-channel:@channelname
-entity:"Wagner Group"
-tag:military
-date:2024-01-01..2024-01-31
+Search across original content and translations
+Examples:
+- "T-90 tank destroyed"
+- "Avdiivka offensive"
+- "HIMARS strike"
 ```
 
-## Saving Searches
+**Semantic Search** (AI-Powered)
+- Toggle "Use Semantic Search" checkbox
+- Finds messages by meaning, not just keywords
+- Example: "military vehicle damage" finds mentions of tanks, APCs, artillery
 
-**TODO: Explain how to save and manage searches**
+```
+Regular search:  "tank" → finds only "tank"
+Semantic search: "tank" → finds "T-90", "armored vehicle", "BMP", "BTR"
+```
 
-## Exporting Results
+### Country Filter
 
-**TODO: Explain export formats (CSV, JSON, RSS)**
+Prominent quick filter for channel groups:
+
+- **All Channels** - No filtering (default)
+- **Ukrainian Channels** - Only channels in `Archive-UA` and `Monitor-UA` folders
+- **Russian Channels** - Only channels in `Archive-RU` and `Monitor-RU` folders
+
+Selecting a country filter automatically clears individual channel selection.
+
+### Filter Panel
+
+Click "Show Filters" to expand the full filter panel. Active filters are shown with a badge count.
+
+#### Channel Filters
+
+**Individual Channel**
+- Dropdown organized by country (Ukrainian, Russian, Other)
+- Shows channel name, username, and folder
+- Verified channels marked with ✓
+- Selecting a channel clears country filter
+
+**Channel Folder**
+- Internal grouping (Archive-*, Monitor-*, Discover-*)
+- Primarily used by country filter
+
+#### Content Filters
+
+**Media Type**
+- **Any** - All messages (with or without media)
+- **With Media** - Photos, videos, documents, audio
+- **Text Only** - No attachments
+
+**Specific Media Type**
+- Photo (📷)
+- Video (🎥)
+- Document (📄)
+- Audio (🔊)
+- Voice (🎤)
+
+#### Intelligence Filters
+
+**Importance Level** (AI-assessed)
+- **High Priority** (🔴) - Critical intelligence, combat reports
+- **Medium Priority** (🟡) - Relevant but not urgent
+- **Low Priority** (⚪) - General updates, noise
+
+**Topic** (AI-detected)
+- Combat ⚔️
+- Equipment 🛡️
+- Casualties 💀
+- Movements 🚛
+- Infrastructure ⚡
+- Humanitarian 🏘️
+- Diplomatic 🤝
+- Intelligence 🔍
+- Propaganda 📢
+- Units 🎖️
+- Locations 📍
+- General 📰
+
+**Language** (Auto-detected)
+- Ukrainian 🇺🇦
+- Russian 🇷🇺
+- English 🇬🇧
+- German 🇩🇪
+- French 🇫🇷
+- Polish 🇵🇱
+
+#### Quality Filters
+
+**Spam Filter**
+- **Exclude Spam** (default) - Hides spam messages
+- **Only Non-Spam** - Guaranteed legitimate
+- **Only Spam** - Review flagged content
+- **Include All** - No spam filtering
+
+**Human Review**
+- **Any Status** - All messages
+- **Needs Review** (⚠️) - Flagged for analyst review
+- **Reviewed/OK** (✅) - Already checked
+
+**Discussion Thread**
+- **Any** - All messages
+- **Has Comments** (💬) - Posts with discussion
+- **No Comments** - Standalone posts
+
+#### Engagement Filters
+
+**Minimum Views**
+- Numeric threshold (e.g., 1000)
+- Find viral/popular content
+- Press Enter or click away to apply
+
+**Minimum Forwards**
+- Numeric threshold (e.g., 50)
+- Identify widely shared messages
+- Indicates influence/reach
+
+#### Date Filters
+
+**Quick Filters**
+- Last 24 Hours
+- Last 3 Days
+- Last Week
+- Last Month
+- Last 3 Months
+- All Time (default)
+
+**Custom Date Range**
+- **From Date** - Start date (inclusive)
+- **To Date** - End date (inclusive)
+- Mutually exclusive with quick filters
+
+### Sorting Options
+
+**Sort By**
+- **Date (Telegram)** - When posted on Telegram (default)
+- **Date Added** - When archived to platform
+- **Importance Level** - AI priority score
+- **Urgency Level** - Content urgency
+- **Topic** - Alphabetical by topic
+- **Media Type** - Group by media
+- **Language** - Group by language
+- **Message ID** - Chronological by ID
+
+**Sort Order**
+- **Descending** (⬇️) - Newest/highest first (default)
+- **Ascending** (⬆️) - Oldest/lowest first
+
+### Active Filters Summary
+
+Below the filter panel, see all active filters as removable badges:
+```
+Search: T-90 tank
+Country: 🇺🇦 Ukraine
+Priority: 🔴 High
+Topic: combat
+Min Views: 1000
+```
+
+Click "Clear All" to reset all filters at once.
+
+## Unified Search Interface
+
+Access via `/search` or the top navigation bar.
+
+### Search Modes
+
+**Keywords Mode** (📝)
+- Fast PostgreSQL full-text search
+- Matches exact words in original or translated content
+- Good for specific terms, names, locations
+
+**Semantic Mode** (🧠)
+- AI-powered similarity search via embeddings
+- Finds conceptually related content
+- Slower but more comprehensive
+
+Toggle between modes before searching.
+
+### Search Tabs
+
+Results are organized by content type:
+
+**All Tab**
+- Shows top 5 results from each type
+- Click "See all →" to view full results
+- Total count displayed per type
+
+**Messages Tab**
+- Telegram channel posts
+- Up to 20 results in focused view
+
+**Events Tab**
+- Curated intelligence events
+- Structured reports from ODIN
+
+**RSS Articles Tab**
+- External news articles
+- Filtered by relevance
+
+**Entities Tab**
+- People, organizations, equipment
+- From curated and OpenSanctions sources
+
+### Search Results
+
+Each result card shows:
+- **Icon** - Type indicator (💬 message, 📰 event, 🌐 RSS, 👤 entity)
+- **Title** - Message snippet or entity name
+- **Snippet** - Contextual preview (up to 2 lines)
+- **Score** - Relevance percentage (semantic mode only)
+- **Metadata** - Channel name, source domain, or entity type
+
+Click a result to view the full content.
+
+### Search Performance
+
+Search timing displayed in top-right:
+```
+250ms - Fast text search
+1500ms - Semantic search (normal)
+```
+
+## Advanced Search Techniques
+
+### Boolean Operators
+
+Full-text search supports PostgreSQL operators:
+
+```
+tank & destroyed     → Both words must appear
+tank | vehicle       → Either word
+tank & !russian      → "tank" but not "russian"
+"exact phrase"       → Phrase matching
+```
+
+### Semantic Search Tips
+
+**Good semantic queries:**
+- Concepts: "military casualties"
+- Descriptions: "damaged armored vehicles"
+- Situations: "urban combat footage"
+
+**Less effective:**
+- Single words: "tank" (use text search)
+- Proper nouns: "Bakhmut" (use text search)
+- Exact quotes: Use text search instead
+
+### Combining Filters
+
+**Find viral combat footage:**
+```
+Topic: Combat
+Media Type: Video
+Min Views: 5000
+Sort: Views descending
+```
+
+**Monitor high-priority Ukrainian sources:**
+```
+Country: Ukraine
+Importance: High
+Date: Last 24 Hours
+Sort: Date descending
+```
+
+**Research specific equipment:**
+```
+Search: "T-90M"
+Topic: Equipment
+Media Type: Photo
+Sort: Date descending
+```
+
+## Saving Searches as RSS Feeds
+
+Once you've configured your search and filters, subscribe to updates:
+
+1. Configure all desired filters
+2. Click "Subscribe Feed" button
+3. Choose format:
+   - **RSS 2.0** - Most compatible (Feedly, Inoreader)
+   - **Atom 1.0** - Better content structure
+   - **JSON Feed** - For developers/APIs
+4. Copy URL to clipboard
+5. Add to your feed reader
+
+See [RSS Feeds](rss-feeds.md) for detailed feed management.
+
+## Pagination
+
+Browse messages with pagination controls at the bottom:
+
+- **Items per page**: 20, 50, 100
+- **Navigation**: Previous, Next, Jump to page
+- **Total count**: Shows filtered results count
+
+## Performance Tips
+
+### Fast Searches
+- Use text search for specific terms
+- Filter by channel first (reduces dataset)
+- Use date ranges to limit scope
+
+### Comprehensive Searches
+- Use semantic search for concepts
+- Allow more time for AI processing
+- Consider RSS feeds for ongoing monitoring
+
+### Large Result Sets
+- Apply topic filter to narrow scope
+- Use importance filter to prioritize
+- Increase items per page to reduce clicks
+
+## Troubleshooting
+
+### No Results Found
+
+**Check your filters:**
+- Clear all filters and try again
+- Verify date range isn't too narrow
+- Try different search terms
+
+**Semantic search limitations:**
+- Requires messages to have embeddings
+- Not all old messages are embedded
+- Try text search as fallback
+
+### Search Too Slow
+
+**Optimize your query:**
+- Reduce date range
+- Filter by channel first
+- Use text search instead of semantic
+- Avoid wildcard searches
+
+### Unexpected Results
+
+**Understand content matching:**
+- Searches both original AND translated text
+- Semantic mode finds related concepts
+- Check "Active Filters" summary
+
+## Keyboard Shortcuts
+
+- `Enter` in search box → Perform search
+- `Esc` → Clear search focus
+- Page controls work with keyboard navigation
 
 ---
 
-!!! note "Documentation Status"
-    This page is a placeholder. Content will be generated from frontend code and API documentation.
+**Next Steps:**
+- [Create RSS Feeds](rss-feeds.md) from your searches
+- [Explore Entities](entities.md) mentioned in results
+- [View Social Graph](social-graph.md) for message relationships
