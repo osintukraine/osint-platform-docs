@@ -4,12 +4,14 @@ Welcome to the OSINT Intelligence Platform documentation. This platform is a pro
 
 ## Platform Overview
 
-**Status**: ✅ Operational | **Version**: 1.0
+A fully self-hosted OSINT platform with:
 
-- **254+ Telegram channels** monitored in real-time
-- **1,425 curated entities** (military/political organizations and individuals)
-- **29 containerized services** for scalability and reliability
-- **Self-hosted** with no cloud dependencies (~€230/month target cost)
+- **Telegram Archiving** - Real-time monitoring with folder-based channel management
+- **AI Classification** - Self-hosted LLM (Ollama) for importance scoring and topic classification
+- **Entity Knowledge Graph** - OpenSanctions/Yente integration, Wikidata enrichment, custom entity lists
+- **Semantic Search** - pgvector embeddings for "find similar content" queries
+- **RSS Distribution** - "Subscribe to any search" with authenticated feeds
+- **No Cloud Dependencies** - Complete data sovereignty on your infrastructure
 
 ## Quick Links by Persona
 
@@ -75,15 +77,15 @@ Welcome to the OSINT Intelligence Platform documentation. This platform is a pro
 
 ## Key Features
 
-- **Real-time Telegram Monitoring**: Archive messages, media, and metadata from 254+ channels
-- **Multi-model AI Enrichment**: Entity extraction, sentiment analysis, and AI tagging using Ollama
+- **Real-time Telegram Monitoring**: Archive messages, media, and metadata from hundreds of channels
+- **Multi-model AI Enrichment**: Entity extraction, sentiment analysis, and AI tagging using self-hosted Ollama
 - **Semantic Search**: Vector-based search with pgvector for natural language queries
-- **Knowledge Graph**: Track relationships between entities, channels, and messages
-- **RSS Feed Management**: Create custom feeds with advanced filtering
-- **Discord/Telegram Notifications**: Real-time alerts for critical intelligence
-- **Spam Filtering**: Multi-layer spam detection (€1,296-2,280/year savings)
-- **Content Deduplication**: SHA-256-based media deduplication
-- **Self-hosted LLM**: Zero-cost AI using Ollama (qwen2.5:3b)
+- **Entity Knowledge Graph**: OpenSanctions/Yente integration, Wikidata enrichment, custom entity lists
+- **RSS Feed Management**: Create custom feeds with advanced filtering for any search query
+- **Multi-channel Notifications**: Real-time alerts via Discord, Telegram, email, or any webhook
+- **Spam Filtering**: Multi-layer spam detection with >95% accuracy
+- **Content Deduplication**: SHA-256-based media deduplication saves 50-70% storage
+- **LLM-as-Arbiter**: AI decides what to archive based on folder tier (lenient/strict/discovery)
 
 ## Architecture Overview
 

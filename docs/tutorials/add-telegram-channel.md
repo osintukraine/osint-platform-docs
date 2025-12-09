@@ -41,18 +41,33 @@ Instead of building a complex admin panel, it reads your Telegram folders direct
 
 The platform recognizes specific folder name patterns:
 
-| Folder Pattern | Processing Rule | Behavior | Use Case |
+| Folder Pattern | Processing Tier | LLM Strictness | Use Case |
 |---|---|---|---|
-| `Archive*` or `Must-Archive*` | `archive_all` | Archives ALL messages | High-volume sources, news channels |
-| `Monitor*` or `Monitoring*` | `selective_archive` | Archives only HIGH importance messages | Noisy channels, general updates |
+| `Archive-*` | Archive tier | Lenient (most messages pass) | Primary sources, official channels |
+| `Monitor-*` | Monitor tier | Strict (only high-value passes) | News aggregators, noisy sources |
+| `Discover-*` | Discovery tier | Very strict + 14-day probation | Auto-discovered channels |
+
+!!! important "The LLM is the Arbiter"
+    Unlike simple rule-based systems, the OSINT platform uses an **AI classifier** to decide what gets archived. The folder tier sets how strict the LLM should be, but the **LLM makes the final `should_archive` decision** for every message.
+
+!!! warning "12-Character Folder Name Limit"
+    Telegram limits folder names to **12 characters**. This is why we use short suffixes like `-UA` and `-RU` instead of full country names.
 
 ### Key Examples
 
-- `Archive` - Archives everything ✅
-- `Archive-UA` - Archives everything (Ukraine sources) ✅
-- `Archive-RU` - Archives everything (Russia sources) ✅
-- `Monitor` - Selective archiving ✅
-- `Monitor-Political` - Selective archiving (political content) ✅
+**Valid folder names** (≤12 characters):
+
+- `Archive` - Archive tier (8 chars) ✅
+- `Archive-UA` - Archive tier, Ukraine sources (10 chars) ✅
+- `Archive-RU` - Archive tier, Russia sources (10 chars) ✅
+- `Monitor` - Monitor tier (7 chars) ✅
+- `Monitor-UA` - Monitor tier, Ukraine (10 chars) ✅
+- `Discover-UA` - Discovery tier (11 chars) ✅
+
+**Invalid folder names**:
+
+- `Archive-Ukraine` - Too long (15 chars) ❌
+- `Monitor-Russia` - Too long (14 chars) ❌
 - `Personal` - Ignored (doesn't match pattern) ❌
 - `News-Archive` - Ignored (pattern must match prefix) ❌
 
@@ -66,7 +81,7 @@ The platform recognizes specific folder name patterns:
 2. Swipe left to see the chat list sidebar
 3. Tap the **folder icon** (looks like a folder with lines)
 4. Tap **Create Folder** or the **plus (+)** button
-5. Name the folder `Archive` or `Archive-Test`
+5. Name the folder `Archive` (or `Archive-UA` for Ukraine sources)
 6. Select **Create**
 
 **Expected Result:** You see your new folder appear in the Telegram sidebar.
@@ -77,15 +92,15 @@ The platform recognizes specific folder name patterns:
 2. On the left sidebar, look for the **Folder** section
 3. Right-click or click the **plus (+)** button next to "Folders"
 4. Click **Create New Folder**
-5. Name it `Archive` or `Archive-Test`
+5. Name it `Archive` (or `Archive-UA` for Ukraine sources)
 6. Click **Create**
 
 **Expected Result:** Your new folder appears in the sidebar with zero chats.
 
-!!! tip "Which folder name to choose?"
-    - Use `Archive` if you want to capture **all messages** (news channels, official sources)
-    - Use `Monitor` if you want **only important messages** (reduces storage for noisy channels)
-    - You can create both! Example: `Archive-News` and `Monitor-Telegram-Traffic`
+!!! tip "Which folder tier to choose?"
+    - Use `Archive-*` for **primary sources** where the LLM should be lenient (military channels, official sources)
+    - Use `Monitor-*` for **noisy channels** where the LLM should be strict (news aggregators, discussion groups)
+    - Remember the **12-character limit**: `Archive-UA` works, `Archive-Ukraine` doesn't!
 
 ---
 
@@ -216,46 +231,67 @@ docker-compose exec -T postgres psql -U osint_user -d osint_platform -c \
 
 ## Step 5: Understand the Processing Rules
 
-Now that your channel is monitored, it's important to understand how messages are handled:
+Now that your channel is monitored, it's important to understand how messages are handled.
 
-### Archive Rule (`archive_all`)
+### The LLM Classification Pipeline
 
-**Applies to:** Folders named `Archive*` or `Must-Archive*`
+**Every message** goes through this pipeline:
 
-**What happens:**
-1. Message received
-2. Spam filter runs
-3. If NOT spam: Message is archived to database
-4. Enrichment service processes the message
-5. Result: All messages stored and available for search
+```mermaid
+flowchart LR
+    A[Message Received] --> B{Spam Filter}
+    B -->|Spam| C[Discard]
+    B -->|Not Spam| D{Ukraine Relevant?}
+    D -->|No| E[Quarantine]
+    D -->|Yes| F{LLM: should_archive?}
+    F -->|No| G[Discard]
+    F -->|Yes| H[Archive to Database]
+```
 
-**Use for:**
-- Official channels with important information
-- News sources you want to monitor fully
-- High-value intelligence channels
+1. **Spam filter** - Fast rule-based filter removes obvious spam (donation scams, crypto ads)
+2. **Ukraine relevance check** - Is this message relevant to the Ukraine conflict?
+3. **LLM classification** - The AI decides: `should_archive = true/false`
 
-### Monitor Rule (`selective_archive`)
+### How Folder Tiers Affect the LLM
 
-**Applies to:** Folders named `Monitor*` or `Monitoring*`
+The folder tier tells the LLM **how strict to be**:
 
-**What happens:**
-1. Message received
-2. Spam filter runs
-3. If NOT spam: Importance classification runs
-4. If importance = "high": Message archived
-5. If importance = "medium" or "low": Message discarded
-6. Result: Only important messages stored
+| Tier | LLM Behavior | Typical Archive Rate |
+|------|--------------|---------------------|
+| **Archive tier** (`Archive-*`) | Lenient - archive most relevant content | 70-90% of non-spam |
+| **Monitor tier** (`Monitor-*`) | Strict - only high-value OSINT content | 20-40% of non-spam |
+| **Discover tier** (`Discover-*`) | Very strict - prove the channel's worth | 10-20% of non-spam |
 
-**Use for:**
-- Noisy channels with mixed content
-- Channels with lots of memes/off-topic posts
-- Sources where you only care about critical updates
+!!! important "The LLM Makes the Final Decision"
+    Even in `Archive-*` folders, the LLM can reject low-value messages. The tier sets the threshold, but the **AI evaluates every message individually** based on OSINT relevance, importance, and content quality.
+
+### Archive Tier (`Archive-*` folders)
+
+**Use for:** Primary sources where you want comprehensive coverage.
+
+**LLM behavior:** Lenient classification. Archives most Ukraine-relevant content, only rejecting clear noise.
+
+**Examples:**
+- Official military channels (DeepStateUA, Ukrainian Armed Forces)
+- Government announcements
+- Key OSINT analysts
+
+### Monitor Tier (`Monitor-*` folders)
+
+**Use for:** Noisy channels where you only want high-value content.
+
+**LLM behavior:** Strict classification. Only archives messages with clear OSINT value (troop movements, equipment losses, official statements).
+
+**Examples:**
+- News aggregators with mixed content
+- Discussion groups
+- Regional channels with local chatter
 
 **Storage Savings:**
-With selective archiving, you can save 60-80% of storage costs while capturing all critical intelligence.
+Monitor tier typically archives 60-80% less than Archive tier while capturing critical intelligence.
 
-!!! warning "Spam filtering is your first line of defense"
-    Both rules apply spam filtering first, before importance classification. This saves 80-90% of processing costs and storage.
+!!! warning "Spam filtering saves the most"
+    The spam filter runs first on ALL tiers. This removes 80-90% of junk before the LLM even sees it, saving processing costs regardless of tier.
 
 ---
 
@@ -264,8 +300,8 @@ With selective archiving, you can save 60-80% of storage costs while capturing a
 To cement your understanding, let's add another channel:
 
 1. Find another Telegram channel to monitor
-2. Create a folder named `Monitor-Test` (for selective archiving)
-3. Add the channel to `Monitor-Test`
+2. Create a folder named `Monitor` or `Monitor-UA` (for selective archiving)
+3. Add the channel to the `Monitor` folder
 4. Wait 5 minutes for discovery
 5. Verify it appears in your database query
 
@@ -324,11 +360,13 @@ The channel will no longer appear in the `channels` table and new messages won't
 
 **Solutions:**
 
-1. **Check folder naming:** Folder name must start with `Archive`, `Monitor`, `Test`, or `Staging`
-   - ✅ `Archive` works
-   - ✅ `Monitor-UA` works
-   - ❌ `UA-Archive` doesn't work
-   - ❌ `My Channels` doesn't work
+1. **Check folder naming:** Folder name must start with `Archive`, `Monitor`, or `Discover`
+   - ✅ `Archive` works (8 chars)
+   - ✅ `Archive-UA` works (10 chars)
+   - ✅ `Monitor-RU` works (10 chars)
+   - ❌ `Archive-Ukraine` doesn't work (15 chars - exceeds 12 char limit!)
+   - ❌ `UA-Archive` doesn't work (prefix must be `Archive`, `Monitor`, or `Discover`)
+   - ❌ `My Channels` doesn't work (doesn't match any pattern)
 
 2. **Wait for sync:** The platform checks folders every 5 minutes. It might not be immediate:
    ```bash
@@ -380,12 +418,19 @@ The channel will no longer appear in the `channels` table and new messages won't
    docker-compose logs processor | grep "is_spam"
    ```
 
-2. **Check importance level:** If using `Monitor` rule and importance is "low"/"medium", message won't be archived
+2. **Check Ukraine relevance:** Messages not relevant to Ukraine go to quarantine
    ```bash
-   docker-compose logs processor | grep "importance_level"
+   docker-compose logs processor | grep "ukraine_relevant"
    ```
 
-3. **Check processor is running:**
+3. **Check LLM decision:** The LLM may have decided `should_archive = false`
+   ```bash
+   docker-compose logs processor | grep "should_archive"
+   ```
+
+   This happens more often in `Monitor-*` folders (strict mode) than `Archive-*` folders (lenient mode).
+
+4. **Check processor is running:**
    ```bash
    docker-compose ps processor
    ```
@@ -394,7 +439,7 @@ The channel will no longer appear in the `channels` table and new messages won't
    docker-compose up -d processor
    ```
 
-4. **Wait for processing:** Messages take 5-30 seconds to appear. Check logs:
+5. **Wait for processing:** Messages take 5-30 seconds to appear. Check logs:
    ```bash
    docker-compose logs -f processor
    ```
@@ -441,10 +486,11 @@ Now that you have channels being monitored, you can:
 | Concept | Key Point |
 |---------|-----------|
 | **Folder Management** | Use native Telegram folders - no admin panel needed |
-| **Naming Matters** | `Archive-*` = all messages, `Monitor-*` = important only |
+| **12-Char Limit** | Folder names max 12 characters: `Archive-UA` not `Archive-Ukraine` |
+| **LLM is Arbiter** | AI decides what to archive; folder tier sets strictness level |
+| **Three Tiers** | `Archive-*` (lenient), `Monitor-*` (strict), `Discover-*` (very strict) |
 | **Auto-Discovery** | Platform checks every 5 minutes - wait for sync |
 | **Flexible Rules** | Change rules by moving channels between folders |
-| **Easy Removal** | Delete from folder = stop monitoring |
 
 ---
 

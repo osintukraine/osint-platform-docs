@@ -154,10 +154,16 @@ The platform uses **folder-based channel management** - no admin panel required.
 
 ### In Telegram App (Desktop or Mobile):
 
-1. **Create a folder** named `Archive-Test` (right-click sidebar → Create Folder)
+1. **Create a folder** named `Archive` (right-click sidebar → Create Folder)
 2. **Find a channel** (e.g., search for a public Ukraine news channel)
-3. **Drag the channel** into the `Archive-Test` folder
+3. **Drag the channel** into the `Archive` folder
 4. **Wait 5 minutes** for the Listener to detect the new channel
+
+!!! note "Folder Naming Examples"
+    - `Archive` - Basic archive folder (7 chars) ✅
+    - `Archive-UA` - Ukraine sources (10 chars) ✅
+    - `Archive-RU` - Russia sources (10 chars) ✅
+    - `Monitor-UA` - Strict filtering for Ukraine (10 chars) ✅
 
 ### Verify Channel Discovery
 
@@ -169,16 +175,18 @@ docker-compose logs -f listener
 
 You should see:
 ```
-INFO: Discovered new channel in folder Archive-Test: @channel_username
+INFO: Discovered new channel in folder Archive: @channel_username
 INFO: Subscribing to channel @channel_username...
 ```
 
 !!! tip "Folder Naming Rules"
-    - `Archive-*` → Archives ALL messages (after spam filter)
-    - `Monitor-*` → Archives only HIGH importance messages
-    - `Discover-*` → Auto-created for forward chain discovery
+    - `Archive-*` → LLM archives most content (lenient mode)
+    - `Monitor-*` → LLM archives only high-value OSINT (strict mode)
+    - `Discover-*` → Very strict + 14-day probation for new channels
 
-    See [Channel Management](../operator-guide/channel-management.md) for details.
+    **Important**: Telegram limits folder names to **12 characters**. Use `-UA` or `-RU` suffixes, not full country names.
+
+    See [Add a Telegram Channel](../tutorials/add-telegram-channel.md) for details.
 
 ## Step 8: View Your First Message
 

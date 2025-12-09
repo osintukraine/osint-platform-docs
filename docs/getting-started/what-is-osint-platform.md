@@ -6,10 +6,10 @@ The OSINT Intelligence Platform is a self-hosted system for **archiving, enrichi
 
 The platform solves a critical problem for OSINT analysts: **Telegram content disappears**. Channels can be deleted, media expires after weeks, and critical intelligence is lost forever. This platform ensures permanent archival while adding intelligent enrichment.
 
-###Core Capabilities
+### Core Capabilities
 
 **Archive Everything**
-: Monitor 254+ Telegram channels simultaneously with automatic spam filtering, deduplication, and content-addressed media storage. Messages and media are permanently archived before they disappear.
+: Monitor hundreds of Telegram channels simultaneously with automatic spam filtering, deduplication, and content-addressed media storage. Messages and media are permanently archived before they disappear.
 
 **Enrich with AI**
 : Every message is analyzed by multiple AI models to classify importance (high/medium/low), extract entities (people, locations, equipment), detect sentiment, and generate semantic embeddings for similarity search.
@@ -36,7 +36,7 @@ Deploy self-hosted infrastructure with no cloud dependencies. Semantic search fi
 
 ### Academic Researchers
 
-Study information operations, propaganda patterns, and social networks with 3+ years of archived data and graph analysis tools.
+Study information operations, propaganda patterns, and social networks with comprehensive archival and graph analysis tools.
 
 ## What Makes It Different
 
@@ -44,11 +44,14 @@ Study information operations, propaganda patterns, and social networks with 3+ y
 
 **No admin panel required.** Manage channels directly in your Telegram app using folders:
 
-- Drag channels to `Archive-UA` folder → Archives everything after spam filter
-- Drag to `Monitor-RU` folder → Archives only high-importance messages
+- Drag channels to `Archive-UA` folder → LLM archives most content (lenient mode)
+- Drag to `Monitor-RU` folder → LLM archives only high-value OSINT (strict mode)
 - Platform detects changes within 5 minutes automatically
 
 This folder-based approach takes **30 seconds** instead of 10 minutes of SSH/config editing.
+
+!!! note "12-Character Folder Limit"
+    Telegram limits folder names to 12 characters. Use `-UA` and `-RU` suffixes, not full country names.
 
 ### Self-Hosted AI (Zero LLM Costs)
 
@@ -56,11 +59,11 @@ Six local LLM models (Qwen, Llama, Gemma, Phi, Granite) run on your hardware via
 
 ### Cost-Effective Architecture
 
-Target cost: **€30-90/month** for VPS hosting (vs €300/month for legacy systems). Aggressive spam filtering (95%+ accuracy) and content-addressed deduplication save 75-80% on storage costs.
+Self-hosted design minimizes ongoing costs. Aggressive spam filtering (95%+ accuracy) and content-addressed deduplication save 75-80% on storage costs compared to naive archival.
 
-### Battle-Tested Since 2022
+### Battle-Tested Design
 
-Built from 3+ years of production experience monitoring the Ukraine conflict. Spam patterns, entity extraction rules, and importance classification are refined from real-world intelligence collection.
+Built from years of production experience monitoring conflict zones. Spam patterns, entity extraction rules, and importance classification are refined from real-world intelligence collection.
 
 ### Privacy-First Design
 
@@ -70,11 +73,12 @@ Self-hosted PostgreSQL, MinIO, Ollama - no cloud dependencies. Your data never l
 
 ### Intelligence Collection
 
-- **254+ Channels**: Monitor hundreds of sources simultaneously
+- **Scalable Monitoring**: Monitor hundreds of channels simultaneously
 - **Real-Time Ingestion**: Sub-second message latency
 - **Historical Backfill**: Fetch messages from any date (configurable)
 - **Media Archival**: Content-addressed storage with SHA-256 deduplication
 - **Automatic Discovery**: Platform finds new channels via forward chain analysis
+- **Multi-Account Support**: Separate accounts for different source regions
 
 ### AI/ML Enrichment
 
@@ -86,10 +90,18 @@ Self-hosted PostgreSQL, MinIO, Ollama - no cloud dependencies. Your data never l
 - **AI Tagging**: Keywords, topics, emotions, urgency
 - **Translation**: DeepL Pro (free) + Google Translate fallback
 
+### Entity Knowledge Graph
+
+- **OpenSanctions Integration**: Link messages to sanctioned entities via [Yente API](https://www.opensanctions.org/docs/yente/)
+- **Wikidata Enrichment**: Automatic property fetching for matched entities
+- **Curated Entity Lists**: Import custom CSVs for domain-specific entities (military units, equipment, people)
+- **Entity Linking**: Automatic mention detection and linking to knowledge base
+- **Relationship Mapping**: Track connections between entities
+
 ### Search & Discovery
 
 - **Full-Text Search**: PostgreSQL GIN index, <100ms queries
-- **Semantic Search**: pgvector + HNSW index on 1M+ messages
+- **Semantic Search**: pgvector + HNSW index for meaning-based search
 - **Hybrid Search**: Combine text and semantic ranking
 - **15+ Filters**: Date range, channel, media type, importance, tags, sentiment
 - **Network Graph**: Visualize channel relationships and forward chains
@@ -98,14 +110,13 @@ Self-hosted PostgreSQL, MinIO, Ollama - no cloud dependencies. Your data never l
 
 - **Dynamic RSS Feeds**: Subscribe to any search query
 - **REST API**: OpenAPI/Swagger documentation
-- **Real-Time Notifications**: ntfy server with 14 topic categories
+- **Real-Time Notifications**: ntfy server with configurable topic categories
 - **RSS Correlation**: Cross-reference Telegram with news feeds
-- **Knowledge Graph**: 1,425 curated entities (equipment, people, units)
 
 ### Operations & Monitoring
 
 - **NocoDB Admin UI**: Airtable-like interface over PostgreSQL
-- **Grafana Dashboards**: 4 pre-configured monitoring views
+- **Grafana Dashboards**: Pre-configured monitoring views
 - **Prometheus Metrics**: All services instrumented
 - **Dozzle Logs**: Real-time Docker log viewer
 - **Health Checks**: Automated service monitoring
@@ -114,7 +125,7 @@ Self-hosted PostgreSQL, MinIO, Ollama - no cloud dependencies. Your data never l
 
 ### Conflict Monitoring
 
-Archive and analyze Telegram channels covering the Ukraine conflict. Track military units, equipment movements, and combat reports with importance classification and entity extraction.
+Archive and analyze Telegram channels covering active conflicts. Track military units, equipment movements, and combat reports with importance classification and entity extraction.
 
 ### Evidence Preservation
 
@@ -126,7 +137,7 @@ Study propaganda patterns, bot networks, and disinformation campaigns. Semantic 
 
 ### Cross-Source Verification
 
-Correlate Telegram messages with RSS news feeds using semantic similarity. Detect fact-checking opportunities and perspective differences (Ukraine vs Russia sources).
+Correlate Telegram messages with RSS news feeds using semantic similarity. Detect fact-checking opportunities and perspective differences across sources.
 
 ### Intelligence Briefings
 
@@ -142,26 +153,26 @@ Telegram → Listener → Redis → Processor → PostgreSQL/MinIO
                                  API → Frontend
 ```
 
-### Services
+### Service Layers
 
-**29 Docker containers** organized into layers:
+The platform is organized into containerized service layers:
 
 - **Core Infrastructure**: PostgreSQL 16 + pgvector, Redis 7, MinIO, Ollama
-- **Application Layer**: Listener, Processor (2 replicas), Enrichment (6 workers), API, Frontend
+- **Application Layer**: Listener, Processor, Enrichment workers, API, Frontend
 - **Monitoring Stack**: Prometheus, Grafana, AlertManager, ntfy, Exporters
-- **Authentication** (optional): Ory Kratos, Ory Oathkeeper, Mailslurper
+- **Authentication** (optional): Ory Kratos, Ory Oathkeeper
 
 ### Processing Pipeline
 
 1. **Listener** monitors Telegram folders, pushes messages to Redis Streams
-2. **Processor** filters spam, classifies importance, extracts entities, archives media
+2. **Processor** filters spam, classifies importance via LLM, extracts entities, archives media
 3. **Enrichment** generates embeddings, AI tags, translations (background tasks)
 4. **API** serves search queries, RSS feeds, and semantic similarity
 5. **Frontend** provides web UI for browsing and searching
 
 ### Data Flow
 
-**Real-Time Path** (Processor): <1s latency for spam filter, routing, importance classification
+**Real-Time Path** (Processor): <1s latency for spam filter, routing, LLM classification
 **Background Path** (Enrichment): Hours OK for embeddings, AI tagging, social graph extraction
 
 This separation ensures live messages are archived immediately while expensive AI operations run asynchronously.
@@ -171,22 +182,28 @@ This separation ensures live messages are archived immediately while expensive A
 ### Minimum
 
 - **CPU**: 2 cores (4 recommended)
-- **RAM**: 8GB (16GB recommended)
+- **RAM**: 8GB (16GB recommended for AI models)
 - **Storage**: 50GB SSD (plus media storage needs)
 - **OS**: Linux with Docker 20.10+
 
 ### Recommended (Production)
 
-- **CPU**: 8 cores (Ryzen 9 7940HS or equivalent)
+- **CPU**: 8+ cores
 - **RAM**: 16-32GB (for multiple LLM models)
 - **Storage**: 100GB SSD + object storage for media
 - **Network**: 100Mbps+ for Telegram API
 
-### Media Storage Estimates
+### Media Storage Planning
 
-- **60TB** for 3 years of unfiltered archival (254 channels)
-- **12-15TB** after spam filtering + deduplication (75-80% savings)
-- **Scales linearly** with channel count and retention period
+Storage needs depend on:
+
+- **Number of channels** being monitored
+- **Channel activity** (messages per day)
+- **Media types** (text-only vs image/video heavy)
+- **Spam filtering rate** (typically removes 80-90% of content)
+- **Deduplication savings** (typically 50-70% for forwarded content)
+
+Use the spam filter and content-addressed storage to significantly reduce storage requirements.
 
 ## Technology Stack
 
@@ -212,14 +229,11 @@ This separation ensures live messages are archived immediately while expensive A
 - **ntfy**: Self-hosted notification delivery
 - **Dozzle**: Real-time log viewer
 
-## Project History
+### Entity Data Sources
 
-- **Feb 24, 2022**: Project started (day of Russian invasion)
-- **2022**: 1,200+ hours building legacy system
-- **2023-2024**: Maintenance mode, 60TB archived
-- **Nov 2025**: New platform reaches production-ready status
-
-**Current operational data**: 254 channels, 60TB media, 3 years of archives.
+- **[OpenSanctions/Yente](https://www.opensanctions.org/)**: Sanctions and PEP data with fuzzy matching API
+- **[Wikidata](https://www.wikidata.org/)**: Structured knowledge base for entity enrichment
+- **Custom CSVs**: Import your own entity lists (military units, equipment, people)
 
 ## What's Next?
 
@@ -228,5 +242,4 @@ Now that you understand what the platform does, proceed to the [Quick Start Guid
 Or explore:
 
 - [Core Concepts](concepts.md) to understand key terminology
-- [Architecture Overview](../architecture/overview.md) for technical deep dive
-- [Features Catalog](../reference/features.md) for complete feature list
+- [Architecture Overview](../developer-guide/architecture.md) for technical deep dive

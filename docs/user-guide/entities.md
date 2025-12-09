@@ -4,7 +4,7 @@ Browse and analyze tracked entities including military equipment, personnel, org
 
 ## Overview
 
-The platform tracks **1,425+ curated entities** from multiple intelligence sources, automatically detecting mentions in Telegram messages and linking them to enriched profiles with Wikidata integration.
+The platform maintains an **entity knowledge graph** from multiple intelligence sources, automatically detecting mentions in Telegram messages and linking them to enriched profiles with Wikidata integration.
 
 ### Entity Types
 
@@ -45,25 +45,26 @@ The platform tracks **1,425+ curated entities** from multiple intelligence sourc
 
 ## Entity Sources
 
-### Curated Sources (1,425 entities)
+### Custom CSV Imports
 
-**ArmyGuide**
-- Global military equipment database
+Import your own domain-specific entity lists via CSV. The platform supports:
+
+**Equipment Databases**
+- Global military equipment databases
 - Technical specifications
 - Service history and variants
-- 800+ equipment entities
 
-**Root.NK**
-- North Korean entities
-- DPRK military units
-- Leadership profiles
-- 200+ entities
-
-**ODIN (Open Database of the INsurgency)**
-- Ukraine-specific intelligence
-- Ukrainian and Russian military units
+**Personnel Lists**
+- Military leadership
+- Political figures
 - Regional commanders
-- 425+ entities
+
+**Organization Databases**
+- Military units and formations
+- Private military companies
+- Government agencies
+
+The entity-ingestion service processes CSVs with configurable column mapping for different source formats.
 
 ### OpenSanctions (Auto-synced)
 

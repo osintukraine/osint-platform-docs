@@ -97,16 +97,36 @@ client.disconnect()
 3. **2FA Password** (if enabled): Enter your 2FA password
 4. **Success**: Session saved to `telegram_sessions/osint_platform.session`
 
-#### Option 2: Using Telegram Auth Script
+#### Option 2: Using Telegram Auth Script (Recommended)
+
+The `telegram_auth.py` script handles all session creation with better error handling:
 
 ```bash
 # Run authentication script
 python3 scripts/telegram_auth.py
 
-# Follow prompts:
-# Enter phone number: +1234567890
-# Enter verification code: 12345
-# Enter 2FA password (if required): ******
+# Interactive prompts:
+# Enter your phone number (with country code, e.g., +1234567890):
+# [System] Sending verification code to +1234567890...
+# Enter the verification code you received: 12345
+# Enter 2FA password (if enabled): ******
+
+# Success output:
+# Successfully logged in as: John Doe (@johndoe)
+# Session files created:
+#   - telegram_sessions/osint_platform.session (master)
+#   - telegram_sessions/listener.session
+#   - telegram_sessions/enrichment.session
+```
+
+**Check session status:**
+
+```bash
+# List existing sessions
+python3 scripts/telegram_auth.py --list
+
+# Show configuration status
+python3 scripts/telegram_auth.py --status
 ```
 
 ### Multi-Account Sessions
@@ -148,6 +168,26 @@ python3 scripts/telegram_auth.py --account ukraine
 - `telegram_sessions/listener_ukraine.session`
 
 #### Step 3: Start Multi-Account Listeners
+
+**Option A: Using mode switcher script (Recommended)**
+
+```bash
+# Switch to multi-account mode
+./scripts/switch-telegram-mode.sh multi
+
+# This automatically:
+# - Stops the single-account listener
+# - Starts listener-russia and listener-ukraine
+# - Starts enrichment-russia and enrichment-ukraine
+
+# Check current mode
+./scripts/switch-telegram-mode.sh status
+
+# Switch back to single-account mode
+./scripts/switch-telegram-mode.sh single
+```
+
+**Option B: Manual docker-compose commands**
 
 ```bash
 # Start both listeners
@@ -249,17 +289,30 @@ The platform uses Telegram app folders to organize and manage channels. No datab
 
 ### Folder Patterns
 
-| Folder Pattern | Rule | Behavior |
-|----------------|------|----------|
-| `Archive-*` | `archive_all` | Store all non-spam messages |
-| `Monitor-*` | `selective_archive` | Only messages with OSINT score ≥ 70 |
-| `Discover-*` | `discovery` | Auto-joined channels, 14-day probation |
+!!! warning "12-Character Folder Name Limit"
+    Telegram limits folder names to **12 characters maximum**. Use short suffixes like `-UA` and `-RU` instead of full country names.
 
-**Examples**:
-- `Archive-Russia` - Archive all messages from Russian military channels
-- `Archive-Ukraine` - Archive all messages from Ukrainian OSINT channels
-- `Monitor-Important` - Only high-value messages from news channels
-- `Discover-New` - Recently discovered channels (auto-pruned after 14 days if inactive)
+| Folder Pattern | Processing Tier | LLM Behavior |
+|----------------|-----------------|--------------|
+| `Archive-*` | Archive tier | Lenient - archives most Ukraine-relevant content |
+| `Monitor-*` | Monitor tier | Strict - only high-value OSINT content |
+| `Discover-*` | Discovery tier | Very strict + 14-day probation period |
+
+!!! important "The LLM is the Arbiter"
+    The folder tier sets how strict the LLM should be, but the **AI makes the final `should_archive` decision** for every message. Even Archive-tier messages can be rejected if the LLM determines they lack OSINT value.
+
+**Valid Examples** (≤12 characters):
+
+- `Archive-UA` - Archive tier, Ukraine sources (10 chars) ✅
+- `Archive-RU` - Archive tier, Russia sources (10 chars) ✅
+- `Monitor-UA` - Monitor tier, Ukraine (10 chars) ✅
+- `Discover-UA` - Discovery tier (11 chars) ✅
+
+**Invalid Examples** (too long):
+
+- `Archive-Russia` - 14 chars ❌
+- `Archive-Ukraine` - 15 chars ❌
+- `Monitor-Important` - 17 chars ❌
 
 ### Creating Folders in Telegram
 
@@ -268,7 +321,7 @@ The platform uses Telegram app folders to organize and manage channels. No datab
 1. Open Telegram Desktop
 2. Click "Settings" → "Folders"
 3. Click "Create New Folder"
-4. Name folder (e.g., `Archive-Russia`)
+4. Name folder (e.g., `Archive-RU` - remember the 12-char limit!)
 5. Add channels to folder:
    - Click "Add Chats"
    - Select channels to monitor
@@ -280,7 +333,7 @@ The platform uses Telegram app folders to organize and manage channels. No datab
 1. Open Telegram app
 2. Tap "Settings" → "Folders"
 3. Tap "Create New Folder"
-4. Name folder (e.g., `Archive-Ukraine`)
+4. Name folder (e.g., `Archive-UA` - remember the 12-char limit!)
 5. Tap "Add Chats"
 6. Select channels
 7. Tap "Done"
@@ -309,9 +362,9 @@ grep FOLDER_SYNC_INTERVAL .env
 docker-compose logs listener | grep -i folder
 
 # Expected output:
-# INFO: Discovered folder: Archive-Russia (12 channels)
-# INFO: Discovered folder: Monitor-Important (3 channels)
-# INFO: Assigned rule archive_all to 12 channels in Archive-Russia
+# INFO: Discovered folder: Archive-RU (12 channels)
+# INFO: Discovered folder: Monitor-UA (3 channels)
+# INFO: Assigned tier archive to 12 channels in Archive-RU
 ```
 
 ### Managing Channels
@@ -321,7 +374,7 @@ docker-compose logs listener | grep -i folder
 **Method 1: Add to Telegram Folder**
 
 1. Join channel in Telegram app
-2. Add channel to folder (e.g., `Archive-Russia`)
+2. Add channel to folder (e.g., `Archive-RU`)
 3. Wait for sync (max 5 minutes)
 4. Verify in logs:
 
@@ -366,49 +419,55 @@ WHERE last_message_at < NOW() - INTERVAL '30 days';
 
 ### Folder-Specific Intelligence Rules
 
-#### Archive-All Rule (Archive-* folders)
+All messages go through the same pipeline, but the **folder tier affects how strict the LLM classification is**:
 
-Stores **all non-spam messages** regardless of OSINT score:
+```mermaid
+flowchart LR
+    A[Message] --> B{Spam Filter}
+    B -->|Spam| C[Discard]
+    B -->|Not Spam| D{Ukraine Relevant?}
+    D -->|No| E[Quarantine]
+    D -->|Yes| F{LLM Classification}
+    F -->|should_archive=false| G[Discard]
+    F -->|should_archive=true| H[Archive]
+```
 
-- **Spam filter**: YES (filters donation scams, off-topic)
-- **OSINT scoring**: YES (for analytics)
-- **Archival threshold**: 0 (all non-spam archived)
+#### Archive Tier (`Archive-*` folders)
+
+**LLM behavior**: Lenient classification - archives most Ukraine-relevant content.
+
+- **Spam filter**: YES (filters donation scams, crypto ads)
+- **Ukraine relevance**: YES (non-relevant goes to quarantine)
+- **LLM strictness**: LOW (most relevant messages pass)
+- **Typical archive rate**: 70-90% of non-spam messages
 
 **Use cases**:
 - Critical primary sources (Ukrainian military, Russian MoD)
 - High-signal channels (DeepStateUA, Rybar)
-- Historical archiving (preserve everything for research)
+- Historical archiving (comprehensive coverage)
 
-#### Selective Archive Rule (Monitor-* folders)
+#### Monitor Tier (`Monitor-*` folders)
 
-Stores **only high-value messages** (OSINT score ≥ 70):
+**LLM behavior**: Strict classification - only high-value OSINT content.
 
 - **Spam filter**: YES
-- **OSINT scoring**: YES
-- **Archival threshold**: 70 (configurable via `MONITORING_OSINT_THRESHOLD`)
+- **Ukraine relevance**: YES
+- **LLM strictness**: HIGH (only clear OSINT value passes)
+- **Typical archive rate**: 20-40% of non-spam messages
 
 **Use cases**:
-- News aggregators (too noisy for archive-all)
+- News aggregators (too noisy for archive tier)
 - Secondary sources (only significant updates)
-- Test channels (evaluate before archiving)
+- Discussion groups (filter out chatter)
 
-**Adjust threshold**:
+**Storage savings**: Monitor tier typically archives 60-80% less than Archive tier.
 
-```bash
-# In .env file
-MONITORING_OSINT_THRESHOLD=70  # Default: 70
-# Lower = more messages archived (e.g., 50)
-# Higher = fewer messages archived (e.g., 85)
+#### Discovery Tier (`Discover-*` folders)
 
-# Restart processor to apply
-docker-compose restart processor-worker
-```
-
-#### Discovery Rule (Discover-* folders)
-
-Auto-joins and evaluates channels for 14 days:
+**LLM behavior**: Very strict classification + 14-day probation period.
 
 - **Auto-join**: YES (from forward chains)
+- **LLM strictness**: VERY HIGH (prove the channel's worth)
 - **Probation period**: 14 days
 - **Auto-removal**: After 14 days if inactive or spam
 
@@ -416,7 +475,7 @@ Auto-joins and evaluates channels for 14 days:
 
 1. Platform detects new channel in forwards
 2. Auto-joins and adds to `Discover-*` folder
-3. Monitors for 14 days
+3. Monitors for 14 days with very strict filtering
 4. **Decision after 14 days**:
    - **Active + valuable**: Move to `Archive-*` or `Monitor-*`
    - **Inactive or spam**: Auto-removed
@@ -451,28 +510,29 @@ ORDER BY created_at DESC;
 
 ### Account Assignment by Folder
 
+!!! warning "12-Character Folder Limit Applies"
+    Remember: Telegram folder names are limited to 12 characters. Use short suffixes like `-RU` and `-UA`.
+
 | Account | Folders | Use Case |
 |---------|---------|----------|
-| **Default** | `Archive-*`, `Monitor-*`, `Discover-*` | Neutral channels, general OSINT |
-| **Russia** | `Archive-RU-*`, `Monitor-RU-*`, `Discover-RU` | Russian military, state media |
-| **Ukraine** | `Archive-UA-*`, `Monitor-UA-*`, `Discover-UA` | Ukrainian military, government |
+| **Default** | `Archive`, `Monitor`, `Discover` | Neutral channels, general OSINT |
+| **Russia** | `Archive-RU`, `Monitor-RU`, `Discover-RU` | Russian military, state media |
+| **Ukraine** | `Archive-UA`, `Monitor-UA`, `Discover-UA` | Ukrainian military, government |
 
-**Example Folder Structure**:
+**Example Folder Structure** (all ≤12 chars):
 
 ```
 Default Account:
-- Archive-Neutral (international news)
-- Monitor-Analysis (OSINT analysts)
+- Archive (international news) - 7 chars ✅
+- Monitor (OSINT analysts) - 7 chars ✅
 
 Russia Account:
-- Archive-RU-Military (Russian MoD, Wagner)
-- Archive-RU-Propaganda (RT, TASS)
-- Monitor-RU-Regional (regional channels)
+- Archive-RU (Russian MoD, Wagner) - 10 chars ✅
+- Monitor-RU (regional channels) - 10 chars ✅
 
 Ukraine Account:
-- Archive-UA-Military (Armed Forces, DeepState)
-- Archive-UA-Government (Ukrainian officials)
-- Monitor-UA-Regional (oblast channels)
+- Archive-UA (Armed Forces, DeepState) - 10 chars ✅
+- Monitor-UA (oblast channels) - 10 chars ✅
 ```
 
 ### Multi-Account Performance

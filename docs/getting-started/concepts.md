@@ -55,8 +55,9 @@ An **entity** is a named thing extracted from messages: person, organization, lo
 
 **Entity Sources**:
 - **Extracted**: Automatically detected from message text via regex/NER
-- **Curated**: Manually added to knowledge graph (1,425+ entities)
-- **OpenSanctions**: Matched against sanctions/PEP databases
+- **Curated**: Custom CSV imports for domain-specific entities (military units, equipment, people)
+- **OpenSanctions/Yente**: Matched against sanctions/PEP databases
+- **Wikidata**: Automatic property enrichment for matched entities
 
 **Entity Properties**:
 - **Name** (primary and aliases)

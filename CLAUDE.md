@@ -116,8 +116,12 @@ When documenting, analyze code from:
 
 ## Current Task
 
-Generating Phase 2: Core service documentation (Listener, Processor, API, Frontend)
-using parallel technical-writer agents.
+✅ All 5 phases complete! Documentation generation finished.
+
+**Recent fixes (2025-12-09):**
+- Fixed folder naming conventions (12-char limit: `Archive-UA` not `Archive-Ukraine`)
+- Updated LLM routing documentation (LLM is now arbiter, not folder rules)
+- Added auth script documentation (`scripts/telegram_auth.py`, `scripts/switch-telegram-mode.sh`)
 
 ---
 

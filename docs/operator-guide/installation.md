@@ -463,9 +463,12 @@ Channels are managed through Telegram folders (not through web UI).
 
 **In your Telegram app:**
 
-1. Create a folder named "Archive-Test"
+1. Create a folder named `Archive` (or `Archive-UA` for Ukraine sources)
 2. Add a test channel to this folder
 3. Wait 5 minutes for folder sync
+
+!!! note "Folder Name Limit"
+    Telegram limits folder names to **12 characters**. Use short suffixes like `-UA` or `-RU`.
 
 **Verify channel was discovered:**
 

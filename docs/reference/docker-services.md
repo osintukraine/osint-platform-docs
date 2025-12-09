@@ -10,15 +10,17 @@ Complete reference for all Docker services in the OSINT Intelligence Platform.
 
 ## Overview
 
-The platform consists of **29 containers** organized into 7 functional categories:
+The platform's containers are organized into functional categories:
 
-- **Core Infrastructure** (4 services): Database, cache, storage, LLM
-- **Application Services** (15 services): Data ingestion, processing, enrichment, API, frontend
-- **Monitoring Stack** (8 services): Metrics, logs, alerts, dashboards
-- **Infrastructure Exporters** (2 services): PostgreSQL and Redis metrics
-- **Container Management** (2 services): Resource monitoring and updates
-- **Notification System** (1 service): Push notifications
-- **Authentication** (4 services): Identity management and access control
+| Category | Purpose |
+|----------|---------|
+| **Core Infrastructure** | Database, cache, storage, LLM |
+| **Application Services** | Data ingestion, processing, enrichment, API, frontend |
+| **Monitoring Stack** | Metrics, logs, alerts, dashboards |
+| **Infrastructure Exporters** | PostgreSQL and Redis metrics |
+| **Container Management** | Resource monitoring and updates |
+| **Notification System** | Push notifications |
+| **Authentication** (optional) | Identity management and access control |
 
 ---
 

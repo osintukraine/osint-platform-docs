@@ -2,10 +2,10 @@
 
 The OSINT Intelligence Platform is a production-ready system for archiving, enriching, and analyzing Telegram channels with multi-model AI enrichment, semantic search, and configurable intelligence rules.
 
-!!! info "Architecture Status"
-    **Status**: Production Operational | **Version**: 1.0 | **Last Updated**: 2025-11-28
-    **Services**: 29 containers (15 application + 8 monitoring + 4 infrastructure + 2 auth)
-    **Channels**: 254+ monitored | **Entities**: 1,425 curated | **Cost**: ~€230/month target
+!!! info "Architecture Overview"
+    **Design**: Containerized microservices with Docker Compose
+    **Layers**: Core infrastructure, Application services, Monitoring stack, Authentication (optional)
+    **Philosophy**: Self-hosted, cost-effective, privacy-first
 
 ---
 
@@ -15,12 +15,12 @@ The platform operates as a distributed pipeline that continuously monitors Teleg
 
 ### Core Capabilities
 
-- **Real-time Ingestion**: Monitor 254+ Telegram channels simultaneously with automatic spam filtering (>95% accuracy)
+- **Real-time Ingestion**: Monitor hundreds of Telegram channels simultaneously with automatic spam filtering (>95% accuracy)
 - **AI-Powered Enrichment**: Multi-model LLM classification (6 models), entity extraction, semantic embeddings
-- **Content-Addressed Storage**: SHA-256 deduplication for media files, 30-40% storage savings
+- **Content-Addressed Storage**: SHA-256 deduplication for media files, 50-70% storage savings
 - **Semantic Search**: pgvector embeddings for similarity queries across all archived content
 - **Dynamic Distribution**: Subscribe to any search query combination via RSS feeds
-- **Self-Hosted Infrastructure**: Zero cloud dependencies, €0/month for LLM and translation APIs
+- **Self-Hosted Infrastructure**: Zero cloud dependencies, self-hosted LLM and translation APIs
 
 ---
 
@@ -157,7 +157,7 @@ This separation is **fundamental** to the platform architecture:
 ```
 
 **Trade-offs**:
-- ✅ **Pro**: Processor never blocks, 254 channels scale linearly
+- ✅ **Pro**: Processor never blocks, channels scale linearly
 - ✅ **Pro**: Can scale Enrichment independently (add more workers)
 - ⚠️ **Con**: Temporary delay before embeddings/tags appear (acceptable for historical archive)
 

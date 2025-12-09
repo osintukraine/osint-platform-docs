@@ -471,7 +471,7 @@ INFO - Channel discovery complete
 Now let's add a channel to monitoring. This works the same way as local setup:
 
 1. Open Telegram app (mobile or desktop)
-2. Create a folder called `Archive` or `Archive-Test`
+2. Create a folder called `Archive` (or `Archive-UA` for Ukraine sources)
 3. Find a public channel and add it to the folder
 4. Wait 5 minutes for discovery (or restart listener)
 

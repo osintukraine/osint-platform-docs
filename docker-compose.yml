@@ -1,9 +1,18 @@
+# Standalone MkDocs for docs repo development
+# Use this when working on docs independently from the main platform
+#
+# For integrated development, use the main platform's docker-compose instead:
+#   cd ../osint-intelligence-platform
+#   docker-compose --profile dev up mkdocs
+#
+# Port 8002 is used here to avoid conflict with main platform's mkdocs (8001)
+
 services:
   mkdocs:
     build: .
-    container_name: osint-platform-docs
+    container_name: osint-platform-docs-standalone
     ports:
-      - "8002:8000"
+      - "8002:8000"  # Standalone uses 8002, main platform uses 8001
     volumes:
       # Mount for live reload during development
       - ./docs:/docs/docs:ro

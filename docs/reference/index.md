@@ -8,16 +8,17 @@ This reference documentation provides comprehensive details about:
 
 - **[API Endpoints](api-endpoints.md)** - All REST API endpoints with parameters and responses
 - **[Environment Variables](environment-vars.md)** - Complete configuration reference
-- **[Database Tables](database-tables.md)** - PostgreSQL schema documentation (45 tables)
-- **[Docker Services](docker-services.md)** - Container architecture (29 services)
+- **[Database Tables](database-tables.md)** - PostgreSQL schema documentation
+- **[Docker Services](docker-services.md)** - Container architecture
 
 ## Quick Facts
 
-- **Services**: 29 containers (15 application + 8 monitoring + 4 infrastructure + 2 auth)
-- **Database Tables**: 45 tables across messages, entities, events, enrichment, and analytics
-- **API Endpoints**: 120+ REST endpoints across 20+ routers
-- **Environment Variables**: 150+ configuration options
-- **Tech Stack**: Python 3.11+, FastAPI, PostgreSQL 16 + pgvector, Redis, Ollama
+- **Database**: PostgreSQL 16 + pgvector for semantic search
+- **API**: FastAPI with OpenAPI/Swagger documentation
+- **Message Queue**: Redis Streams for async processing
+- **Object Storage**: MinIO (S3-compatible) for media
+- **AI**: Ollama for self-hosted LLM inference
+- **Tech Stack**: Python 3.11+, Next.js 14, Bun
 
 ## Architecture Patterns
 

@@ -262,12 +262,12 @@ See [Telegram Patterns Documentation](../../architecture/telegram-patterns.md) f
 | `Monitor*` | `selective_archive` | Only store OSINT score ≥70 |
 | `Discover*` | `discovery` | Auto-joined channels (14-day probation) |
 
-**Examples**:
+**Examples** (remember 12-char limit):
 
-- `Archive-Russia` → `archive_all`
-- `Monitor-Ukraine` → `selective_archive`
-- `Discover-RU` → `discovery`
-- `Test-Channels` → No match (ignored)
+- `Archive-RU` → `archive_all` (10 chars ✅)
+- `Monitor-UA` → `selective_archive` (10 chars ✅)
+- `Discover-RU` → `discovery` (11 chars ✅)
+- `Personal` → No match (ignored)
 
 **Technical Implementation**:
 
@@ -368,7 +368,7 @@ BACKFILL_MODE=on_discovery  # on_discovery | manual | scheduled
 **Example**:
 
 ```python
-# Triggered automatically when channel added to "Archive-Russia" folder
+# Triggered automatically when channel added to "Archive-RU" folder
 backfill_service = BackfillService(
     client=telegram_client,
     db=db_session,
@@ -710,8 +710,8 @@ docker-compose restart redis listener
 docker-compose logs listener | grep "Processing folder"
 
 # Expected:
-# Processing folder 'Archive-Russia' with rule 'archive_all'
-# Processing folder 'Monitor-Ukraine' with rule 'selective_archive'
+# Processing folder 'Archive-RU' with rule 'archive_all'
+# Processing folder 'Monitor-UA' with rule 'selective_archive'
 # Skipping folder 'Personal' - no matching rule pattern
 
 # Manually trigger discovery

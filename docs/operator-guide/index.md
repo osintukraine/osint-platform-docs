@@ -37,7 +37,7 @@ This guide covers everything needed to deploy and operate the platform in produc
 
 ## Architecture Overview
 
-The platform consists of 29 containers organized into functional layers:
+The platform consists of containerized services organized into functional layers:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -53,11 +53,11 @@ The platform consists of 29 containers organized into functional layers:
 └─────────────────────────────────────────┘
 ```
 
-### Core Services (15 containers)
+### Core Services
 
 | Service | Purpose | Port |
 |---------|---------|------|
-| **listener** | Monitors 254+ Telegram channels in real-time | 9091 |
+| **listener** | Monitors Telegram channels in real-time | 9091 |
 | **processor-worker** | Spam filtering, routing, entity extraction (2 replicas) | 9092 |
 | **enrichment-ai-tagging** | LLM-based tag generation | 9196 |
 | **enrichment-rss-validation** | RSS article validation | 9197 |

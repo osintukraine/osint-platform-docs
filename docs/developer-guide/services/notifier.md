@@ -471,7 +471,7 @@ docker-compose exec redis redis-cli PUBLISH notifications:events '{
   "data": {
     "channel": "Test Channel",
     "username": "testchannel",
-    "folder": "Archive-Test"
+    "folder": "Archive-UA"
   },
   "priority": "default",
   "tags": ["test"],
@@ -740,7 +740,7 @@ await notifier.emit(
     {
         "channel": "Ukraine News",
         "username": "UkraineNews",
-        "folder": "Archive-Ukraine",
+        "folder": "Archive-UA",
         "rule": "archive_all",
         "members_count": 50000,
         "verified": True
