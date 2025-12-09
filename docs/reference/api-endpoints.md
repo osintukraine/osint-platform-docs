@@ -1,356 +1,1069 @@
-# API Endpoints
+# API Endpoints Reference
 
-Complete REST API reference for the OSINT Intelligence Platform.
+Comprehensive documentation of all REST API endpoints in the OSINT Intelligence Platform.
 
-## Overview
+**Base URL**: `http://localhost:8000/api` (development) | `https://your-domain.com/api` (production)
 
-**TODO: Content to be generated from codebase analysis**
+**Authentication**: Most endpoints require Bearer token authentication. See [Authentication](#authentication) section.
 
-Base URL: `http://localhost:8000` (development) or `https://your-domain.com` (production)
+---
+
+## Table of Contents
+
+- [Authentication](#authentication)
+- [Messages](#messages)
+- [Channels](#channels)
+- [Entities](#entities)
+- [Search](#search)
+- [Events](#events)
+- [Comments](#comments)
+- [Analytics](#analytics)
+- [Network & Social Graph](#network--social-graph)
+- [Metrics](#metrics)
+- [About](#about)
+- [Admin Endpoints](#admin-endpoints)
+
+---
 
 ## Authentication
 
-**TODO: Document authentication methods:**
+### GET /auth/info
 
-### Bearer Token
+Get authentication configuration info.
 
-```bash
-curl -H "Authorization: Bearer YOUR_TOKEN" \
-  http://localhost:8000/api/messages
-```
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/auth/info` | None | Get auth provider and requirements |
 
-### API Key
-
-**TODO: Add API key authentication if supported**
-
-## Messages API
-
-### List Messages
-
-**TODO: Document from API code:**
-
-```http
-GET /api/messages
-```
-
-Query Parameters:
-
-- `q` - Search query
-- `channel_id` - Filter by channel
-- `entity_id` - Filter by entity
-- `tags` - Filter by AI tags
-- `from_date` - Start date
-- `to_date` - End date
-- `limit` - Results per page (default: 50)
-- `offset` - Pagination offset
-
-Response:
-
+**Response Example**:
 ```json
 {
-  "total": 1000,
-  "limit": 50,
-  "offset": 0,
-  "messages": [
+  "provider": "jwt",
+  "required": true,
+  "login_endpoint": "/api/auth/login"
+}
+```
+
+### POST /auth/login
+
+Login with username and password (JWT provider only).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/auth/login` | None | Login and get JWT token |
+
+**Request Body**:
+```json
+{
+  "username": "admin",
+  "password": "your-password"
+}
+```
+
+**Response**:
+```json
+{
+  "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+  "token_type": "bearer",
+  "expires_in": 43200
+}
+```
+
+### GET /auth/users/me
+
+Get current authenticated user information.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/auth/users/me` | Required | Get current user info |
+
+**Response**:
+```json
+{
+  "id": "user-123",
+  "username": "admin",
+  "email": "admin@example.com",
+  "display_name": "Admin User",
+  "roles": ["admin", "viewer"]
+}
+```
+
+### POST /auth/users
+
+Create a new user (admin only, JWT provider only).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/auth/users` | Required (admin) | Create new user |
+
+### GET /auth/users
+
+List all users (admin only, JWT provider only).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/auth/users` | Required (admin) | List all users |
+
+### POST /auth/users/me/password
+
+Change current user's password (JWT provider only).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/auth/users/me/password` | Required | Change password |
+
+---
+
+## Messages
+
+### GET /messages
+
+Search messages with filters and pagination.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/messages` | See below | Search messages with filters |
+
+**Query Parameters**:
+
+| Parameter | Type | Description | Example |
+|-----------|------|-------------|---------|
+| `q` | string | Full-text search query | `q=Bakhmut` |
+| `channel_id` | integer | Filter by channel ID | `channel_id=123` |
+| `channel_username` | string | Filter by channel username | `channel_username=ukraine_news` |
+| `channel_folder` | string | Filter by folder pattern | `channel_folder=%UA` (Ukrainian sources) |
+| `topic` | string | Filter by OSINT topic | `topic=combat` |
+| `has_media` | boolean | Filter messages with media | `has_media=true` |
+| `media_type` | string | Filter by media type | `media_type=photo` |
+| `is_spam` | boolean | Include spam messages | `is_spam=false` |
+| `spam_type` | string | Filter by spam type | `spam_type=financial` |
+| `importance_level` | string | Filter by importance | `importance_level=high` |
+| `sentiment` | string | Filter by sentiment | `sentiment=urgent` |
+| `language` | string | Filter by language | `language=uk` |
+| `needs_human_review` | boolean | Flagged for review | `needs_human_review=true` |
+| `has_comments` | boolean | Has discussion threads | `has_comments=true` |
+| `min_views` | integer | Minimum view count | `min_views=1000` |
+| `min_forwards` | integer | Minimum forward count | `min_forwards=100` |
+| `date_from` | datetime | Start date | `date_from=2024-01-01T00:00:00Z` |
+| `date_to` | datetime | End date | `date_to=2024-12-31T23:59:59Z` |
+| `days` | integer | Last N days | `days=7` |
+| `page` | integer | Page number (1-indexed) | `page=2` |
+| `page_size` | integer | Items per page (1-100) | `page_size=50` |
+| `sort_by` | string | Sort field | `sort_by=created_at` |
+| `sort_order` | string | Sort order | `sort_order=desc` |
+
+**Example Request**:
+```bash
+GET /messages?importance_level=high&days=7&page=1&page_size=20
+```
+
+### GET /messages/{message_id}
+
+Get a single message by ID.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/messages/{message_id}` | Optional | Get message details |
+
+**Response includes**:
+- Message content (original and translated)
+- Media URLs and items
+- AI-generated tags
+- Curated entity matches (from knowledge graph)
+- OpenSanctions entity matches (sanctions/PEPs)
+- Channel information
+
+### GET /messages/{message_id}/adjacent
+
+Get previous and next message IDs for navigation.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/messages/{message_id}/adjacent` | Optional | Get prev/next message IDs |
+
+**Response**:
+```json
+{
+  "current_id": 12345,
+  "prev_id": 12344,
+  "next_id": 12346
+}
+```
+
+### GET /messages/{message_id}/album
+
+Get all media files for a message's album (Telegram grouped media).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/messages/{message_id}/album` | Optional | Get album media for lightbox |
+
+**Response**:
+```json
+{
+  "grouped_id": "67890",
+  "album_size": 5,
+  "current_index": 2,
+  "media": [
     {
-      "id": 1,
-      "text": "Message content",
-      "channel_id": 123,
-      "created_at": "2024-01-15T10:30:00Z",
-      "entities": [...],
-      "tags": [...]
+      "message_id": 12345,
+      "media_id": 1,
+      "media_url": "http://localhost:9000/telegram-archive/...",
+      "media_type": "photo",
+      "mime_type": "image/jpeg",
+      "file_size": 245678,
+      "content": "Photo caption",
+      "telegram_date": "2024-12-09T10:30:00"
     }
   ]
 }
 ```
 
-### Get Message
+### GET /messages/{message_id}/network
 
-**TODO: Document endpoint:**
+Build entity relationship graph for a message (Flowsint-style visualization).
 
-```http
-GET /api/messages/{message_id}
-```
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/messages/{message_id}/network` | `include_similar`, `similarity_threshold`, `max_similar` | Get network graph |
 
-### Search Messages
+**Query Parameters**:
+- `include_similar` (boolean, default: true): Include semantically similar messages
+- `similarity_threshold` (float, 0.5-1.0, default: 0.8): Minimum similarity score
+- `max_similar` (integer, 1-10, default: 5): Max similar messages
 
-**TODO: Document search endpoint:**
+**Response includes**:
+- Nodes: message, curated entities, AI tags, OpenSanctions entities, similar messages
+- Edges: relationships with confidence scores
+- Metadata: counts and statistics
 
-```http
-POST /api/messages/search
-```
+---
 
-## Channels API
+## Channels
 
-### List Channels
+### GET /channels
 
-**TODO: Document from API code:**
+List channels with filters.
 
-```http
-GET /api/channels
-```
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/channels` | See below | List channels |
 
-### Get Channel
+**Query Parameters**:
+- `active_only` (boolean, default: true): Show only active channels
+- `rule` (string): Filter by processing rule (archive_all, selective_archive, test, staging)
+- `folder` (string): Filter by Telegram folder name
+- `verified_only` (boolean, default: false): Only verified channels
+- `limit` (integer, 1-500, default: 100): Maximum channels to return
 
-```http
-GET /api/channels/{channel_id}
-```
+### GET /channels/{channel_id}
 
-### Get Channel Statistics
+Get detailed information about a specific channel.
 
-**TODO: Document stats endpoint:**
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/channels/{channel_id}` | Optional | Get channel details |
 
-```http
-GET /api/channels/{channel_id}/stats
-```
+### GET /channels/{channel_id}/stats
 
-## Entities API
+Get statistics for a specific channel.
 
-### List Entities
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/channels/{channel_id}/stats` | Optional | Get channel statistics |
 
-**TODO: Document from API code:**
-
-```http
-GET /api/entities
-```
-
-Query Parameters:
-
-- `type` - Entity type (person, organization, location)
-- `source` - Entity source (armyguide, rootnk, odin, wikidata)
-- `q` - Search query
-
-### Get Entity
-
-```http
-GET /api/entities/{entity_id}
-```
-
-### Get Entity Mentions
-
-**TODO: Document mentions endpoint:**
-
-```http
-GET /api/entities/{entity_id}/mentions
-```
-
-## RSS Feeds API
-
-### List Feeds
-
-**TODO: Document from RSS ingestor:**
-
-```http
-GET /api/rss/feeds
-```
-
-### Create Feed
-
-```http
-POST /api/rss/feeds
-```
-
-Request Body:
-
+**Response**:
 ```json
 {
-  "name": "Feed name",
-  "description": "Feed description",
-  "filters": {
-    "channels": [1, 2, 3],
-    "entities": [10, 20],
-    "tags": ["military", "political"],
-    "keywords": ["keyword1", "keyword2"]
-  }
+  "total_messages": 12450,
+  "spam_messages": 340,
+  "archived_messages": 12110,
+  "high_importance_count": 1205,
+  "messages_by_topic": {
+    "combat": 5000,
+    "civilian": 3000,
+    "equipment": 2000
+  },
+  "first_message_at": "2024-01-01T00:00:00",
+  "last_message_at": "2024-12-09T12:00:00"
 }
 ```
 
-### Get Feed
+### POST /channels/{channel_id}/backfill
 
-```http
-GET /api/rss/feeds/{feed_id}
-```
+Trigger manual historical backfill for a channel.
 
-### Update Feed
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/channels/{channel_id}/backfill` | Required | Trigger backfill |
 
-```http
-PUT /api/rss/feeds/{feed_id}
-```
-
-### Delete Feed
-
-```http
-DELETE /api/rss/feeds/{feed_id}
-```
-
-### Get Feed XML
-
-```http
-GET /api/rss/feeds/{feed_id}/xml
-```
-
-## Search API
-
-### Full-Text Search
-
-**TODO: Document search API:**
-
-```http
-POST /api/search
-```
-
-### Semantic Search
-
-**TODO: Document vector search:**
-
-```http
-POST /api/search/semantic
-```
-
-Request Body:
-
+**Request Body**:
 ```json
 {
-  "query": "natural language query",
-  "limit": 20
+  "from_date": "2024-01-01T00:00:00Z"
 }
-```
-
-## Admin API
-
-### List Users
-
-**TODO: Document admin endpoints:**
-
-```http
-GET /api/admin/users
-```
-
-### Channel Management
-
-```http
-GET /api/admin/channels
-POST /api/admin/channels
-PUT /api/admin/channels/{channel_id}
-DELETE /api/admin/channels/{channel_id}
-```
-
-### System Stats
-
-**TODO: Document system statistics:**
-
-```http
-GET /api/admin/stats
-```
-
-## Health & Status
-
-### Health Check
-
-```http
-GET /health
-```
-
-Response:
-
-```json
-{
-  "status": "healthy",
-  "version": "1.0.0",
-  "services": {
-    "database": "healthy",
-    "redis": "healthy",
-    "minio": "healthy"
-  }
-}
-```
-
-### Metrics
-
-**TODO: Document metrics endpoint if available:**
-
-```http
-GET /metrics
-```
-
-## WebSocket API
-
-**TODO: Document WebSocket endpoints if available:**
-
-### Real-time Messages
-
-```
-ws://localhost:8000/ws/messages
-```
-
-## Error Responses
-
-**TODO: Document error response format:**
-
-```json
-{
-  "error": "Error message",
-  "code": "ERROR_CODE",
-  "details": {}
-}
-```
-
-### Common Error Codes
-
-- `400` - Bad Request
-- `401` - Unauthorized
-- `403` - Forbidden
-- `404` - Not Found
-- `422` - Validation Error
-- `500` - Internal Server Error
-
-## Rate Limiting
-
-**TODO: Document rate limiting:**
-
-- Limit: X requests per minute
-- Headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`
-
-## Pagination
-
-**TODO: Document pagination pattern:**
-
-All list endpoints support pagination:
-
-- `limit` - Items per page (default: 50, max: 250)
-- `offset` - Offset for pagination
-
-## Examples
-
-**TODO: Provide comprehensive API usage examples:**
-
-### Python
-
-```python
-# TODO: Add Python examples
-import requests
-
-response = requests.get(
-    "http://localhost:8000/api/messages",
-    headers={"Authorization": f"Bearer {token}"},
-    params={"limit": 10}
-)
-messages = response.json()
-```
-
-### cURL
-
-```bash
-# TODO: Add cURL examples
-```
-
-### JavaScript
-
-```javascript
-// TODO: Add JavaScript examples
 ```
 
 ---
 
-!!! note "Documentation Status"
-    This page is a placeholder. Content will be generated from FastAPI service code and OpenAPI schema.
+## Entities
+
+### GET /entities/search
+
+Search entities with fuzzy matching (curated + OpenSanctions).
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/entities/search` | `q`, `source`, `entity_type`, `limit` | Search entities |
+
+**Query Parameters**:
+- `q` (string, required): Search query
+- `source` (string, optional): Filter by source (curated, opensanctions)
+- `entity_type` (string, optional): Filter by entity type
+- `limit` (integer, 1-100, default: 20): Max results
+
+**Response**:
+```json
+{
+  "items": [
+    {
+      "id": "123",
+      "source": "curated",
+      "name": "T-90M Proryv",
+      "entity_type": "military_vehicle",
+      "description": "Russian main battle tank",
+      "score": 0.95
+    }
+  ],
+  "total": 42
+}
+```
+
+### GET /entities/{source}/{entity_id}
+
+Get entity details by source and ID.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/entities/{source}/{entity_id}` | Optional | Get entity details |
+
+**Path Parameters**:
+- `source`: `curated` or `opensanctions`
+- `entity_id`: Numeric ID (curated) or Wikidata QID (opensanctions, e.g., "Q3874799")
+
+**Query Parameters**:
+- `include_linked` (boolean, default: true): Include linked content counts
+
+### GET /entities/{source}/{entity_id}/messages
+
+Get messages linked to an entity.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/entities/{source}/{entity_id}/messages` | `limit`, `offset` | Get entity messages |
+
+### GET /entities/{source}/{entity_id}/relationships
+
+Get entity relationship graph data (Wikidata SPARQL + OpenSanctions enrichment).
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/entities/{source}/{entity_id}/relationships` | `refresh` | Get relationships |
+
+**Query Parameters**:
+- `refresh` (boolean, default: false): Force refresh from Wikidata SPARQL
+
+**Response**:
+```json
+{
+  "entity_id": "Q20850503",
+  "entity_name": "Vladimir Putin",
+  "cached": true,
+  "fetched_at": "2024-12-09T10:00:00Z",
+  "expires_at": "2024-12-16T10:00:00Z",
+  "corporate": [
+    {
+      "type": "employer",
+      "entity_id": "Q1065",
+      "name": "Gazprom",
+      "start": "2000",
+      "end": "2008"
+    }
+  ],
+  "political": [],
+  "associates": [],
+  "sources": ["wikidata", "opensanctions"]
+}
+```
+
+---
+
+## Search
+
+### GET /search
+
+Unified search across all platform data sources.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/search` | See below | Unified search |
+
+**Query Parameters**:
+- `q` (string, required): Search query
+- `mode` (string, default: "text"): Search mode (text, semantic)
+- `types` (string, default: "messages,events,rss,entities"): Comma-separated types
+- `limit_per_type` (integer, 1-20, default: 5): Results per type
+- `channel_username` (string, optional): Filter by channel
+- `channel_folder` (string, optional): Filter by folder
+- `days` (integer, optional): Last N days
+- `entity_type` (string, optional): Filter entities by type
+
+**Response**:
+```json
+{
+  "query": "Bakhmut",
+  "mode": "text",
+  "results": {
+    "messages": {
+      "items": [...],
+      "total": 5,
+      "has_more": true
+    },
+    "events": {
+      "items": [...],
+      "total": 2,
+      "has_more": false
+    },
+    "rss": {
+      "items": [...],
+      "total": 3,
+      "has_more": false
+    },
+    "entities": {
+      "items": [...],
+      "total": 1,
+      "has_more": false
+    }
+  },
+  "timing_ms": 125
+}
+```
+
+---
+
+## Events
+
+### GET /events
+
+List events with pagination and filtering.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/events` | See below | List events |
+
+**Query Parameters**:
+- `page` (integer, default: 1): Page number
+- `page_size` (integer, 1-100, default: 20): Items per page
+- `tab` (string, default: "active"): Filter (active, major, archived, all)
+- `event_type` (string, optional): Filter by event type
+- `tier_status` (string, optional): Filter by tier (breaking, developing, confirmed, verified)
+- `search` (string, optional): Text search
+- `search_mode` (string, default: "text"): Search mode (text, semantic)
+- `similarity_threshold` (float, 0.0-1.0, default: 0.5): Min similarity for semantic search
+
+### GET /events/stats
+
+Get event statistics for dashboard.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/events/stats` | Optional | Get event statistics |
+
+**Response**:
+```json
+{
+  "active": 45,
+  "major": 12,
+  "archived": 230,
+  "by_tier": {
+    "breaking": 5,
+    "developing": 18,
+    "confirmed": 22,
+    "verified": 0
+  },
+  "total": 275
+}
+```
+
+### GET /events/message/{message_id}
+
+Get all events that a message is linked to.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/events/message/{message_id}` | Optional | Get events for message |
+
+### GET /events/{event_id}
+
+Get event details with sources and linked messages.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/events/{event_id}` | `include_messages`, `include_sources`, `message_limit` | Get event details |
+
+### PATCH /events/{event_id}/major
+
+Toggle major event status.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| PATCH | `/events/{event_id}/major` | `is_major` | Set major status |
+
+### PATCH /events/{event_id}/archive
+
+Archive or unarchive an event.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| PATCH | `/events/{event_id}/archive` | `archive` | Archive/unarchive event |
+
+### GET /events/{event_id}/timeline
+
+Get chronological timeline of all sources for an event (RSS + Telegram).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/events/{event_id}/timeline` | Optional | Get event timeline |
+
+---
+
+## Comments
+
+### GET /comments/{comment_id}
+
+Get a single comment with its translation status.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/comments/{comment_id}` | Optional | Get comment |
+
+### POST /comments/{comment_id}/translate
+
+Translate a comment on-demand.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/comments/{comment_id}/translate` | Optional | Translate comment |
+
+**Response**:
+```json
+{
+  "comment_id": 12345,
+  "original_content": "Дякую за інформацію",
+  "translated_content": "Thank you for the information",
+  "original_language": "uk",
+  "translation_method": "google_free",
+  "cached": false
+}
+```
+
+---
+
+## Analytics
+
+### GET /analytics/timeline
+
+Get time-series message statistics for visualizations.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/analytics/timeline` | See below | Get timeline stats |
+
+**Query Parameters**:
+- `granularity` (string, default: "day"): Time bucket (hour, day, week, month, year)
+- `channel_id` (integer, optional): Filter by channel
+- `topic` (string, optional): Filter by topic
+- `importance_level` (string, optional): Filter by importance
+- `date_from` (datetime, optional): Start date
+- `date_to` (datetime, optional): End date
+- `days` (integer, optional): Last N days
+
+**Response** (60s cache TTL):
+```json
+{
+  "granularity": "day",
+  "buckets": [
+    {
+      "timestamp": "2024-12-01T00:00:00",
+      "message_count": 1250,
+      "media_count": 340
+    }
+  ],
+  "total_buckets": 30
+}
+```
+
+### GET /analytics/distributions
+
+Get statistical distributions for visualizations.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/analytics/distributions` | `metrics`, filters | Get distributions |
+
+**Query Parameters**:
+- `metrics` (list[string], default: all): Which distributions (importance_level, topics, channels, media_types, languages)
+- Plus filter parameters (channel_id, date_from, date_to, days)
+
+**Response** (5min cache TTL):
+```json
+{
+  "importance_level": {
+    "high": 1200,
+    "medium": 5400,
+    "low": 3400
+  },
+  "topics": {
+    "combat": 4000,
+    "civilian": 2000
+  },
+  "channels": {
+    "123": 1500,
+    "456": 1200
+  }
+}
+```
+
+### GET /analytics/heatmap
+
+Get activity heatmap for calendar visualization (day of week × hour of day).
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/analytics/heatmap` | `channel_id`, `days` | Get activity heatmap |
+
+**Response** (5min cache TTL):
+```json
+{
+  "heatmap": [
+    [45, 23, 12, ...],  // Sunday, 24 hours
+    [67, 34, 18, ...]   // Monday, 24 hours
+  ],
+  "days": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+  "hours": [0, 1, 2, ..., 23],
+  "total_messages": 12450
+}
+```
+
+### GET /analytics/channels
+
+Get channel performance analytics using materialized view.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/analytics/channels` | `channel_id`, `limit`, `order_by`, `days` | Get channel analytics |
+
+**Query Parameters**:
+- `channel_id` (integer, optional): Specific channel
+- `limit` (integer, 1-100, default: 20): Number of channels
+- `order_by` (string, default: "messages"): Sort field (messages, spam_rate, importance)
+- `days` (integer, 1-365, default: 30): Last N days
+
+### GET /analytics/entities
+
+Get entity mention analytics.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/analytics/entities` | `entity_type`, `limit`, `days` | Get entity analytics |
+
+### GET /analytics/media
+
+Get media archival analytics.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------|-------------|
+| GET | `/analytics/media` | `days` | Get media statistics |
+
+**Response**:
+```json
+{
+  "total_files": 45678,
+  "total_size_bytes": 45678901234,
+  "total_size_human": "42.5 GB",
+  "by_type": [
+    {
+      "media_type": "image",
+      "count": 30000,
+      "total_size_bytes": 20000000000,
+      "total_size_human": "18.6 GB",
+      "percentage": 43.8
+    }
+  ],
+  "deduplication_savings_bytes": 5000000000,
+  "deduplication_savings_human": "4.7 GB"
+}
+```
+
+---
+
+## Network & Social Graph
+
+### GET /social-graph/messages/{message_id}
+
+Get social graph for a message (forwards, replies, reactions, author).
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/social-graph/messages/{message_id}` | `include_forwards`, `include_replies`, `max_depth`, `max_comments` | Get message social graph |
+
+**Query Parameters**:
+- `include_forwards` (boolean, default: true): Include forward chain
+- `include_replies` (boolean, default: true): Include reply thread
+- `max_depth` (integer, 1-10, default: 3): Max graph depth
+- `max_comments` (integer, 1-200, default: 50): Max comments to include
+
+**Response includes**:
+- Nodes: message, author, forwards, replies, reactions, comments
+- Edges: relationships (authored, forwarded_to, replied_to, reacted, commented_on)
+- Reactions: emoji sentiment data
+- Metadata: engagement metrics (views, forwards, virality, reach)
+
+### GET /social-graph/channels/{channel_id}/influence
+
+Get channel influence network (who forwards from/to this channel).
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/social-graph/channels/{channel_id}/influence` | `limit`, `min_forward_count` | Get channel influence |
+
+### GET /social-graph/influence-network
+
+Get platform-wide channel influence network.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/social-graph/influence-network` | `min_forward_count`, `limit` | Get influence network |
+
+**Uses** `channel_influence_network` materialized view for performance.
+
+### GET /social-graph/messages/{message_id}/engagement-timeline
+
+Get engagement timeline (views, forwards, reactions over time).
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/social-graph/messages/{message_id}/engagement-timeline` | `granularity`, `time_range_hours` | Get engagement timeline |
+
+### GET /social-graph/messages/{message_id}/comments
+
+Get comment thread for a message.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/social-graph/messages/{message_id}/comments` | `limit`, `offset`, `sort`, `include_replies` | Get comments |
+
+### GET /social-graph/virality/top-forwarded
+
+Get most-forwarded messages (virality leaderboard).
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/social-graph/virality/top-forwarded` | `limit`, `time_range_days` | Get top viral messages |
+
+**Uses** `top_forwarded_messages` materialized view.
+
+---
+
+## Metrics
+
+All metrics endpoints are cached in Redis for 15 seconds.
+
+### GET /metrics/overview
+
+Get high-level platform operational metrics.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/metrics/overview` | Optional | Get platform overview metrics |
+
+**Response**:
+```json
+{
+  "timestamp": "2024-12-09T12:00:00Z",
+  "messages_per_second": 2.5,
+  "messages_archived_per_second": 2.3,
+  "messages_skipped_per_second": 0.2,
+  "queue_depth": 45,
+  "enrichment_queue_depth": 120,
+  "queue_lag_seconds": 5.2,
+  "llm_requests_per_minute": 45.6,
+  "llm_avg_latency_seconds": 1.2,
+  "llm_success_rate_percent": 99.8,
+  "database_connections": 25,
+  "redis_memory_mb": 128.5,
+  "enrichment_error_rate": 0.002,
+  "spam_rate_percent": 2.8,
+  "services_healthy": 4,
+  "services_total": 4,
+  "prometheus_available": true,
+  "cached": false,
+  "cache_ttl_seconds": 15
+}
+```
+
+### GET /metrics/llm
+
+Get LLM (Ollama) performance metrics.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/metrics/llm` | Optional | Get LLM metrics |
+
+**Response**:
+```json
+{
+  "timestamp": "2024-12-09T12:00:00Z",
+  "requests_per_minute": 45.6,
+  "requests_total": 125430,
+  "avg_latency_seconds": 1.2,
+  "p50_latency_seconds": 1.1,
+  "p95_latency_seconds": 2.3,
+  "p99_latency_seconds": 3.5,
+  "success_rate_percent": 99.8,
+  "error_count": 25,
+  "avg_batch_size": 10.5,
+  "total_batches": 11945,
+  "active_model": "qwen2.5:3b",
+  "model_loaded": true,
+  "prometheus_available": true
+}
+```
+
+### GET /metrics/pipeline
+
+Get real-time pipeline metrics for architecture visualization.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/metrics/pipeline` | Optional | Get pipeline metrics |
+
+**Response includes**:
+- Overall status (healthy, degraded, down)
+- Stages: listener, redis-queue, processor, postgres, enrichment, api
+- Enrichment workers detail (per task)
+- KPIs: messages/sec, archive rate, queue depth, LLM performance
+
+### GET /metrics/services
+
+Get per-service health and performance metrics.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/metrics/services` | Optional | Get service metrics |
+
+**Response**:
+```json
+{
+  "timestamp": "2024-12-09T12:00:00Z",
+  "total_services": 11,
+  "healthy_count": 10,
+  "degraded_count": 1,
+  "down_count": 0,
+  "services": [
+    {
+      "name": "listener",
+      "display_name": "Telegram Listener",
+      "status": "healthy",
+      "category": "core",
+      "requests_per_second": 2.5,
+      "up": true
+    }
+  ]
+}
+```
+
+---
+
+## About
+
+### GET /about/stats
+
+Get platform statistics for the About page.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/about/stats` | None | Get public platform stats |
+
+**Response**:
+```json
+{
+  "channels": 254,
+  "messages": 1254000,
+  "messages_formatted": "1.3M",
+  "media_size_bytes": 45678901234,
+  "media_size_formatted": "42.5 GB",
+  "entities": 1425,
+  "spam_blocked": 34520,
+  "spam_blocked_formatted": "34.5K",
+  "sanctions_matches": 1234,
+  "timestamp": "2024-12-09T12:00:00Z"
+}
+```
+
+---
+
+## Admin Endpoints
+
+All admin endpoints require authentication.
+
+### LLM Prompts
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/admin/prompts` | `page`, `page_size`, `task`, `is_active`, `prompt_type`, `search` | List prompts |
+| GET | `/admin/prompts/stats` | None | Get prompt statistics |
+| GET | `/admin/prompts/tasks` | None | Get distinct task names |
+| GET | `/admin/prompts/{prompt_id}` | None | Get prompt details |
+| GET | `/admin/prompts/task/{task}/history` | None | Get version history |
+| POST | `/admin/prompts` | None | Create new prompt version |
+| PUT | `/admin/prompts/{prompt_id}` | None | Update prompt metadata |
+
+### Comments (Admin)
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| POST | `/admin/comments/fetch` | None | Fetch comments on-demand |
+| GET | `/admin/comments/stats` | None | Get comment statistics |
+| GET | `/admin/comments/viral` | `active_only`, `limit` | Get viral posts |
+
+### Export
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/admin/export/profiles` | None | Get export profiles |
+| POST | `/admin/export/estimate` | None | Estimate export size |
+| POST | `/admin/export/start` | None | Start export job |
+| GET | `/admin/export/jobs` | `page`, `page_size`, `status` | List export jobs |
+| GET | `/admin/export/{job_id}` | None | Get export job status |
+| GET | `/admin/export/{job_id}/download` | `token` | Download export file |
+| DELETE | `/admin/export/{job_id}` | None | Cancel/delete export job |
+| GET | `/admin/export/stats/summary` | None | Get export statistics |
+
+### Statistics
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/admin/stats/overview` | None | Platform overview (30s cache) |
+| GET | `/admin/stats/quality` | None | Data quality metrics (60s cache) |
+| GET | `/admin/stats/processing` | `hours` | Processing metrics |
+| GET | `/admin/stats/storage` | None | Storage usage metrics |
+
+### Spam Management
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/admin/spam` | `page`, `page_size`, `status`, `spam_type`, `channel` | Get spam queue |
+| GET | `/admin/spam/stats` | None | Get spam statistics |
+| PUT | `/admin/spam/{message_id}/review` | `status` | Review spam message |
+| POST | `/admin/spam/bulk-review` | None | Bulk review spam |
+| POST | `/admin/spam/{message_id}/reprocess` | None | Reprocess message |
+| DELETE | `/admin/spam/{message_id}` | None | Delete spam message |
+| POST | `/admin/spam/bulk-delete` | None | Bulk delete spam |
+| DELETE | `/admin/spam/purge/confirmed` | None | Purge confirmed spam |
+
+### System Management
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/admin/system/workers` | None | Get worker status |
+| GET | `/admin/system/workers/stats` | None | Get worker statistics |
+| GET | `/admin/system/audit` | `page`, `page_size`, `decision_type`, `verification_status`, `channel_id` | Get audit log |
+| GET | `/admin/system/audit/stats` | None | Get audit statistics |
+| POST | `/admin/system/audit/{decision_id}/verify` | `status`, `notes` | Verify audit decision |
+| GET | `/admin/system/cache/stats` | None | Get Redis cache stats |
+| POST | `/admin/system/cache/clear` | `pattern` | Clear cache keys |
+| GET | `/admin/system/enrichment/tasks` | None | Get enrichment task status |
+
+### RSS Feeds Management
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/admin/feeds/rss` | `page`, `page_size`, `search`, `category`, `trust_level`, `active`, `sort_by`, `sort_order` | List RSS feeds |
+| GET | `/admin/feeds/rss/stats` | None | Get feed statistics |
+| GET | `/admin/feeds/rss/categories` | None | Get feed categories |
+| GET | `/admin/feeds/rss/{feed_id}` | None | Get feed details |
+| POST | `/admin/feeds/rss` | None | Create feed |
+| PUT | `/admin/feeds/rss/{feed_id}` | None | Update feed |
+| DELETE | `/admin/feeds/rss/{feed_id}` | None | Delete feed |
+| POST | `/admin/feeds/rss/test` | `url` | Test feed URL |
+| POST | `/admin/feeds/rss/{feed_id}/poll` | None | Trigger feed poll |
+| POST | `/admin/feeds/rss/batch/activate` | None | Batch activate/deactivate |
+
+---
+
+## Common Response Patterns
+
+### Pagination
+
+```json
+{
+  "items": [...],
+  "total": 1250,
+  "page": 2,
+  "page_size": 50,
+  "total_pages": 25,
+  "has_next": true,
+  "has_prev": true
+}
+```
+
+### Error Response
+
+```json
+{
+  "detail": "Message not found",
+  "status_code": 404
+}
+```
+
+### Cache Headers
+
+```http
+Cache-Control: public, max-age=15
+X-Cached: true
+X-Cache-TTL: 15
+X-Prometheus-Available: true
+```
+
+---
+
+## Rate Limiting
+
+Currently no rate limiting is enforced. Future implementations may add:
+- 100 requests/minute for authenticated users
+- 20 requests/minute for unauthenticated users
+- Higher limits for admin endpoints
+
+---
+
+## CORS
+
+CORS is enabled for `http://localhost:3000` (frontend) in development.
+
+Production requires explicit CORS configuration via environment variables.
+
+---
+
+## Changelog
+
+### 2024-12-09
+- Added Wikidata relationship enrichment endpoint
+- Added on-demand comment translation
+- Added export job management endpoints
+- Enhanced metrics endpoints with 15s caching
+- Added social graph and engagement timeline endpoints
+
+---
+
+**Generated**: 2024-12-09 | **API Version**: 1.0 | **Platform**: OSINT Intelligence Platform
