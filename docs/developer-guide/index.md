@@ -8,42 +8,33 @@ This guide covers the platform's architecture, development patterns, and contrib
 
 ## What You'll Learn
 
-### Core Documentation
-- [Architecture Overview](architecture.md) - System design, data flow, key decisions
+- [Architecture Overview](architecture.md) - System design and component interactions
 - [Services Deep Dive](services/index.md) - Detailed documentation of each service
 - [Shared Libraries](shared-libraries.md) - Common code and utilities
 - [Database Schema](database-schema.md) - Complete schema reference
-
-### Development Patterns
 - [Adding Features](adding-features.md) - How to extend the platform
-- [Frontend API Patterns](frontend-api-patterns.md) - Client-side API integration
-- [LLM Integration](llm-integration.md) - Working with Ollama and prompts
-- [Testing Guide](testing-guide.md) - Writing and running tests
-- [Database Migrations](database-migrations.md) - Schema change workflow
-
-### Process
 - [Contributing](contributing.md) - Contribution guidelines and workflow
 
 ## Who This Is For
 
-- **Backend developers** - Python services, API design
-- **Frontend developers** - React/Next.js components
-- **DevOps engineers** - Docker, deployment, monitoring
-- **Open source contributors** - First-time contributors
-- **Integration partners** - API consumers, webhooks
+- Backend developers
+- Frontend developers
+- DevOps engineers
+- Open source contributors
+- Integration partners
 
 ## Technology Stack
 
-| Category | Technology | Purpose |
-|----------|-----------|---------|
-| **Backend** | Python 3.11+ | Service runtime |
-| **API** | FastAPI | REST endpoints, OpenAPI docs |
-| **Database** | PostgreSQL 16 + pgvector | Data + semantic search |
-| **Queue** | Redis Streams | Message queue, task distribution |
-| **Frontend** | Next.js 14 | Server-side rendering |
-| **LLM** | Ollama | Self-hosted inference |
-| **Storage** | MinIO | S3-compatible media storage |
-| **Deploy** | Docker Compose | Container orchestration |
+**TODO: Document complete technology stack:**
+
+- Python 3.11+ (backend)
+- FastAPI (API framework)
+- PostgreSQL 16 + pgvector (database)
+- Redis Streams (message queue)
+- Next.js 14 (frontend)
+- Ollama (LLM inference)
+- MinIO (object storage)
+- Docker & Docker Compose (deployment)
 
 ## Quick Navigation
 
@@ -53,7 +44,7 @@ This guide covers the platform's architecture, development patterns, and contrib
 
     ---
 
-    System design and component interactions
+    Understand system design and component interactions
 
     [:octicons-arrow-right-24: Architecture Guide](architecture.md)
 
@@ -65,51 +56,35 @@ This guide covers the platform's architecture, development patterns, and contrib
 
     [:octicons-arrow-right-24: Services Guide](services/index.md)
 
+-   :material-library:{ .lg .middle } __Shared Libraries__
+
+    ---
+
+    Common code and utilities documentation
+
+    [:octicons-arrow-right-24: Libraries Guide](shared-libraries.md)
+
+-   :material-database:{ .lg .middle } __Database Schema__
+
+    ---
+
+    Complete database schema reference
+
+    [:octicons-arrow-right-24: Schema Guide](database-schema.md)
+
 -   :material-plus-circle:{ .lg .middle } __Adding Features__
 
     ---
 
-    Enrichment tasks, API endpoints, frontend
+    How to extend the platform
 
     [:octicons-arrow-right-24: Feature Guide](adding-features.md)
-
--   :material-api:{ .lg .middle } __Frontend API Patterns__
-
-    ---
-
-    Client-side API integration patterns
-
-    [:octicons-arrow-right-24: API Patterns](frontend-api-patterns.md)
-
--   :material-brain:{ .lg .middle } __LLM Integration__
-
-    ---
-
-    Working with Ollama and prompts
-
-    [:octicons-arrow-right-24: LLM Guide](llm-integration.md)
-
--   :material-test-tube:{ .lg .middle } __Testing__
-
-    ---
-
-    Writing and running tests
-
-    [:octicons-arrow-right-24: Testing Guide](testing-guide.md)
-
--   :material-database-edit:{ .lg .middle } __Database Migrations__
-
-    ---
-
-    Schema changes without Alembic
-
-    [:octicons-arrow-right-24: Migrations Guide](database-migrations.md)
 
 -   :material-source-pull:{ .lg .middle } __Contributing__
 
     ---
 
-    Contribution guidelines and PR workflow
+    Contribution guidelines and workflow
 
     [:octicons-arrow-right-24: Contributing Guide](contributing.md)
 
@@ -117,87 +92,35 @@ This guide covers the platform's architecture, development patterns, and contrib
 
 ## Development Workflow
 
-1. **Fork and clone** repository
-2. **Create feature branch** from `develop`
-   ```bash
-   git checkout develop
-   git checkout -b feature/my-feature
-   ```
-3. **Implement feature** following patterns in this guide
-4. **Run tests** locally
-   ```bash
-   docker-compose exec api pytest
-   ```
-5. **Update documentation** (required for all changes)
-6. **Submit PR** to `develop`
-7. **Code review** and iterate
-8. **Merge to master** for production release
+**TODO: Document development workflow:**
+
+1. Fork and clone repository
+2. Create feature branch on `develop`
+3. Implement feature with tests
+4. Run test suite
+5. Submit pull request
+6. Code review
+7. Merge to `develop`
+8. Deploy to `master` for production
 
 ## Code Standards
 
-| Language | Style Guide | Tooling |
-|----------|-------------|---------|
-| Python | PEP 8 | ruff, mypy |
-| TypeScript | ESLint | eslint, prettier |
-| SQL | Lowercase keywords | pgformatter |
-| Git | [Conventional Commits](https://www.conventionalcommits.org/) | - |
+**TODO: Document coding standards:**
 
-### Python Requirements
-- Type hints for all function signatures
-- Docstrings for public functions/classes
-- `async def` for I/O-bound operations
-- `pytest` for tests (80% coverage target)
+- Python: PEP 8, type hints, docstrings
+- TypeScript: ESLint, Prettier
+- Git: Conventional commits
+- Testing: pytest, minimum coverage requirements
 
-### TypeScript Requirements
-- Strict mode enabled
-- Type imports from `@/lib/types`
-- `NEXT_PUBLIC_API_URL` for all API calls
+## Development Environment
 
-## Local Development
+**TODO: Document local development setup:**
 
-### Quick Start
-
-```bash
-# Clone and setup
-git clone https://github.com/osintukraine/osint-intelligence-platform.git
-cd osint-intelligence-platform
-cp .env.example .env
-
-# Start services
-docker-compose up -d
-
-# Verify health
-docker-compose ps
-curl http://localhost:8000/health
-```
-
-### IDE Setup (VS Code)
-
-Recommended extensions:
-- Python (Microsoft)
-- Pylance
-- Docker
-- ESLint
-- Prettier
-- GitLens
-
-### Hot Reload
-
-```bash
-# Backend (API service)
-docker-compose up -d --build api
-# Changes to src/ auto-reload
-
-# Frontend
-cd services/frontend-nextjs
-npm run dev
-# Changes auto-reload at http://localhost:3000
-```
+- IDE recommendations (VS Code, PyCharm)
+- Required extensions
+- Debug configurations
+- Hot reload setup
 
 ---
 
-## Related Documentation
-
-- [Operator Guide](../operator-guide/index.md) - Deployment and operations
-- [API Reference](../reference/api-endpoints.md) - All endpoints
-- [Environment Variables](../reference/environment-vars.md) - Configuration
+**TODO: Content to be generated from codebase analysis and ARCHITECTURE.md**

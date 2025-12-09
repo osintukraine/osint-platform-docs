@@ -2,428 +2,188 @@
 
 Guide for extending the OSINT Intelligence Platform with new features.
 
----
+## Overview
 
-## Adding an Enrichment Task
+**TODO: Content to be generated from codebase analysis**
 
-Enrichment tasks process messages in the background. The platform has 20+ tasks (embedding, translation, AI tagging, etc.).
+This guide covers common feature addition patterns and best practices.
 
-### Step 1: Create Task Class
+## Feature Types
 
-Inherit from `BaseEnrichmentTask` and implement required methods:
+### Adding a New Enrichment Task
+
+**TODO: Document how to create new enrichment tasks:**
+
+1. Create task class inheriting from `BaseEnrichmentTask`
+2. Implement `process()` method
+3. Register task in enrichment coordinator
+4. Add configuration
+5. Test task execution
+
+#### Example Task Structure
 
 ```python
-# services/enrichment/src/tasks/my_task.py
-from typing import Any, List
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from tasks.base import BaseEnrichmentTask
-
+# TODO: Add example enrichment task code
+from shared.enrichment import BaseEnrichmentTask
 
 class MyEnrichmentTask(BaseEnrichmentTask):
-    """Example enrichment task."""
-
-    def get_task_name(self) -> str:
-        """Unique task identifier (used in metrics, logs, progress tracking)."""
-        return "my_task"
-
-    def requires_llm(self) -> bool:
-        """Return True if task uses Ollama (serializes LLM calls)."""
-        return False  # Set True for LLM tasks
-
-    def get_priority(self) -> int:
-        """Higher = more urgent. 100=critical, 50=normal, 25=low."""
-        return 50
-
-    async def get_work_query(self, batch_size: int, last_processed_id: int = 0) -> text:
-        """SQL query to fetch messages needing enrichment."""
-        return text("""
-            SELECT id, content, channel_id
-            FROM messages
-            WHERE id > :last_id
-              AND my_field IS NULL  -- Not yet processed
-            ORDER BY id ASC
-            LIMIT :batch_size
-        """)
-
-    async def process_batch(self, messages: List[Any], session: AsyncSession) -> int:
-        """Process messages. Return count of successfully processed."""
-        processed = 0
-        for msg in messages:
-            try:
-                # Your enrichment logic here
-                result = self.do_enrichment(msg.content)
-
-                # Update database
-                await session.execute(
-                    text("UPDATE messages SET my_field = :result WHERE id = :id"),
-                    {"result": result, "id": msg.id}
-                )
-                processed += 1
-            except Exception as e:
-                logger.warning(f"Failed to process message {msg.id}: {e}")
-
-        return processed
-
-    def do_enrichment(self, content: str) -> str:
-        """Your custom enrichment logic."""
-        return f"enriched: {content[:50]}"
+    def process(self, message):
+        # Task logic here
+        pass
 ```
 
-### Step 2: Register Task in Coordinator
+### Adding a New Intelligence Rule
 
-Edit `services/enrichment/src/coordinator.py`:
+**TODO: Document how to create custom intelligence rules:**
+
+1. Define rule in configuration
+2. Implement rule evaluation logic
+3. Test rule matching
+4. Deploy configuration
+
+### Adding a New API Endpoint
+
+**TODO: Document how to add API endpoints:**
+
+1. Define route in FastAPI
+2. Implement handler
+3. Add authentication/authorization
+4. Document endpoint
+5. Add tests
+
+#### Example Endpoint
 
 ```python
-from tasks.my_task import MyEnrichmentTask
+# TODO: Add example API endpoint code
+from fastapi import APIRouter
 
-# In the coordinator's task registration
-TASKS = {
-    # ... existing tasks ...
-    "my_task": MyEnrichmentTask(),
-}
+router = APIRouter()
+
+@router.get("/my-endpoint")
+async def my_endpoint():
+    return {"status": "ok"}
 ```
 
-### Step 3: Add to Worker Pool
-
-Edit `docker-compose.yml` to assign task to a worker:
-
-```yaml
-enrichment-fast-pool:
-  environment:
-    TASKS: "embedding,translation,entity_matching,my_task"  # Add here
-```
-
-Or create a dedicated worker:
-
-```yaml
-enrichment-my-task:
-  <<: *enrichment-base
-  environment:
-    TASKS: "my_task"
-    REDIS_QUEUE: "enrich:my_task"
-  profiles:
-    - enrichment
-```
-
-### Step 4: Add Configuration (Optional)
-
-Add environment variables in `.env.example`:
-
-```bash
-# My Task Configuration
-MY_TASK_BATCH_SIZE=100
-MY_TASK_ENABLED=true
-```
-
-### Task Types by Worker
-
-| Worker | Tasks | Characteristics |
-|--------|-------|-----------------|
-| `enrichment-fast-pool` | embedding, translation, entity_matching | CPU-bound, no LLM |
-| `enrichment-ai-tagging` | ai_tagging | LLM-intensive |
-| `enrichment-telegram` | comment_*, engagement_polling | Telegram API calls |
-| `enrichment-rss-validation` | rss_validation, rss_correlation | RSS processing |
-| `enrichment-maintenance` | cleanup, discovery_evaluator, wikidata | Periodic tasks |
-
----
-
-## Adding an API Endpoint
-
-### Step 1: Create Router
-
-```python
-# services/api/src/routers/my_feature.py
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
-
-from database import get_db
-from schemas import MessageResponse
-
-router = APIRouter(prefix="/my-feature", tags=["My Feature"])
-
-
-class MyRequest(BaseModel):
-    """Request schema."""
-    query: str
-    limit: int = 10
-
-
-class MyResponse(BaseModel):
-    """Response schema."""
-    results: list
-    total: int
-
-
-@router.get("/", response_model=MyResponse)
-async def get_my_feature(
-    query: str,
-    limit: int = 10,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get my feature data.
-
-    - **query**: Search query
-    - **limit**: Maximum results (1-100)
-    """
-    if limit > 100:
-        raise HTTPException(status_code=400, detail="Limit must be ≤100")
-
-    # Your logic here
-    results = await fetch_results(db, query, limit)
-
-    return MyResponse(results=results, total=len(results))
-
-
-@router.post("/process")
-async def process_something(
-    request: MyRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    """Process something."""
-    # Your logic here
-    return {"status": "processed", "query": request.query}
-```
-
-### Step 2: Register Router
-
-Edit `services/api/src/main.py`:
-
-```python
-from routers.my_feature import router as my_feature_router
-
-# In app setup
-app.include_router(my_feature_router)
-```
-
-### Step 3: Add Schemas (If Complex)
-
-Edit `services/api/src/schemas.py`:
-
-```python
-class MyFeatureSchema(BaseModel):
-    id: int
-    name: str
-    created_at: datetime
-
-    class Config:
-        from_attributes = True  # For ORM compatibility
-```
-
-### Step 4: Add Tests
-
-```python
-# services/api/tests/test_my_feature.py
-import pytest
-from httpx import AsyncClient
-
-
-@pytest.mark.asyncio
-async def test_get_my_feature(client: AsyncClient):
-    response = await client.get("/my-feature/?query=test")
-    assert response.status_code == 200
-    assert "results" in response.json()
-
-
-@pytest.mark.asyncio
-async def test_limit_validation(client: AsyncClient):
-    response = await client.get("/my-feature/?query=test&limit=999")
-    assert response.status_code == 400
-```
-
-### Step 5: Document Endpoint
-
-Update `docs/reference/api-endpoints.md` with the new endpoint.
-
----
-
-## Adding a Frontend Feature
-
-### Step 1: Create Component
-
-```tsx
-// services/frontend-nextjs/components/MyFeature.tsx
-'use client';
-
-import { useState, useEffect } from 'react';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-
-interface MyData {
-  id: number;
-  name: string;
-}
-
-export function MyFeature() {
-  const [data, setData] = useState<MyData[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        const res = await fetch(`${API_URL}/api/my-feature?limit=10`);
-        if (!res.ok) throw new Error('Failed to fetch');
-        const json = await res.json();
-        setData(json.results);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unknown error');
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchData();
-  }, []);
-
-  if (loading) return <div>Loading...</div>;
-  if (error) return <div>Error: {error}</div>;
-
-  return (
-    <div>
-      {data.map(item => (
-        <div key={item.id}>{item.name}</div>
-      ))}
-    </div>
-  );
-}
-```
-
-### Step 2: Add Page (If Needed)
-
-```tsx
-// services/frontend-nextjs/app/my-feature/page.tsx
-import { MyFeature } from '@/components/MyFeature';
-
-export default function MyFeaturePage() {
-  return (
-    <main className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">My Feature</h1>
-      <MyFeature />
-    </main>
-  );
-}
-```
-
-### Step 3: Add Types
-
-```typescript
-// services/frontend-nextjs/lib/types.ts
-export interface MyFeatureData {
-  id: number;
-  name: string;
-  created_at: string;
-}
-```
-
-### Frontend API Pattern
-
-**Always use `NEXT_PUBLIC_API_URL`** - never relative paths:
-
-```typescript
-// ✅ CORRECT
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const res = await fetch(`${API_URL}/api/messages`);
-
-// ❌ WRONG - Won't work in Docker
-const res = await fetch('/api/messages');
-```
-
-See [Frontend API Patterns](frontend-api-patterns.md) for details.
-
----
-
-## Documentation Requirements
-
-All features must include documentation updates:
-
-| Change Type | Update Required |
-|-------------|-----------------|
-| New API endpoint | `docs/reference/api-endpoints.md` |
-| New env variable | `docs/reference/environment-vars.md` |
-| New service | `docs/reference/docker-services.md` |
-| Schema change | `docs/reference/database-tables.md` |
-| User workflow | `docs/user-guide/` or `docs/tutorials/` |
-| Developer pattern | `docs/developer-guide/` |
-
----
+### Adding a New Frontend Feature
+
+**TODO: Document how to add frontend features:**
+
+1. Create new components
+2. Add API integration
+3. Update navigation
+4. Add tests
+5. Update documentation
+
+### Adding a New Entity Source
+
+**TODO: Document how to integrate new entity sources:**
+
+1. Create entity parser
+2. Implement enrichment task
+3. Map to standard entity schema
+4. Test entity extraction
+5. Deploy
+
+## Development Workflow
+
+**TODO: Document step-by-step development workflow:**
+
+1. **Branching Strategy**
+   - Always work on `develop` branch
+   - Create feature branch from `develop`
+   - Merge to `master` only for production
+
+2. **Local Development**
+   - Use Docker Compose for local testing
+   - Hot reload configuration
+   - Test with real services
+
+3. **Testing**
+   - Write unit tests
+   - Write integration tests
+   - Test in Docker environment
+   - Verify no regressions
+
+4. **Code Review**
+   - Submit PR to `develop`
+   - Address review comments
+   - Ensure tests pass
+
+5. **Deployment**
+   - Merge to `develop`
+   - Test in staging
+   - Merge to `master` for production
 
 ## Critical Rules
 
-### 1. Telegram Session Management
+### Telegram Session Management
 
-**NEVER create standalone Telegram clients.** Pass client from main.py:
+**TODO: Emphasize critical rules from CLAUDE.md:**
 
 ```python
-# ✅ CORRECT
+# ✅ CORRECT - Pass client from main.py
 class MyTask:
     def __init__(self, telegram_client: Optional[TelegramClient]):
         self.client = telegram_client
 
-# ❌ WRONG - Never do this
-client = TelegramClient(...)  # Creates conflicting session
+# ❌ WRONG - Never create standalone client
+client = TelegramClient(...)  # DON'T DO THIS
 ```
 
-### 2. Database Changes
+### Database Schema Changes
 
-Use `init.sql` as source of truth. No Alembic migrations:
+**TODO: Explain schema change workflow:**
 
-```bash
-# To test schema changes:
-docker-compose down
-docker volume rm osint-intelligence-platform_postgres_data
-docker-compose up -d
-```
+1. Modify `init.sql`
+2. Test with clean rebuild
+3. Document changes
+4. Update models
 
-See [Database Migrations](database-migrations.md) for details.
+### LLM Prompt Changes
 
-### 3. LLM Prompt Changes
+**TODO: Explain LLM prompt modification workflow:**
 
-Before modifying LLM prompts:
+1. Read `docs/architecture/LLM_PROMPTS.md`
+2. Understand prompt evolution
+3. Create new version
+4. Deactivate old version
+5. Test with actual model
+6. Update documentation
 
-1. Read `docs/architecture/LLM_PROMPTS.md` in the platform repo
-2. Create new version (don't edit active version)
-3. Test with actual qwen2.5:3b model
-4. Update documentation
+## Testing New Features
 
-See [LLM Integration](llm-integration.md) for details.
+**TODO: Document testing requirements:**
+
+- Unit test coverage
+- Integration tests
+- End-to-end tests
+- Performance tests
+- Security tests
+
+## Documentation Requirements
+
+**TODO: Document what documentation to update:**
+
+- Code comments and docstrings
+- README updates
+- API documentation
+- User guide updates
+- Changelog entries
+
+## Common Pitfalls
+
+**TODO: Document common mistakes from PITFALLS_FROM_PRODUCTION.md:**
+
+- Session management errors
+- Transaction handling issues
+- Rate limiting violations
+- Memory leaks
+- Inefficient queries
 
 ---
 
-## Development Workflow
+!!! tip "Before You Start"
+    Review the relevant service documentation and existing code patterns before implementing new features.
 
-1. **Create feature branch** from `develop`
-   ```bash
-   git checkout develop
-   git checkout -b feature/my-feature
-   ```
-
-2. **Implement feature** following patterns above
-
-3. **Test locally**
-   ```bash
-   docker-compose up -d --build
-   pytest services/api/tests/
-   ```
-
-4. **Update documentation** (this is required, not optional)
-
-5. **Create PR** to `develop`
-   ```bash
-   git push -u origin feature/my-feature
-   gh pr create --base develop
-   ```
-
-6. **Merge to master** for production (after review)
-
----
-
-## Related Documentation
-
-- [Frontend API Patterns](frontend-api-patterns.md) - Client-side API integration
-- [LLM Integration](llm-integration.md) - Working with Ollama
-- [Testing Guide](testing-guide.md) - Writing tests
-- [Database Migrations](database-migrations.md) - Schema changes
-- [Contributing](contributing.md) - Code style and PR guidelines
+!!! note "Documentation Status"
+    This page is a placeholder. Content will be generated from development patterns and CLAUDE.md guidelines.
