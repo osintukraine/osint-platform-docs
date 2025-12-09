@@ -398,6 +398,152 @@ graph LR
 - Status updates run after all new data linked
 - Dedicated LLM time budget (doesn't compete with AI tagging)
 
+### Wikidata Enrichment
+
+The Wikidata Enrichment task enriches curated and OpenSanctions entities with data from Wikidata, providing:
+
+- **Profile data**: Images, descriptions, birth/founding dates, country, website
+- **Social media**: Twitter, Telegram handles
+- **Relationships**: Corporate, political, and associate connections via SPARQL queries
+- **Cross-references**: Links relationships to local OpenSanctions database
+
+**File**: `/services/enrichment/src/tasks/wikidata_enrichment.py`
+**Worker**: Maintenance Worker (`enrich:maintenance` queue)
+
+#### How It Works
+
+```mermaid
+graph LR
+    A[Curated Entity] --> B[SPARQL Batch Query]
+    B --> C{Name Match?}
+    C -->|≥90% confidence| D[Store Wikidata Data]
+    C -->|<90%| E[Mark No Match]
+    D --> F[SPARQL Relationships]
+    F --> G[Cross-ref OpenSanctions]
+    G --> H[Store Relationships]
+
+    style B fill:#e1f5ff
+    style F fill:#e1f5ff
+    style G fill:#ffe1e1
+```
+
+1. **Entity Selection**: Fetches entities without `metadata.wikidata.enriched_at`
+2. **Batch SPARQL Query**: Queries Wikidata for names (50 entities per batch)
+3. **Name Matching**: Uses `SequenceMatcher` with 90% minimum confidence
+4. **Disambiguation**: Prefers entities with descriptions, images, recent birth dates
+5. **Property Extraction**: Extracts P18 (image), P569 (birth), P856 (website), etc.
+6. **Relationship Fetching**: Queries SPARQL for corporate/political/associate relationships
+7. **OpenSanctions Cross-Reference**: Enriches relationships with local sanctions data
+8. **Storage**: Updates entity metadata JSONB with Wikidata and relationships
+
+#### Configuration
+
+```bash
+# Maintenance Worker settings
+WIKIDATA_BATCH_SIZE=50        # Entities per SPARQL query
+WIKIDATA_MIN_CONFIDENCE=0.90  # Name match threshold (0.0-1.0)
+```
+
+#### Wikidata Properties Used
+
+| Property | ID | Purpose |
+|----------|-----|---------|
+| Image | P18 | Profile picture |
+| Birth Date | P569 | Person's birth date |
+| Founding Date | P571 | Organization founding |
+| Country | P17 | Country of citizenship/origin |
+| Website | P856 | Official website |
+| Twitter | P2002 | Twitter handle |
+| Telegram | P3789 | Telegram handle |
+| Employer | P108 | Corporate relationship |
+| Owner Of | P1830 | Ownership relationship |
+| Owned By | P127 | Ownership relationship |
+| Position Held | P39 | Political position |
+| Political Party | P102 | Party membership |
+| Member Of | P463 | Organization membership |
+| Partner | P451 | Personal associate |
+| Business Partner | P1327 | Business associate |
+
+#### Relationship Categories
+
+Relationships are categorized into three groups:
+
+| Category | Properties | Example |
+|----------|------------|---------|
+| **Corporate** | P108, P1830, P127 | "employer", "owns", "owned_by" |
+| **Political** | P39, P102, P463 | "position", "party", "member_of" |
+| **Associates** | P451, P1327 | "partner", "associate" |
+
+#### Data Storage
+
+**Entity Metadata** (stored in `curated_entities.metadata` or `opensanctions_entities.properties`):
+
+```json
+{
+  "wikidata": {
+    "qid": "Q7747",
+    "match_confidence": 0.95,
+    "label": "Vladimir Putin",
+    "description": "President of Russia",
+    "image_url": "https://commons.wikimedia.org/...",
+    "birth_date": "1952-10-07",
+    "country": "Russia",
+    "website": null,
+    "social_media": {
+      "twitter": null,
+      "telegram": null
+    },
+    "enriched_at": "2025-12-09T10:30:00Z",
+    "wikidata_url": "https://www.wikidata.org/wiki/Q7747"
+  },
+  "relationships": {
+    "fetched_at": "2025-12-09T10:30:05Z",
+    "expires_at": "2025-12-16T10:30:05Z",
+    "corporate": [],
+    "political": [
+      {
+        "type": "position",
+        "entity_id": "Q4964182",
+        "name": "President of Russia",
+        "start": "2012",
+        "opensanctions_id": null,
+        "is_sanctioned": false
+      }
+    ],
+    "associates": [],
+    "sources": ["wikidata", "opensanctions"]
+  }
+}
+```
+
+#### Relationship Caching
+
+- **Cache Duration**: 7 days (configurable via `RELATIONSHIP_CACHE_DAYS`)
+- **Refresh**: Triggered when `relationships.expires_at` is past
+- **Force Refresh**: API supports `?refresh=true` parameter on entity endpoints
+
+#### Rate Limiting
+
+- **Request Delay**: 1 second between SPARQL requests (respects Wikidata guidelines)
+- **Batch Size**: 50 entities per query (balances efficiency vs. timeout risk)
+- **User-Agent**: Identifies as "OSINT-Intelligence-Platform/1.0"
+
+#### Triggering Enrichment
+
+Wikidata enrichment runs automatically via the Maintenance Worker, but can also be triggered:
+
+1. **Automatic**: Router queues entities without Wikidata data
+2. **Manual**: Add entity IDs to `enrich:maintenance` Redis queue
+3. **API Refresh**: Call entity API with `?refresh=true`
+
+#### Related Tables
+
+- [`curated_entities`](../../reference/database-tables.md#curated_entities) - Stores Wikidata data in `metadata` JSONB
+- [`opensanctions_entities`](../../reference/database-tables.md#opensanctions_entities) - Stores Wikidata data in `properties` JSONB
+- [`entity_relationships`](../../reference/database-tables.md#entity_relationships) - Dedicated relationship storage (alternative to JSONB)
+
+---
+
 ### 8. Coordinator (Legacy)
 
 **Purpose**: Original batch processor (being phased out)

@@ -924,6 +924,68 @@ Cross-channel forwarding patterns (influence mapping).
 
 ---
 
+### `message_replies`
+
+Reply relationship tracking for conversation threading.
+
+**Purpose**: Tracks which messages are replies to other messages, enabling conversation threading and discussion analysis.
+
+**Key Columns**:
+- `id` (BIGSERIAL PRIMARY KEY)
+- `parent_message_id` (INTEGER FK → messages): The message being replied to
+- `reply_message_id` (INTEGER FK → messages UNIQUE): The reply message itself
+- `reply_to_msg_id` (INTEGER): Telegram API's reply_to_msg_id field
+- `discussion_group_id` (BIGINT): Telegram discussion group ID for channel comments
+- `author_user_id` (BIGINT): Who wrote the reply
+- `created_at` (TIMESTAMPTZ)
+
+**Important Indexes**:
+- `idx_message_replies_parent` - Find all replies to a message
+- `idx_message_replies_reply` - Lookup by reply message
+- `idx_message_replies_discussion_group` - Filter by discussion group
+
+**Foreign Keys**:
+- `parent_message_id` → `messages(id)` ON DELETE CASCADE
+- `reply_message_id` → `messages(id)` ON DELETE CASCADE
+
+**Related Tables**: `messages`, `message_comments`
+
+---
+
+### `message_forwards`
+
+Forward chain tracking for propagation analysis.
+
+**Purpose**: Tracks message forwarding relationships for virality analysis, information propagation studies, and coordination detection.
+
+**Key Columns**:
+- `id` (BIGSERIAL PRIMARY KEY)
+- `original_message_id` (INTEGER FK → messages): The original message
+- `forwarded_message_id` (INTEGER FK → messages): The forward
+- `forward_date` (TIMESTAMPTZ): When forwarded
+- `forward_from_id` (BIGINT): Original Telegram channel/user ID
+- `forward_from_name` (TEXT): Original channel/user name
+- `forward_signature` (TEXT): Forward signature if any
+- `propagation_seconds` (INTEGER): Seconds from original post to forward
+- `created_at` (TIMESTAMPTZ)
+- UNIQUE (`original_message_id`, `forwarded_message_id`)
+
+**Important Indexes**:
+- `idx_message_forwards_original` - Find all forwards of a message
+- `idx_message_forwards_forwarded` - Lookup by forwarded message
+- `idx_message_forwards_from_id` - Filter by source channel/user
+- `idx_message_forwards_date` - Time-based queries
+
+**Foreign Keys**:
+- `original_message_id` → `messages(id)` ON DELETE CASCADE
+- `forwarded_message_id` → `messages(id)` ON DELETE CASCADE
+
+**Related Tables**: `messages`, `channel_interactions`
+
+**Usage Note**: The `propagation_seconds` column is useful for virality metrics - shorter propagation times indicate faster information spread.
+
+---
+
 ## Configuration & Runtime Settings
 
 ### `platform_config`

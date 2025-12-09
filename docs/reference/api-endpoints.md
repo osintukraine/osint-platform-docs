@@ -22,6 +22,13 @@ Comprehensive documentation of all REST API endpoints in the OSINT Intelligence 
 - [Metrics](#metrics)
 - [About](#about)
 - [Admin Endpoints](#admin-endpoints)
+- [Channel Network](#channel-network)
+- [News Timeline](#news-timeline)
+- [Stream (RSS Intelligence)](#stream-rss-intelligence)
+- [Validation (RSS Fact-Checking)](#validation-rss-fact-checking)
+- [Admin Dashboard](#admin-dashboard)
+- [Admin Kanban](#admin-kanban)
+- [Admin Configuration](#admin-configuration)
 
 ---
 
@@ -999,6 +1006,374 @@ All admin endpoints require authentication.
 | POST | `/admin/feeds/rss/test` | `url` | Test feed URL |
 | POST | `/admin/feeds/rss/{feed_id}/poll` | None | Trigger feed poll |
 | POST | `/admin/feeds/rss/batch/activate` | None | Batch activate/deactivate |
+
+---
+
+## Channel Network
+
+### GET /channel-network/{channel_id}/network
+
+Get entity and content network graph for a specific channel.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/channel-network/{channel_id}/network` | See below | Get channel content network |
+
+**Query Parameters**:
+- `min_similarity` (float, 0.0-1.0, default: 0.7): Minimum similarity score for connections
+- `max_entities` (integer, 1-100, default: 50): Maximum entities to include
+- `days` (integer, 1-365, default: 30): Time window for analysis
+
+**Response includes**:
+- Nodes: channel, entities, topics, key messages
+- Edges: content relationships with similarity scores
+- Statistics: entity distribution, topic breakdown
+
+---
+
+## News Timeline
+
+### GET /news-timeline
+
+Get unified timeline of RSS articles + Telegram messages with correlations.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/news-timeline` | See below | Get news timeline |
+
+**Query Parameters**:
+- `page` (integer, default: 1): Page number
+- `page_size` (integer, 1-100, default: 20): Items per page
+- `source_type` (string, optional): Filter by source (rss, telegram, both)
+- `category` (string, optional): Filter by news category
+- `trust_level` (integer, 1-5, optional): Filter by trust level
+- `days` (integer, 1-365, default: 7): Time window
+- `search` (string, optional): Text search
+
+**Response**:
+```json
+{
+  "items": [
+    {
+      "type": "rss",
+      "id": 12345,
+      "title": "Article headline",
+      "published_at": "2024-12-09T10:00:00Z",
+      "source_name": "Kyiv Independent",
+      "trust_level": 5,
+      "correlation_count": 3,
+      "correlations": [...]
+    },
+    {
+      "type": "telegram",
+      "id": 67890,
+      "content": "Message content...",
+      "channel_name": "Ukraine News",
+      "telegram_date": "2024-12-09T10:05:00Z",
+      "validation_status": "confirmed"
+    }
+  ],
+  "total": 150,
+  "page": 1
+}
+```
+
+### GET /news-timeline/stats
+
+Get news timeline statistics.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/news-timeline/stats` | Optional | Get timeline statistics |
+
+**Response**:
+```json
+{
+  "rss_articles_24h": 245,
+  "telegram_messages_24h": 1250,
+  "correlations_24h": 180,
+  "avg_correlation_confidence": 0.78,
+  "by_category": {
+    "military": 450,
+    "political": 200
+  }
+}
+```
+
+---
+
+## Stream (RSS Intelligence)
+
+### GET /stream/unified
+
+Get unified intelligence stream (RSS + Telegram correlated content).
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/stream/unified` | See below | Get unified stream |
+
+**Query Parameters**:
+- `limit` (integer, 1-100, default: 50): Maximum items
+- `source_filter` (string, optional): Filter sources (rss, telegram, all)
+- `hours` (integer, 1-168, default: 24): Time window
+- `min_importance` (string, optional): Minimum importance level
+
+**Response includes**:
+- RSS articles with telegram correlations
+- Telegram messages with RSS validations
+- Validation status (confirms, contradicts, context)
+- Confidence scores
+
+### GET /stream/correlations/{message_id}
+
+Get RSS correlations for a specific Telegram message.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/stream/correlations/{message_id}` | `min_similarity`, `limit` | Get message correlations |
+
+**Query Parameters**:
+- `min_similarity` (float, 0.0-1.0, default: 0.5): Minimum similarity score
+- `limit` (integer, 1-20, default: 10): Maximum correlations
+
+**Response**:
+```json
+{
+  "message_id": 12345,
+  "correlations": [
+    {
+      "article_id": 6789,
+      "title": "Related article headline",
+      "url": "https://example.com/article",
+      "published_at": "2024-12-09T09:00:00Z",
+      "similarity_score": 0.82,
+      "validation_type": "confirms",
+      "confidence": 0.85,
+      "source_trust_level": 4
+    }
+  ],
+  "total_correlations": 3
+}
+```
+
+---
+
+## Validation (RSS Fact-Checking)
+
+### GET /validation/{message_id}/validation
+
+Get LLM-powered validation summary for a message.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/validation/{message_id}/validation` | `refresh`, `min_similarity` | Get validation summary |
+
+**Query Parameters**:
+- `refresh` (boolean, default: false): Force regenerate validation (ignore cache)
+- `min_similarity` (float, 0.3-1.0, default: 0.5): Minimum article similarity
+
+**Response**:
+```json
+{
+  "message_id": 12345,
+  "validation_summary": "This message's claims about the strike in Kharkiv are confirmed by 3 independent news sources including Reuters and Kyiv Independent.",
+  "confidence_score": 0.89,
+  "total_articles_found": 5,
+  "articles_analyzed": 3,
+  "validation_breakdown": {
+    "confirms": 3,
+    "contradicts": 0,
+    "provides_context": 2
+  },
+  "cached": true,
+  "cached_at": "2024-12-09T10:00:00Z",
+  "expires_at": "2024-12-09T22:00:00Z"
+}
+```
+
+**Notes**:
+- Validation summaries are cached for 12 hours
+- LLM generates human-readable synthesis of correlated articles
+- Uses RSS correlation + LLM analysis for classification
+
+---
+
+## Admin Dashboard
+
+### GET /admin/dashboard
+
+Get comprehensive admin dashboard data.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/admin/dashboard` | Required (admin) | Get dashboard data |
+
+**Response**:
+```json
+{
+  "platform_status": "healthy",
+  "overview": {
+    "total_messages": 1250000,
+    "total_channels": 254,
+    "active_channels": 245,
+    "messages_today": 12500,
+    "messages_this_hour": 520
+  },
+  "processing": {
+    "queue_depth": 45,
+    "messages_per_second": 2.5,
+    "spam_rate_percent": 2.8,
+    "llm_latency_ms": 1200
+  },
+  "enrichment": {
+    "pending_embedding": 150,
+    "pending_translation": 80,
+    "pending_tagging": 200
+  },
+  "storage": {
+    "database_size_gb": 45.6,
+    "media_size_gb": 42.5,
+    "redis_memory_mb": 128
+  }
+}
+```
+
+### POST /admin/actions/{action}
+
+Trigger admin actions (clear cache, restart services, etc.).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/admin/actions/{action}` | Required (admin) | Trigger admin action |
+
+**Actions**:
+- `clear_cache`: Clear Redis cache
+- `refresh_materialized_views`: Refresh all materialized views
+- `trigger_enrichment`: Manually trigger enrichment cycle
+
+---
+
+## Admin Kanban
+
+### GET /admin/kanban
+
+Get urgency-based kanban board for message prioritization.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/admin/kanban` | See below | Get kanban board |
+
+**Query Parameters**:
+- `channel_id` (integer, optional): Filter by channel
+- `days` (integer, 1-30, default: 7): Time window
+
+**Response**:
+```json
+{
+  "columns": {
+    "critical": {
+      "messages": [...],
+      "count": 5
+    },
+    "high": {
+      "messages": [...],
+      "count": 12
+    },
+    "medium": {
+      "messages": [...],
+      "count": 45
+    },
+    "low": {
+      "messages": [...],
+      "count": 200
+    }
+  },
+  "total": 262
+}
+```
+
+### GET /admin/kanban/stats
+
+Get kanban statistics.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/admin/kanban/stats` | Required (admin) | Get kanban stats |
+
+---
+
+## Admin Configuration
+
+### GET /admin/config
+
+List all platform configuration values.
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/admin/config` | `category`, `search` | List config values |
+
+**Query Parameters**:
+- `category` (string, optional): Filter by category (system, features, thresholds, etc.)
+- `search` (string, optional): Search in key/description
+
+### GET /admin/config/categories
+
+Get all configuration categories.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/admin/config/categories` | Required (admin) | Get categories |
+
+### GET /admin/config/{key}
+
+Get a specific configuration value.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/admin/config/{key}` | Required (admin) | Get config value |
+
+### PUT /admin/config/{key}
+
+Update a configuration value.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| PUT | `/admin/config/{key}` | Required (admin) | Update config |
+
+**Request Body**:
+```json
+{
+  "value": "new_value"
+}
+```
+
+### PUT /admin/config/bulk/update
+
+Bulk update multiple configuration values.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| PUT | `/admin/config/bulk/update` | Required (admin) | Bulk update |
+
+**Request Body**:
+```json
+{
+  "updates": [
+    {"key": "features.spam_filter_enabled", "value": "true"},
+    {"key": "thresholds.min_importance", "value": "medium"}
+  ]
+}
+```
+
+### Model Configuration
+
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/admin/config/models` | None | List model configurations |
+| GET | `/admin/config/models/tasks` | None | Get available tasks |
+| PUT | `/admin/config/models/{config_id}` | None | Update model config |
+| POST | `/admin/config/models` | None | Create model config |
+| DELETE | `/admin/config/models/{config_id}` | None | Delete model config |
 
 ---
 

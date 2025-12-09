@@ -245,7 +245,7 @@ External news articles mentioning entity:
 
 #### Relationships Tab
 
-Interactive graph of entity relationships:
+Interactive graph of entity relationships from multiple sources:
 
 **Display:**
 - Cytoscape network visualization
@@ -253,12 +253,22 @@ Interactive graph of entity relationships:
 - Force-directed layout (default)
 - Zoom, pan, and layout controls
 
-**Relationship Types:**
-- Co-mentioned in messages
-- Organizational hierarchy
+**Relationship Sources:**
+
+!!! info "Wikidata Relationships (NEW)"
+    The platform automatically fetches structured relationships from Wikidata for entities with known Wikidata QIDs. These provide authoritative, verified connections.
+
+| Category | Relationship Types | Examples |
+|----------|-------------------|----------|
+| **Corporate** | employer, owns, owned_by | "Works at Gazprom", "Owns Arsenal FC" |
+| **Political** | position, party, member_of | "President of Russia", "Member of United Russia" |
+| **Associates** | partner, associate | "Business partner with X" |
+
+**Additional Relationship Types:**
+- Co-mentioned in messages (platform-computed)
+- Organizational hierarchy (from OpenSanctions)
 - Geographic proximity
 - Temporal correlation
-- OpenSanctions relationships
 
 **Graph Controls:**
 - Layout selector (fCoSE, grid, circle, etc.)
@@ -266,16 +276,23 @@ Interactive graph of entity relationships:
 - Reset view
 - Re-run layout
 - Export as PNG
+- **Refresh** button to force Wikidata re-fetch
 
 **Node Colors:**
 - Blue: Selected entity (center)
 - Green: Related entities
 - Purple: Organizations
 - Orange: Locations
-- Pink: Events
+- Red border: Sanctioned entity (from OpenSanctions)
+
+**Relationship Edge Labels:**
+- Hover over edge to see relationship type
+- Dotted lines = lower confidence
+- Solid lines = high confidence/verified
 
 **Empty State:**
 - "Needs enrichment" - relationships not yet computed
+- Click "Refresh" to trigger Wikidata enrichment
 - Background task runs periodically to build graph
 
 ## Understanding Confidence Scores
@@ -327,27 +344,54 @@ When you click an entity badge in a message:
 
 ### Wikidata Integration
 
-Automatically fetches additional data:
+Automatically fetches additional data from the Wikidata knowledge base:
 
-**What It Provides:**
+**Profile Data:**
 - Profile images (for people, equipment)
 - Multilingual descriptions
-- Birth/death dates
+- Birth/founding dates
 - Official websites
 - Country/nationality
 - Alternative names (aliases)
+- Social media handles (Twitter, Telegram)
+
+**Relationship Data (NEW):**
+
+The platform now fetches structured relationships from Wikidata SPARQL queries:
+
+| Category | What It Shows |
+|----------|---------------|
+| **Corporate** | Employers, companies owned, board positions |
+| **Political** | Positions held, party membership, government roles |
+| **Associates** | Business partners, personal associates |
+
+Each relationship includes:
+- Related entity name and Wikidata QID
+- Start/end dates (if available)
+- Cross-reference with OpenSanctions (shows if related entity is sanctioned)
 
 **How It Works:**
 1. Entity created with basic info
-2. Background enrichment task runs
-3. Queries Wikidata API by name/identifier
-4. Stores enrichment in `metadata.wikidata`
-5. Updates entity profile
+2. Background enrichment task runs (maintenance worker)
+3. Queries Wikidata SPARQL by name (batch of 50 entities)
+4. Name matching with 90% confidence threshold
+5. Fetches profile properties (image, DOB, country, etc.)
+6. Fetches relationships via SPARQL
+7. Cross-references relationships with OpenSanctions database
+8. Stores enrichment in `metadata.wikidata` and `metadata.relationships`
+9. Updates entity profile
 
 **Data Freshness:**
 - Enriched on first view (lazy loading)
+- Relationships cached for 7 days
 - Re-enriched monthly (background task)
-- Manual refresh (admin action)
+- Manual refresh via API (`?refresh=true`) or UI button
+
+**Viewing Wikidata Data:**
+- Profile header shows Wikidata description and image
+- "📖 Wikidata" badge indicates enrichment present
+- Click Wikidata link to view full entry
+- Relationships Tab shows relationship graph
 
 ### OpenSanctions Sync
 
