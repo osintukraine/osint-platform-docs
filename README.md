@@ -1,109 +1,61 @@
 # OSINT Intelligence Platform Documentation
 
-This repository contains the complete documentation for the OSINT Intelligence Platform, built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/).
+Comprehensive documentation for the **OSINT Intelligence Platform** - a production-ready system for archiving, enriching, and analyzing Telegram channels with multi-model AI enrichment, semantic search, and configurable intelligence rules.
 
-## Quick Start
+## Platform Overview
 
-### Prerequisites
+| Stat | Value |
+|------|-------|
+| **Channels Monitored** | 254+ Telegram channels |
+| **Curated Entities** | 1,425 (military equipment, individuals, organizations) |
+| **Services** | 29 Docker containers |
+| **Monthly Cost** | ~€230 (fully self-hosted) |
 
-- Python 3.8+
-- pip
+### Key Features
 
-### Installation
+- **Telegram Archiving** - Real-time monitoring with folder-based channel management
+- **AI Classification** - Self-hosted LLM (Ollama) for importance scoring and topic classification
+- **Semantic Search** - pgvector embeddings for "find similar content" queries
+- **Entity Matching** - Automatic linking to curated military/political entities
+- **RSS Distribution** - "Subscribe to any search" with authenticated feeds
+- **Social Graph** - Forward chain tracking and influence analysis
+
+## Documentation Sections
+
+| Section | Audience | Description |
+|---------|----------|-------------|
+| [**Getting Started**](docs/getting-started/) | Everyone | Platform overview, quick start, core concepts |
+| [**User Guide**](docs/user-guide/) | OSINT Analysts | Searching, RSS feeds, entities, notifications |
+| [**Operator Guide**](docs/operator-guide/) | Admins | Installation, configuration, monitoring, backups |
+| [**Developer Guide**](docs/developer-guide/) | Developers | Architecture, all 12 services, contributing |
+| [**Security Guide**](docs/security-guide/) | Security | Authentication (Ory Kratos), CrowdSec, hardening |
+| [**Tutorials**](docs/tutorials/) | Everyone | Step-by-step guides (5-30 minutes each) |
+| [**Reference**](docs/reference/) | Everyone | API endpoints, env vars, database schema, Docker |
+
+## Quick Links
+
+- **Quick Start**: [docs/getting-started/quick-start.md](docs/getting-started/quick-start.md)
+- **Architecture**: [docs/developer-guide/architecture.md](docs/developer-guide/architecture.md)
+- **API Reference**: [docs/reference/api-endpoints.md](docs/reference/api-endpoints.md)
+- **Troubleshooting**: [docs/operator-guide/troubleshooting.md](docs/operator-guide/troubleshooting.md)
+
+## Main Repository
+
+The platform source code is at: [osintukraine/osint-intelligence-platform](https://github.com/osintukraine/osint-intelligence-platform)
+
+## Serving Docs Locally
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-```
-
-### Development
-
-```bash
-# Serve documentation locally with live reload
 mkdocs serve
-
-# The site will be available at http://127.0.0.1:8000
+# Visit http://127.0.0.1:8000
 ```
 
-### Building
+## Documentation Stats
 
-```bash
-# Build static site
-mkdocs build
-
-# Output will be in the site/ directory
-```
-
-### Deployment
-
-```bash
-# Deploy to GitHub Pages
-mkdocs gh-deploy
-```
-
-## Documentation Structure
-
-- **Getting Started**: Quick introduction and core concepts
-- **User Guide**: End-user features and workflows
-- **Operator Guide**: Installation, configuration, and operations
-- **Developer Guide**: Architecture, services, and development
-- **Security Guide**: Authentication, authorization, and hardening
-- **Tutorials**: Step-by-step guides for common tasks
-- **Reference**: API docs, environment variables, database schema
-
-## Contributing
-
-When adding new documentation:
-
-1. Create markdown files in the appropriate `docs/` subdirectory
-2. Add the page to `nav:` section in `mkdocs.yml`
-3. Use proper heading hierarchy (`#`, `##`, `###`)
-4. Include code examples with language-specific syntax highlighting
-5. Use admonitions for important notes, warnings, and tips
-6. Test locally with `mkdocs serve` before committing
-
-## Admonition Examples
-
-```markdown
-!!! note
-    This is a note admonition.
-
-!!! warning
-    This is a warning admonition.
-
-!!! tip
-    This is a tip admonition.
-
-!!! danger
-    This is a danger admonition.
-```
-
-## Code Block Examples
-
-```markdown
-\`\`\`python
-# Python code with syntax highlighting
-def hello_world():
-    print("Hello, World!")
-\`\`\`
-
-\`\`\`bash
-# Bash commands
-docker-compose up -d
-\`\`\`
-```
-
-## Mermaid Diagrams
-
-```markdown
-\`\`\`mermaid
-graph LR
-    A[Telegram] --> B[Listener]
-    B --> C[Redis]
-    C --> D[Processor]
-    D --> E[PostgreSQL]
-\`\`\`
-```
+- **52 documentation files**
+- **33,000+ lines** of content
+- Generated from actual codebase analysis (December 2025)
 
 ## License
 
