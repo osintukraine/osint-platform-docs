@@ -47,7 +47,7 @@ graph LR
 
 ### Processing Pipeline
 
-The processor executes **9 stages** for each message:
+The processor executes **8 stages** for each message:
 
 ```mermaid
 graph TD
@@ -140,7 +140,7 @@ Entities stored as JSONB in `messages.entities` column.
 }
 ```
 
-**Topics** (12 categories):
+**Topics** (13 categories):
 
 - `combat`: Battles, strikes, attacks, explosions
 - `equipment`: Tanks, drones, weapons deliveries
@@ -154,6 +154,7 @@ Entities stored as JSONB in `messages.entities` column.
 - `units`: Brigade/battalion updates
 - `locations`: Frontline updates, city status
 - `general`: Mixed content, analysis
+- `uncertain`: Ambiguous content flagged for review
 
 **Importance Levels**:
 

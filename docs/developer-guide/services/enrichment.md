@@ -11,7 +11,7 @@ graph LR
     A[PostgreSQL<br/>Messages] --> B[Router]
     B --> C[Redis Queues]
     C --> D[8 Worker Types]
-    D --> E[26 Task Types]
+    D --> E[23 Task Types]
     E --> F[PostgreSQL<br/>Enriched Data]
 
     style B fill:#e1f5ff
@@ -30,7 +30,7 @@ graph LR
 | **Resource Usage** | CPU/memory intensive | Bounded and predictable |
 
 !!! success "Production Stats"
-    - **26 Task Types** across 8 worker pools
+    - **23 Task Types** across 8 worker pools
     - **Background Processing**: Enriches ~50,000 messages/day
     - **LLM Tasks**: Sequential execution prevents Ollama contention (50% faster)
     - **Cost**: €0/month (self-hosted Ollama CPU inference)
@@ -132,7 +132,7 @@ for msg in messages:
 
 #### Phase 3: Task Execution
 
-26 task types inherit from `BaseEnrichmentTask`:
+23 task types inherit from `BaseEnrichmentTask`:
 
 ```python
 class BaseEnrichmentTask(ABC):

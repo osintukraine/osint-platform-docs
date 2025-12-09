@@ -823,10 +823,10 @@ https://api.example.com/rss/search?q=artillery&importance_level=high&format=rss
 | `REDIS_URL` | Redis connection URL | `redis://redis:6379/0` |
 | `API_PORT` | API server port | `8000` |
 | `API_WORKERS` | Uvicorn workers | `4` |
-| `CORS_ORIGINS` | Allowed CORS origins (comma-separated) | `*` |
+| `API_CORS_ORIGINS` | Allowed CORS origins (comma-separated) | `http://localhost:3000` |
 | `AUTH_PROVIDER` | Auth provider (none/jwt/cloudron/ory) | `none` |
 | `AUTH_REQUIRED` | Require authentication | `false` |
-| `JWT_SECRET` | JWT signing secret | *required if jwt* |
+| `JWT_SECRET_KEY` | JWT signing secret | *required if jwt* |
 | `JWT_ALGORITHM` | JWT algorithm | `HS256` |
 | `JWT_EXPIRATION_HOURS` | Token expiry | `24` |
 | `MINIO_ENDPOINT` | MinIO endpoint | `minio:9000` |

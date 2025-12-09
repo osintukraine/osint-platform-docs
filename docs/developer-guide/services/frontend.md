@@ -105,10 +105,13 @@ function getApiUrl(): string {
     return process.env.API_URL || 'http://api:8000';
   }
 
-  // Client-side (browser)
-  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  // Client-side (browser) - use relative URLs or NEXT_PUBLIC_API_URL
+  return process.env.NEXT_PUBLIC_API_URL || '';
 }
 ```
+
+!!! note "Client-side Default"
+    The centralized `getApiUrl()` returns an empty string (relative URLs) for client-side by default. However, many components use `NEXT_PUBLIC_API_URL || 'http://localhost:8000'` directly. Always set `NEXT_PUBLIC_API_URL` in development.
 
 > **Warning:** Never use relative paths (`/api/...`) for API calls. Next.js rewrites don't work reliably in Docker. Always use absolute URLs from `NEXT_PUBLIC_API_URL`.
 
