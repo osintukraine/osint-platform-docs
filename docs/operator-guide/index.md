@@ -12,6 +12,9 @@ This guide covers everything needed to deploy and operate the platform in produc
 - [Configuration](configuration.md) - Configure services and environment variables
 - [Telegram Setup](telegram-setup.md) - Configure Telegram monitoring and session management
 - [Monitoring & Metrics](monitoring.md) - Monitor health, performance, and metrics
+- [Scaling](scaling.md) - Scale workers and services as demand grows
+- [Performance Tuning](performance-tuning.md) - Optimize Ollama, PostgreSQL, Redis
+- [Upgrades](upgrades.md) - Safely upgrade the platform and handle schema changes
 - [Backup & Restore](backup-restore.md) - Backup strategies and disaster recovery
 - [Troubleshooting](troubleshooting.md) - Common issues and solutions
 
@@ -289,6 +292,30 @@ This guide is maintained in the `osint-platform-docs` repository. To suggest imp
     Monitor health, performance, and metrics
 
     [:octicons-arrow-right-24: Monitoring Guide](monitoring.md)
+
+-   :material-arrow-expand-all:{ .lg .middle } __Scaling__
+
+    ---
+
+    Scale workers and services as demand grows
+
+    [:octicons-arrow-right-24: Scaling Guide](scaling.md)
+
+-   :material-speedometer:{ .lg .middle } __Performance Tuning__
+
+    ---
+
+    Optimize Ollama, PostgreSQL, and Redis
+
+    [:octicons-arrow-right-24: Performance Guide](performance-tuning.md)
+
+-   :material-update:{ .lg .middle } __Upgrades__
+
+    ---
+
+    Safely upgrade platform and handle schema changes
+
+    [:octicons-arrow-right-24: Upgrades Guide](upgrades.md)
 
 -   :material-backup-restore:{ .lg .middle } __Backup & Restore__
 
