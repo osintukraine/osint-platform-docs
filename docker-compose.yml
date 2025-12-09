@@ -1,0 +1,11 @@
+services:
+  mkdocs:
+    build: .
+    container_name: osint-platform-docs
+    ports:
+      - "8002:8000"
+    volumes:
+      # Mount for live reload during development
+      - ./docs:/docs/docs:ro
+      - ./mkdocs.yml:/docs/mkdocs.yml:ro
+    restart: unless-stopped
