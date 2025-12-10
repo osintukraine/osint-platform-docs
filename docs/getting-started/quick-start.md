@@ -213,7 +213,7 @@ Once a message arrives in your monitored channel:
 
 ### Learn Core Features
 
-- [Channel Management](../operator-guide/channel-management.md) - Folder-based workflow
+- [Channel Management](../tutorials/add-telegram-channel.md) - Folder-based workflow
 - [Searching Messages](../user-guide/searching.md) - Full-text and semantic search
 - [RSS Feeds](../user-guide/rss-feeds.md) - Subscribe to search queries
 - [Entity Extraction](../user-guide/entities.md) - Track people, units, equipment
@@ -221,14 +221,14 @@ Once a message arrives in your monitored channel:
 ### Monitoring & Operations
 
 - [Grafana Dashboards](../operator-guide/monitoring.md) - Pre-configured monitoring
-- [Database Administration](../operator-guide/nocodb.md) - NocoDB usage guide
+- [Database Administration](../operator-guide/index.md) - NocoDB and admin tools
 - [Backup & Recovery](../operator-guide/backup-restore.md) - Data protection
 
 ### Advanced Topics
 
-- [Multi-Model AI](../architecture/multi-model-ai.md) - Switch LLM models at runtime
-- [Enrichment Pipeline](../architecture/enrichment-pipeline.md) - Background AI tasks
-- [Architecture Overview](../architecture/overview.md) - Technical deep dive
+- [LLM Integration](../developer-guide/llm-integration.md) - Switch LLM models at runtime
+- [Enrichment Service](../developer-guide/services/enrichment.md) - Background AI tasks
+- [Architecture Overview](../developer-guide/architecture.md) - Technical deep dive
 
 ## Common Issues
 
@@ -335,8 +335,7 @@ docker images | grep osint | awk '{print $3}' | xargs docker rmi
 ## Getting Help
 
 - **Documentation**: Browse the [User Guide](../user-guide/index.md) and [Operator Guide](../operator-guide/index.md)
-- **FAQ**: Check [Frequently Asked Questions](../reference/faq.md)
-- **Troubleshooting**: See [Troubleshooting Guide](../reference/troubleshooting.md)
+- **Troubleshooting**: See [Troubleshooting Guide](../operator-guide/troubleshooting.md)
 - **GitHub Issues**: [Report bugs or request features](https://github.com/osintukraine/osint-intelligence-platform/issues)
 
 !!! success "Congratulations!"

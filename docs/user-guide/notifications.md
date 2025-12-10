@@ -333,7 +333,7 @@ For enhanced privacy or custom rules:
 - No third-party dependencies
 - Advanced authentication
 
-**See:** [Operations Guide](../operations/notifications.md) for admin setup
+**See:** [Operator Guide](../operator-guide/index.md) for admin setup
 
 ### Integration with Other Tools
 

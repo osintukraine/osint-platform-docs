@@ -480,7 +480,7 @@ Date: Last 30 days
 
 ## Entity API Access
 
-For programmatic access, see [API Reference](../api/entities.md):
+For programmatic access, see [API Reference](../reference/api-endpoints.md#entities):
 
 **Endpoints:**
 ```

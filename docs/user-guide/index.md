@@ -116,9 +116,9 @@ Home (/)
 - Check filter descriptions under dropdown menus
 
 ### Technical Issues
-- Check the [Operations Guide](../operations/index.md) for admin tasks
-- Review [Architecture](../architecture/index.md) for system design
-- See [API Reference](../api/index.md) for programmatic access
+- Check the [Operator Guide](../operator-guide/index.md) for admin tasks
+- Review [Architecture](../developer-guide/architecture.md) for system design
+- See [API Reference](../reference/api-endpoints.md) for programmatic access
 
 ## Privacy & Ethics
 

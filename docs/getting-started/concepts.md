@@ -342,7 +342,7 @@ ORDER BY priority;
 
 Now that you understand the core concepts, explore:
 
-- [Channel Management](../operator-guide/channel-management.md) - Folder-based workflow details
+- [Channel Management](../tutorials/add-telegram-channel.md) - Folder-based workflow details
 - [Searching Messages](../user-guide/searching.md) - Full-text, semantic, and hybrid search
-- [Architecture Overview](../architecture/overview.md) - Technical deep dive
-- [Enrichment Pipeline](../architecture/enrichment-pipeline.md) - Background AI tasks
+- [Architecture Overview](../developer-guide/architecture.md) - Technical deep dive
+- [Enrichment Service](../developer-guide/services/enrichment.md) - Background AI tasks

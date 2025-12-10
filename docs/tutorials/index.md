@@ -120,7 +120,7 @@ Choose a learning path based on your goals:
 1. Start with [Add a Telegram Channel](add-telegram-channel.md) to get familiar with the interface
 2. Create [Custom RSS Feeds](create-custom-rss-feed.md) for personalized intelligence
 3. Set up [Discord Alerts](setup-discord-alerts.md) for real-time notifications
-4. Explore the full feature set in the [Platform Guide](../platform-guide/index.md)
+4. Explore the full feature set in the [User Guide](../user-guide/index.md)
 
 ### For Systems Administrators
 
@@ -131,9 +131,9 @@ Choose a learning path based on your goals:
 
 ### For Developers
 
-1. Review the [API Reference](../api-reference/index.md) for available endpoints
+1. Review the [API Reference](../reference/api-endpoints.md) for available endpoints
 2. Create [Custom RSS Feeds](create-custom-rss-feed.md) to understand the data structure
-3. Explore [Architecture Documentation](../architecture/index.md) for deep technical details
+3. Explore [Architecture Documentation](../developer-guide/architecture.md) for deep technical details
 4. Review [Deployment Guide](deploy-to-production.md) to understand infrastructure
 
 ---

@@ -784,9 +784,9 @@ Currently no integration tests. Future additions:
 ## Related Documentation
 
 - [API Service Documentation](./api.md) - Backend REST API
-- [User Guide: Search & Filter](../../user-guide/search-and-filter.md) - End-user search guide
-- [Architecture Overview](../../architecture/overview.md) - System architecture
-- [Deployment Guide](../../deployment/docker-compose.md) - Docker deployment
+- [User Guide: Search](../../user-guide/searching.md) - End-user search guide
+- [Architecture Overview](../architecture.md) - System architecture
+- [Deployment Guide](../../tutorials/deploy-to-production.md) - Docker deployment
 
 ## Common Tasks
 

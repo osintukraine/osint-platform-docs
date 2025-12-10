@@ -470,7 +470,7 @@ Now that you have channels being monitored, you can:
    - Get real-time notifications for important messages
    - Route different content to different Discord channels
 
-3. **Explore the Search UI** - [Platform Guide](../platform-guide/index.md)
+3. **Explore the Search UI** - [User Guide](../user-guide/index.md)
    - Search messages by keyword, date, importance
    - Use semantic search to find related content
 

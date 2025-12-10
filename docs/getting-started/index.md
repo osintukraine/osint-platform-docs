@@ -68,12 +68,11 @@ Before you begin, make sure you have:
 
 Once you've completed the Getting Started section, you can:
 
-- **Configure channels**: Learn about [folder-based channel management](../operator-guide/channel-management.md)
+- **Configure channels**: Learn about [folder-based channel management](../tutorials/add-telegram-channel.md)
 - **Search messages**: Master [semantic search](../user-guide/searching.md) and filtering
 - **Set up monitoring**: Configure [Grafana dashboards](../operator-guide/monitoring.md)
-- **Understand the architecture**: Read the [Architecture Overview](../architecture/overview.md)
+- **Understand the architecture**: Read the [Architecture Overview](../developer-guide/architecture.md)
 
 !!! tip "Need Help?"
-    - Check the [FAQ](../reference/faq.md) for common questions
-    - Review [Troubleshooting](../reference/troubleshooting.md) for common issues
+    - Review [Troubleshooting](../operator-guide/troubleshooting.md) for common issues
     - Open an issue on [GitHub](https://github.com/osintukraine/osint-intelligence-platform/issues)

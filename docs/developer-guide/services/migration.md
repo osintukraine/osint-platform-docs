@@ -848,8 +848,8 @@ Target quality thresholds:
 
 ### Operations
 
-- [Deployment Guide](../../operations/deployment.md) - Docker Compose deployment
-- [Monitoring Guide](../../operations/monitoring.md) - Prometheus & Grafana setup
+- [Deployment Guide](../../tutorials/deploy-to-production.md) - Docker Compose deployment
+- [Monitoring Guide](../../operator-guide/monitoring.md) - Prometheus & Grafana setup
 
 ### Development
 

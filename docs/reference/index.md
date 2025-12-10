@@ -234,11 +234,10 @@ Configuration precedence (highest to lowest):
 
 ## Additional Resources
 
-- [Architecture Documentation](../architecture/overview.md)
-- [Development Guide](../guides/development.md)
-- [Deployment Guide](../guides/deployment.md)
-- [API Examples](../guides/api-examples.md)
-- [Monitoring Guide](../guides/monitoring.md)
+- [Architecture Documentation](../developer-guide/architecture.md)
+- [Developer Guide](../developer-guide/index.md)
+- [Deployment Guide](../tutorials/deploy-to-production.md)
+- [Monitoring Guide](../operator-guide/monitoring.md)
 
 ## Support
 

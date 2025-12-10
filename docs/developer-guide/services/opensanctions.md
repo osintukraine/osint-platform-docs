@@ -1032,9 +1032,9 @@ sanctioned_entities = result.scalars().all()
 
 - **[Enrichment Service](enrichment.md)** - Background enrichment coordination
 - **[Processor Service](processor.md)** - Real-time message processing
-- **[Entity System](../features/entity-system.md)** - Curated entity management
-- **[Knowledge Graph](../features/knowledge-graph.md)** - Entity relationships and graph queries
-- **[API Reference](../api/entities.md)** - Entity API endpoints
+- **[Entity Ingestion Service](entity-ingestion.md)** - Curated entity management
+- **[Database Schema](../../reference/database-tables.md)** - Entity tables and relationships
+- **[API Reference](../../reference/api-endpoints.md#entities)** - Entity API endpoints
 
 ## External Resources
 
