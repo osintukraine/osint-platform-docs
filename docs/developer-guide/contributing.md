@@ -2,86 +2,104 @@
 
 Guidelines for contributing to the OSINT Intelligence Platform.
 
+---
+
 ## Overview
 
-**TODO: Content to be generated from codebase analysis**
+We welcome contributions from the community! This guide covers the workflow, standards, and processes for contributing.
 
-We welcome contributions from the community! This guide will help you get started.
+**Repository**: [github.com/osintukraine/osint-intelligence-platform](https://github.com/osintukraine/osint-intelligence-platform)
+
+---
 
 ## Getting Started
 
 ### Fork and Clone
 
-**TODO: Document fork and clone process:**
-
 ```bash
-# Fork repository on GitHub
+# Fork repository on GitHub (click "Fork" button)
+
 # Clone your fork
 git clone https://github.com/YOUR_USERNAME/osint-intelligence-platform.git
 cd osint-intelligence-platform
+
+# Add upstream remote
+git remote add upstream https://github.com/osintukraine/osint-intelligence-platform.git
 ```
 
 ### Set Up Development Environment
-
-**TODO: Document development setup:**
 
 ```bash
 # Check out develop branch
 git checkout develop
 
-# Install dependencies
-# ...
+# Copy environment file
+cp .env.example .env
+# Edit .env with your credentials (POSTGRES_PASSWORD, REDIS_PASSWORD, etc.)
 
 # Start development environment
 docker-compose up -d
+
+# Verify services are running
+docker-compose ps
 ```
+
+---
 
 ## Contribution Workflow
 
 ### 1. Create Feature Branch
 
-**TODO: Document branching strategy:**
+Always branch from `develop`:
 
 ```bash
-# Create feature branch from develop
+# Sync with upstream
 git checkout develop
-git pull origin develop
+git pull upstream develop
+
+# Create feature branch
 git checkout -b feature/my-new-feature
 ```
 
+**Branch naming conventions:**
+- `feature/description` - New features
+- `fix/description` - Bug fixes
+- `docs/description` - Documentation
+- `refactor/description` - Code refactoring
+
 ### 2. Make Changes
 
-**TODO: Document development best practices:**
-
-- Follow code style guidelines
+- Follow [code style guidelines](#code-style-guidelines)
 - Write tests for new features
-- Update documentation
+- Update documentation as needed
 - Commit frequently with clear messages
 
 ### 3. Test Your Changes
-
-**TODO: Document testing requirements:**
 
 ```bash
 # Run unit tests
 pytest
 
-# Run integration tests
-# ...
+# Run specific service tests
+pytest services/processor/tests/ -v
 
 # Test in Docker
 docker-compose up -d
+docker-compose logs -f api processor
+
+# Verify API is responding
+curl http://localhost:8000/health
 ```
 
 ### 4. Commit Changes
 
-**TODO: Document commit message conventions:**
+Use conventional commit format:
 
 ```bash
-# Use conventional commits
-git commit -m "feat(service): add new feature"
-git commit -m "fix(api): resolve bug in endpoint"
-git commit -m "docs: update README"
+git commit -m "feat(processor): add entity extraction stage"
+git commit -m "fix(api): handle missing embeddings gracefully"
+git commit -m "docs(readme): update installation steps"
+git commit -m "refactor(enrichment): simplify task registration"
 ```
 
 #### Commit Message Format
@@ -94,111 +112,231 @@ git commit -m "docs: update README"
 <footer>
 ```
 
-**Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
+| Type | Description |
+|------|-------------|
+| `feat` | New feature |
+| `fix` | Bug fix |
+| `docs` | Documentation only |
+| `style` | Formatting, no code change |
+| `refactor` | Code change without feature/fix |
+| `test` | Adding tests |
+| `chore` | Build process, dependencies |
 
 ### 5. Submit Pull Request
 
-**TODO: Document PR process:**
+```bash
+# Push to your fork
+git push origin feature/my-new-feature
+```
 
-1. Push to your fork
-2. Create PR against `develop` branch
-3. Fill out PR template
-4. Request review
+1. Go to GitHub and click "New Pull Request"
+2. Base: `develop` ← Compare: `feature/my-new-feature`
+3. Fill out PR template with:
+   - Description of changes
+   - Related issues
+   - Testing performed
+   - Screenshots (if UI changes)
+4. Request review from maintainers
 5. Address feedback
 6. Wait for approval and merge
+
+---
 
 ## Code Style Guidelines
 
 ### Python
 
-**TODO: Document Python style guidelines:**
-
-- PEP 8 compliance
-- Type hints required
-- Docstrings for all public functions
-- Maximum line length: 100 characters
+- **Style**: PEP 8, enforced by `ruff`
+- **Type hints**: Required for all public functions
+- **Docstrings**: Google style
+- **Line length**: Maximum 100 characters
+- **Imports**: Sorted by `isort`
 
 ```python
-# Example
-def my_function(param: str) -> int:
-    """
-    Brief description.
+async def process_message(
+    message_id: int,
+    session: AsyncSession,
+    *,
+    skip_spam_check: bool = False,
+) -> ProcessingResult:
+    """Process a single message through the pipeline.
 
     Args:
-        param: Parameter description
+        message_id: Database message ID
+        session: Database session
+        skip_spam_check: Skip spam filtering (for reprocessing)
 
     Returns:
-        Return value description
+        ProcessingResult with status and metadata
+
+    Raises:
+        MessageNotFoundError: If message doesn't exist
     """
-    return len(param)
+    ...
 ```
 
 ### TypeScript
 
-**TODO: Document TypeScript style guidelines:**
+- **Style**: ESLint + Prettier (auto-formatted)
+- **Types**: Strict mode, no `any`
+- **Components**: Functional with hooks
+- **Exports**: Named exports preferred
 
-- ESLint configuration
-- Prettier formatting
-- Type safety requirements
-- Component structure
+```typescript
+interface MessageProps {
+  id: number;
+  content: string;
+  channelName: string;
+}
+
+export function MessageCard({ id, content, channelName }: MessageProps) {
+  return (
+    <div className="rounded-lg border p-4">
+      <h3>{channelName}</h3>
+      <p>{content}</p>
+    </div>
+  );
+}
+```
 
 ### SQL
 
-**TODO: Document SQL style guidelines:**
+- **Keywords**: UPPERCASE
+- **Identifiers**: lowercase_snake_case
+- **Indentation**: 4 spaces
+- **Constraints**: Named with convention (`uq_table_column`, `idx_table_column`)
 
-- Uppercase keywords
-- Indentation standards
-- Naming conventions
+```sql
+CREATE TABLE IF NOT EXISTS messages (
+    id BIGSERIAL PRIMARY KEY,
+    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    content TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+    CONSTRAINT uq_messages_channel_message UNIQUE (channel_id, message_id)
+);
+
+CREATE INDEX idx_messages_channel_date
+ON messages(channel_id, telegram_date DESC);
+```
+
+---
 
 ## Testing Requirements
 
-**TODO: Document testing standards:**
+### Minimum Standards
 
-- Minimum test coverage: 80%
-- Unit tests for all new functions
-- Integration tests for API endpoints
-- End-to-end tests for user workflows
+- **Coverage**: 80% for new code
+- **Unit tests**: All new functions
+- **Integration tests**: API endpoints
+
+### Test Structure
+
+```
+tests/                          # Root-level shared tests
+├── conftest.py                 # Shared fixtures
+└── test_*.py
+
+services/*/tests/               # Service-specific tests
+├── test_unit_*.py
+└── test_integration_*.py
+```
+
+### Running Tests
+
+```bash
+# All tests
+pytest
+
+# With coverage
+pytest --cov=services --cov-report=term-missing
+
+# Specific markers
+pytest -m unit           # Fast unit tests
+pytest -m integration    # Integration tests
+pytest -m "not slow"     # Skip slow tests
+```
+
+---
 
 ## Documentation Requirements
 
-**TODO: Document what to document:**
+Update documentation when:
 
-- Code comments for complex logic
-- Docstrings for all public APIs
-- README updates for new features
-- User guide updates
-- API documentation updates
+1. **New features**: Add to relevant guide
+2. **API changes**: Update API reference
+3. **Environment variables**: Update env vars reference
+4. **Schema changes**: Update database schema docs
+
+Documentation lives in `osint-platform-docs` repository.
+
+---
 
 ## Review Process
 
-**TODO: Document code review process:**
+### Automated Checks
 
-1. Automated checks (CI/CD)
-2. Code review by maintainers
-3. Testing in development environment
-4. Approval and merge
+- Linting (ruff, ESLint)
+- Type checking (mypy, TypeScript)
+- Unit tests (pytest)
+- Build verification (Docker)
 
-## Community Guidelines
+### Manual Review
 
-**TODO: Document code of conduct and community guidelines:**
+Maintainers check:
 
-- Be respectful
-- Be constructive
-- Help others
-- Follow guidelines
+1. Code quality and style
+2. Test coverage
+3. Documentation updates
+4. Security implications
+5. Performance impact
+
+### Merge Criteria
+
+- All CI checks pass
+- At least 1 approving review
+- No unresolved comments
+- Branch is up to date with `develop`
+
+---
+
+## Critical Rules
+
+### NEVER Do These
+
+!!! danger "Critical Don'ts"
+    - **NEVER** create standalone Telegram clients (use passed client)
+    - **NEVER** use Alembic migrations (edit init.sql)
+    - **NEVER** commit secrets or credentials
+    - **NEVER** push directly to `master` or `develop`
+    - **NEVER** skip tests for "quick fixes"
+
+### Always Do These
+
+!!! success "Critical Do's"
+    - **ALWAYS** branch from `develop`
+    - **ALWAYS** test locally before PR
+    - **ALWAYS** update docs with code changes
+    - **ALWAYS** use conventional commits
+    - **ALWAYS** request review before merge
+
+---
 
 ## Getting Help
 
-**TODO: Document support channels:**
-
-- GitHub Issues for bugs
-- GitHub Discussions for questions
-- Discord/Telegram for community chat
+- **Bugs**: [GitHub Issues](https://github.com/osintukraine/osint-intelligence-platform/issues)
+- **Questions**: GitHub Discussions
+- **Security**: Email maintainers directly
 
 ---
 
 !!! tip "First Time Contributors"
-    Look for issues labeled "good first issue" to get started!
+    Look for issues labeled `good first issue` to get started!
 
-!!! note "Documentation Status"
-    This page is a placeholder. Content will be generated from CONTRIBUTING.md and development guidelines.
+---
+
+## Related Documentation
+
+- [Development Environment](index.md#development-environment) - Setup guide
+- [Adding Features](adding-features.md) - Feature development guide
+- [Testing Guide](testing-guide.md) - Test patterns and fixtures
