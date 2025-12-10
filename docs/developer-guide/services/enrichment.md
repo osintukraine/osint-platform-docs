@@ -10,13 +10,21 @@ The Enrichment Service handles asynchronous, batch-oriented processing of messag
 graph LR
     A[PostgreSQL<br/>Messages] --> B[Router]
     B --> C[Redis Queues]
-    C --> D[8 Worker Types]
-    D --> E[23 Task Types]
+    C --> D[6 Queue Workers]
+    D --> E[22 Task Types]
     E --> F[PostgreSQL<br/>Enriched Data]
+
+    subgraph "Pipeline"
+        G[Event Detection<br/>Worker]
+    end
+
+    A --> G
+    G --> F
 
     style B fill:#e1f5ff
     style C fill:#ffe1e1
     style D fill:#e1ffe1
+    style G fill:#e1e1ff
 ```
 
 ### Key Characteristics
@@ -30,7 +38,7 @@ graph LR
 | **Resource Usage** | CPU/memory intensive | Bounded and predictable |
 
 !!! success "Production Stats"
-    - **23 Task Types** across 8 worker pools
+    - **22 Task Types** across 6 queue-based workers + 1 event detection pipeline
     - **Background Processing**: Enriches ~50,000 messages/day
     - **LLM Tasks**: Sequential execution prevents Ollama contention (50% faster)
     - **Cost**: €0/month (self-hosted Ollama CPU inference)
@@ -54,15 +62,17 @@ graph TD
         Q6[enrich:maintenance]
     end
 
-    subgraph "8 Worker Types"
+    subgraph "6 Queue-Based Workers"
         W1[AI Tagging Worker]
         W2[RSS Validation Worker]
         W3[Fast Pool Worker]
         W4[Telegram Worker]
         W5[Decision Worker]
         W6[Maintenance Worker]
+    end
+
+    subgraph "Pipeline Worker"
         W7[Event Detection Worker]
-        W8[Coordinator<br/>Legacy]
     end
 
     R --> Q1 & Q2 & Q3 & Q4 & Q5 & Q6
@@ -117,7 +127,7 @@ for msg in messages:
 
 #### Phase 2: Worker Pools
 
-8 specialized worker types consume from Redis queues:
+7 worker types (6 queue-based + 1 pipeline):
 
 | Worker | Queue | Tasks Handled | LLM? | Rate Limited? |
 |--------|-------|---------------|------|---------------|
@@ -127,12 +137,146 @@ for msg in messages:
 | **Telegram** | `enrich:telegram` | Engagement polling, social graph, comments, forward discovery | ❌ | ✅ (20 req/s) |
 | **Decision** | `enrich:decision` | Decision verification, reprocessing | ❌ | ❌ |
 | **Maintenance** | `enrich:maintenance` | Channel cleanup, quarantine, discovery eval, Wikidata | ❌ | ❌ |
-| **Event Detection** | Pipeline (no queue) | RSS event creator, Telegram matcher, status updater | ✅ | ❌ |
-| **Coordinator** | N/A (legacy) | Polls DB directly (deprecated) | Varies | ❌ |
+| **Event Detection** | *Pipeline (DB-scan)* | RSS event creator, Telegram matcher, status updater | ✅ | ❌ |
 
 #### Phase 3: Task Execution
 
-23 task types inherit from `BaseEnrichmentTask`:
+22 task types (most inherit from `BaseEnrichmentTask`):
+
+### Task Execution Patterns
+
+The Enrichment Service uses two distinct execution patterns based on task characteristics:
+
+```mermaid
+graph TD
+    subgraph "Queue-Based Pattern"
+        R[Router] -->|Polls DB| Q[Redis Streams]
+        Q -->|XREADGROUP| W[Worker Pool]
+        W -->|Process| T1[Task]
+        T1 -->|ACK/NACK| Q
+    end
+
+    subgraph "Database-Scan Pattern"
+        C[Coordinator/Worker] -->|Direct Query| DB[(PostgreSQL)]
+        DB -->|Batch| T2[Task]
+        T2 -->|Commit| DB
+    end
+
+    style R fill:#e1f5ff
+    style Q fill:#ffe1e1
+    style W fill:#e1ffe1
+    style C fill:#fff4e1
+```
+
+#### Queue-Based Pattern (Router → Redis → Workers)
+
+**Used by**: AI Tagging, RSS Validation, Fast Pool tasks, Telegram tasks, Decision tasks
+
+**How It Works**:
+
+1. **Router** polls PostgreSQL for messages needing enrichment
+2. **Router** enqueues message IDs to Redis Streams with priority
+3. **Workers** consume from Redis using `XREADGROUP` (consumer groups)
+4. **Workers** fetch full message from DB and process
+5. **Workers** ACK on success, NACK on failure (retry or DLQ)
+
+**Advantages**:
+
+- ✅ Horizontal scaling (add more workers)
+- ✅ Work distribution across instances
+- ✅ Backpressure control (pause routing when queue full)
+- ✅ Retry/DLQ for fault tolerance
+- ✅ Priority-based processing
+
+**Code Pattern**:
+
+```python
+# Router (enqueue)
+async def route_messages(self):
+    messages = await poll_messages_for_task(session, "ai_tagging", limit=100)
+    for msg in messages:
+        await self.queue.enqueue(message_id=msg.id, task="ai_tagging", priority=score)
+
+# Worker (dequeue)
+async def process_cycle(self):
+    batch = await self.queue.dequeue(count=self.batch_size, block_ms=2000)
+    for item in batch:
+        try:
+            await self.task.process(item.data["message_id"], session)
+            await self.queue.ack(item)
+        except Exception as e:
+            await self.queue.nack(item, str(e))
+```
+
+#### Database-Scan Pattern (Direct DB Query)
+
+**Used by**: Forward Discovery, Comment Backfill, some Maintenance tasks, Event Detection Pipeline
+
+**How It Works**:
+
+1. **Worker** directly queries PostgreSQL for work (no Redis intermediary)
+2. **Worker** processes batch within single transaction
+3. **Worker** commits and sleeps until next cycle
+
+**Advantages**:
+
+- ✅ Simpler architecture (no Redis dependency for work discovery)
+- ✅ Transaction guarantees (ACID)
+- ✅ Good for sequential/dependent operations
+- ✅ LLM task isolation (no contention)
+
+**Disadvantages**:
+
+- ❌ Single-instance only (no horizontal scaling)
+- ❌ No work distribution
+- ❌ No built-in retry/DLQ
+
+**Code Pattern**:
+
+```python
+# Database-scan pattern (used by maintenance tasks, event detection)
+async def run_cycle(self):
+    async with get_session() as session:
+        messages = await session.execute(text("""
+            SELECT id FROM messages
+            WHERE needs_processing = true
+            ORDER BY priority DESC
+            LIMIT :batch_size
+        """), {"batch_size": self.batch_size})
+
+        for msg in messages:
+            await self.task.process(msg.id, session)
+
+        await session.commit()
+```
+
+#### Pattern Selection Guide
+
+| Criteria | Queue-Based | Database-Scan |
+|----------|-------------|---------------|
+| **Need horizontal scaling?** | ✅ Yes | ❌ No |
+| **LLM task isolation?** | ⚠️ Possible | ✅ Preferred |
+| **Transaction guarantees?** | ❌ Eventual | ✅ ACID |
+| **Rate limiting needed?** | ✅ Built-in | ⚠️ Manual |
+| **Retry/DLQ needed?** | ✅ Built-in | ⚠️ Manual |
+| **Simple implementation?** | ❌ More complex | ✅ Simpler |
+
+**Task Pattern Assignments**:
+
+| Task | Pattern | Reason |
+|------|---------|--------|
+| `ai_tagging` | Queue-based | Needs scaling, LLM isolation via dedicated queue |
+| `rss_validation` | Queue-based | Needs scaling, LLM isolation via dedicated queue |
+| `embedding` | Queue-based | CPU-bound, benefits from parallel workers |
+| `translation` | Queue-based | API rate limits handled by worker |
+| `engagement_polling` | Queue-based | Telegram rate limits, needs distribution |
+| `comment_ondemand` | Queue-based | User-triggered, needs priority handling |
+| `forward_discovery` | Database-scan | Background, no scaling need, maintenance task |
+| `rss_event_creator` | Pipeline | Sequential dependency, LLM isolation |
+| `telegram_event_matcher` | Pipeline | Sequential dependency, LLM isolation |
+| `event_status_updater` | Pipeline | Sequential dependency, no LLM |
+
+---
 
 ```python
 class BaseEnrichmentTask(ABC):
@@ -151,6 +295,130 @@ class BaseEnrichmentTask(ABC):
 ```
 
 ## Workers Reference
+
+### Router Service
+
+**Purpose**: Central work distributor - polls PostgreSQL and routes work to Redis queues
+
+**Queue**: N/A (produces to all queues)
+**File**: `/services/enrichment/src/router.py`
+**Container**: `enrichment-router`
+
+**Configuration**:
+
+```bash
+ROUTER_POLL_INTERVAL=30        # Seconds between DB polls
+ROUTER_BATCH_SIZE=100          # Messages per poll cycle
+BACKPRESSURE_HIGH=1000         # Pause routing when queue exceeds
+BACKPRESSURE_LOW=500           # Resume routing when queue drops below
+METRICS_PORT=9198
+```
+
+**How It Works**:
+
+```mermaid
+sequenceDiagram
+    participant DB as PostgreSQL
+    participant Router
+    participant Redis
+    participant Workers
+
+    loop Every 30 seconds
+        Router->>DB: Poll messages needing enrichment
+        DB->>Router: Batch of message IDs
+        Router->>Router: Calculate priority scores
+        Router->>Redis: XADD to appropriate queue
+        Note over Router,Redis: ai_tagging, fast, telegram, etc.
+    end
+
+    Workers->>Redis: XREADGROUP (consume)
+    Redis->>Workers: Message batch
+    Workers->>Workers: Process
+    Workers->>Redis: XACK (complete)
+```
+
+**Priority Calculation**:
+
+```python
+def calculate_priority(msg) -> int:
+    """Calculate message priority (0-200)."""
+    # Base: importance_level
+    base = {
+        "critical": 100,
+        "high": 75,
+        "medium": 50,
+        "low": 25
+    }.get(msg.importance_level, 50)
+
+    # Bonus: channel_priority
+    channel_bonus = {
+        "critical": 50,
+        "high": 30,
+        "normal": 10,
+        "low": 0
+    }.get(msg.channel_priority, 10)
+
+    # Age boost: +2 per hour waiting (max +20)
+    hours_waiting = (now() - msg.created_at).total_seconds() / 3600
+    age_boost = min(int(hours_waiting * 2), 20)
+
+    return base + channel_bonus + age_boost
+```
+
+**Backpressure Control**:
+
+When a queue exceeds `BACKPRESSURE_HIGH` (default 1000), the router:
+
+1. Pauses routing to that queue
+2. Logs warning with queue depth
+3. Emits `enrichment_backpressure_active{queue="..."} 1` metric
+4. Resumes when queue drops below `BACKPRESSURE_LOW` (default 500)
+
+This prevents unbounded queue growth if workers can't keep up.
+
+**Task Discovery Queries**:
+
+The router uses task-specific queries to find work:
+
+```sql
+-- AI Tagging: Messages without AI tags
+SELECT m.id FROM messages m
+WHERE m.is_spam = false
+  AND m.content IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM message_tags mt
+    WHERE mt.message_id = m.id AND mt.generated_by = 'ai_tagging'
+  )
+LIMIT :batch_size;
+
+-- Embedding: Messages without embeddings
+SELECT m.id FROM messages m
+WHERE m.content_embedding IS NULL
+  AND m.content IS NOT NULL
+  AND m.is_spam = false
+LIMIT :batch_size;
+
+-- Translation: Non-English messages without translation
+SELECT m.id FROM messages m
+WHERE m.content_translated IS NULL
+  AND m.content IS NOT NULL
+  AND m.is_spam = false
+LIMIT :batch_size;
+```
+
+**Metrics**:
+
+```prometheus
+# Router cycle metrics
+enrichment_router_cycle_duration_seconds 2.5
+enrichment_router_messages_routed_total{queue="ai_tagging"} 1500
+
+# Backpressure metrics
+enrichment_backpressure_active{queue="ai_tagging"} 0
+enrichment_queue_depth{queue="ai_tagging"} 150
+```
+
+---
 
 ### 1. AI Tagging Worker
 
@@ -269,7 +537,7 @@ TASK_CLASSES = {
 
 **Queue**: `enrich:telegram`
 **File**: `/services/enrichment/src/workers/telegram_worker.py`
-**Tasks**: `engagement_polling`, `social_graph_extraction`, `comment_fetcher`, `comment_realtime`, `comment_backfill`, `forward_discovery`
+**Tasks**: `engagement_polling`, `social_graph_extraction`, `comment_fetcher`, `comment_realtime`, `comment_backfill`, `comment_ondemand`, `forward_discovery`
 
 **Configuration**:
 
@@ -356,12 +624,13 @@ METRICS_PORT=9202
 - **discovery_evaluator**: Score channel quality for recommendations
 - **wikidata_enrichment**: Enrich entities with Wikidata metadata
 
-### 7. Event Detection Worker
+### 7. Event Detection Worker (V2)
 
-**Purpose**: Multi-stage event detection pipeline
+**Purpose**: RSS-centric event detection pipeline - creates events from news articles, then links Telegram messages
 
-**Queue**: None (pipeline worker)
+**Queue**: None (pipeline worker, database-scan pattern)
 **File**: `/services/enrichment/src/workers/event_detection_worker.py`
+**Container**: `enrichment-event-detection`
 **Tasks**: `rss_event_creator`, `telegram_event_matcher`, `event_status_updater`
 
 **Configuration**:
@@ -369,34 +638,341 @@ METRICS_PORT=9202
 ```bash
 OLLAMA_HOST=http://ollama-batch:11434
 EVENT_DETECTION_MODEL=qwen2.5:3b
-TIME_BUDGET_SECONDS=300  # 5 minutes
+TIME_BUDGET_SECONDS=300  # 5 minutes total
 BATCH_SIZE=10
 CYCLE_INTERVAL_SECONDS=60
 METRICS_PORT=9098
+
+# Event matching thresholds
+EVENT_ENTITY_OVERLAP_THRESHOLD=1      # Min shared entities for matching
+EVENT_EMBEDDING_SIMILARITY_THRESHOLD=0.85  # Semantic similarity cutoff
+EVENT_TIME_WINDOW_HOURS=72            # Max hours between article and message
+```
+
+**Architecture Overview**:
+
+```mermaid
+graph TD
+    subgraph "Stage 1: RSS Event Creator"
+        A[RSS Articles<br/>No Event Link] --> B[LLM Extract<br/>Event Data]
+        B --> C{Event<br/>Exists?}
+        C -->|No| D[Create events_v2]
+        C -->|Yes| E[Link to Existing]
+    end
+
+    subgraph "Stage 2: Telegram Matcher"
+        F[Telegram Messages<br/>With Entities] --> G[Entity Overlap<br/>+ Embedding Similarity]
+        G --> H{Match<br/>Score ≥ 0.85?}
+        H -->|Yes| I[Link to Event]
+        H -->|No| J[Skip]
+    end
+
+    subgraph "Stage 3: Status Updater"
+        K[Events with<br/>Source Changes] --> L[Calculate<br/>Tier/Confidence]
+        L --> M[Update Status]
+    end
+
+    D --> F
+    E --> F
+    I --> K
+    J --> K
+
+    style B fill:#ffe1e1
+    style G fill:#e1f5ff
+    style L fill:#e1ffe1
 ```
 
 **Pipeline Stages**:
 
-```mermaid
-graph LR
-    A[RSS Articles] --> B[1. RSS Event Creator<br/>LLM Extract Events]
-    B --> C[2. Telegram Event Matcher<br/>LLM Link Messages]
-    C --> D[3. Event Status Updater<br/>Tier Progression]
+#### Stage 1: RSS Event Creator
 
-    style B fill:#ffe1e1
-    style C fill:#ffe1e1
-    style D fill:#e1ffe1
+**File**: `/services/enrichment/src/tasks/rss_event_creator.py`
+**LLM Required**: ✅ Yes
+
+Extracts structured event data from RSS articles using LLM analysis.
+
+**Process**:
+
+1. Query RSS articles without event links
+2. Call LLM to extract: event type, title, description, date, location, entities
+3. Check if similar event already exists (by embedding similarity)
+4. Create new `events_v2` record or link to existing
+5. Mark article as processed
+
+**LLM Prompt** (simplified):
+
+```
+Extract event information from this news article:
+
+Title: {article.title}
+Content: {article.content}
+
+Return JSON with:
+- event_type: military_action | political | humanitarian | infrastructure | other
+- title: Short event title
+- description: 2-3 sentence summary
+- date: Event date (if mentioned)
+- location: Geographic location
+- entities: List of people/organizations/equipment mentioned
 ```
 
-**Time Budget Allocation**:
-- Stage 1 (RSS Event Creator): 50% (150s)
-- Stage 2 (Telegram Matcher): 40% (120s)
-- Stage 3 (Status Updater): 10% (30s)
+**Output Schema** (events_v2):
 
-**Why Pipeline?**
-- Ensures events exist before matching
-- Status updates run after all new data linked
-- Dedicated LLM time budget (doesn't compete with AI tagging)
+```sql
+INSERT INTO events_v2 (
+    title, description, event_type, event_date,
+    location, status, tier, confidence,
+    created_from_source, created_from_source_id,
+    embedding
+)
+VALUES (
+    :title, :description, :event_type, :date,
+    :location, 'detected', 1, :confidence,
+    'rss_article', :article_id,
+    :embedding  -- Generated from title + description
+);
+```
+
+**Time Budget**: 50% (150s of 300s total)
+
+#### Stage 2: Telegram Event Matcher
+
+**File**: `/services/enrichment/src/tasks/telegram_event_matcher.py`
+**LLM Required**: ✅ Yes (uses embedding similarity for candidates, LLM to verify match)
+
+Links Telegram messages to existing events using a two-phase approach: embedding similarity for candidate selection, then LLM verification.
+
+**Matching Process**:
+
+```mermaid
+graph TD
+    A[Telegram Message] --> B[pgvector Similarity Search]
+    B --> C{Candidates Found?}
+    C -->|No| D[Skip Message]
+    C -->|Yes| E[LLM Verification]
+    E --> F{Match Confirmed?}
+    F -->|Yes| G[Link to Event]
+    F -->|No| H[Try Next Candidate]
+    H --> E
+```
+
+1. **Candidate Selection** (embedding similarity ≥ 0.75):
+   - Uses pgvector cosine distance against `events_v2.content_embedding`
+   - Returns top 3 most similar events
+   - Only considers non-archived events
+
+2. **LLM Verification** (uses `event_match` prompt):
+   - Verifies if message actually discusses the candidate event
+   - Returns confidence score, match reason, location match, entity overlap
+   - Requires confidence ≥ 0.7 to confirm match
+
+**Configuration**:
+
+```python
+similarity_threshold: float = 0.75,        # Min embedding similarity for candidates
+match_confidence_threshold: float = 0.7,   # Min LLM confidence to confirm match
+max_candidates: int = 3,                   # Max events to consider per message
+```
+
+**Candidate Query**:
+
+```sql
+SELECT
+    e.id, e.title, e.event_type, e.location_name,
+    e.event_date, e.summary,
+    1 - (e.content_embedding <=> CAST(:embedding AS vector)) as similarity
+FROM events_v2 e
+WHERE e.content_embedding IS NOT NULL
+  AND e.archived_at IS NULL
+  AND 1 - (e.content_embedding <=> :embedding) >= :threshold
+ORDER BY similarity DESC
+LIMIT :max_candidates
+```
+
+**LLM Verification Prompt** (`event_match` task):
+
+```
+TELEGRAM MESSAGE:
+{content}
+Channel: {channel_name}
+Date: {telegram_date}
+
+CANDIDATE EVENT:
+Title: {event_title}
+Type: {event_type}
+Location: {location}
+Date: {event_date}
+Summary: {summary}
+
+→ Returns JSON: {is_match, confidence, match_reason, location_match, entity_overlap}
+```
+
+**Output** (event_messages_v2):
+
+```sql
+INSERT INTO event_messages_v2 (
+    event_id, message_id, channel_id,
+    match_confidence, match_method
+)
+VALUES (
+    :event_id, :message_id, :channel_id,
+    :confidence, 'llm_verified'
+)
+ON CONFLICT (event_id, message_id) DO NOTHING
+```
+
+**Time Budget**: 40% (120s of 300s total)
+
+#### Stage 3: Event Status Updater
+
+**File**: `/services/enrichment/src/tasks/event_status_updater.py`
+**LLM Required**: ❌ No
+
+Updates event tier, confidence, and status based on linked sources.
+
+**Tier Progression**:
+
+| Tier | Criteria | Status |
+|------|----------|--------|
+| 1 | Single source | `detected` |
+| 2 | 2+ sources from different types | `confirmed` |
+| 3 | 5+ sources including official | `verified` |
+| 4 | Cross-referenced with sanctions/entities | `validated` |
+
+**Confidence Calculation**:
+
+```python
+def calculate_confidence(event) -> float:
+    """Calculate event confidence (0.0 - 1.0)."""
+    sources = get_event_sources(event.id)
+
+    base_confidence = 0.3  # Single source baseline
+
+    # Source diversity bonus
+    source_types = set(s.source_type for s in sources)
+    diversity_bonus = len(source_types) * 0.1  # +0.1 per unique type
+
+    # Source count bonus
+    count_bonus = min(len(sources) * 0.05, 0.2)  # Max +0.2
+
+    # Entity verification bonus
+    if event.has_verified_entities:
+        entity_bonus = 0.1
+    else:
+        entity_bonus = 0.0
+
+    return min(base_confidence + diversity_bonus + count_bonus + entity_bonus, 1.0)
+```
+
+**Update Query**:
+
+```sql
+UPDATE events_v2
+SET tier = :new_tier,
+    confidence = :new_confidence,
+    status = :new_status,
+    source_count = :source_count,
+    last_updated = NOW()
+WHERE id = :event_id
+  AND (tier != :new_tier OR confidence != :new_confidence)
+```
+
+**Time Budget**: 10% (30s of 300s total)
+
+**Why Pipeline Pattern?**
+
+The Event Detection Worker uses the database-scan pattern (not queue-based) for several reasons:
+
+1. **Sequential dependencies**: Events must exist before matching, matching must complete before status update
+2. **LLM isolation**: Dedicated 300s time budget prevents Ollama contention with AI tagging
+3. **Batch efficiency**: Processing related articles/messages together improves LLM context
+4. **Transaction guarantees**: ACID ensures event + links created atomically
+
+**Database Schema** (events_v2):
+
+```sql
+-- Main events table
+CREATE TABLE events_v2 (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    summary TEXT,
+    event_type VARCHAR(50) NOT NULL,
+    event_date DATE,
+    location_name TEXT,
+    tier_status VARCHAR(20) DEFAULT 'breaking',  -- breaking, developing, confirmed, archived
+    rss_source_count INTEGER DEFAULT 1,
+    content_embedding VECTOR(384),               -- For similarity matching
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_activity_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    archived_at TIMESTAMP WITH TIME ZONE         -- NULL = active
+);
+
+-- Links RSS articles (authoritative sources) to events
+CREATE TABLE event_sources_v2 (
+    id SERIAL PRIMARY KEY,
+    event_id INTEGER REFERENCES events_v2(id) ON DELETE CASCADE,
+    article_id INTEGER REFERENCES external_news(id) ON DELETE CASCADE,
+    is_primary_source BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(event_id, article_id)
+);
+
+-- Links Telegram messages to events
+CREATE TABLE event_messages_v2 (
+    id SERIAL PRIMARY KEY,
+    event_id INTEGER REFERENCES events_v2(id) ON DELETE CASCADE,
+    message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+    channel_id INTEGER REFERENCES channels(id),   -- Denormalized for query efficiency
+    match_confidence FLOAT NOT NULL,              -- LLM confidence (0.0-1.0)
+    match_method VARCHAR(20) DEFAULT 'llm_verified',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(event_id, message_id)
+);
+
+-- Helper function for finding similar events
+CREATE OR REPLACE FUNCTION find_similar_events_v2(
+    query_embedding VECTOR,
+    similarity_threshold FLOAT DEFAULT 0.78,
+    max_results INT DEFAULT 1,
+    max_hours_old INT DEFAULT 48
+)
+RETURNS TABLE(event_id INT, title TEXT, similarity FLOAT) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        e.id,
+        e.title,
+        1 - (e.content_embedding <=> query_embedding) as sim
+    FROM events_v2 e
+    WHERE e.content_embedding IS NOT NULL
+      AND e.archived_at IS NULL
+      AND e.created_at > NOW() - (max_hours_old || ' hours')::INTERVAL
+      AND 1 - (e.content_embedding <=> query_embedding) >= similarity_threshold
+    ORDER BY sim DESC
+    LIMIT max_results;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+!!! warning "Known Schema Issue"
+    The `event_messages_v2` table includes `channel_id` as a denormalized column for query efficiency.
+    The channel is technically available via `messages.channel_id`, but storing it directly avoids
+    a join when querying events by channel coverage.
+
+**Metrics**:
+
+```prometheus
+# Stage metrics
+enrichment_event_stage_duration_seconds{stage="rss_event_creator"} 45.2
+enrichment_event_stage_duration_seconds{stage="telegram_matcher"} 38.1
+enrichment_event_stage_duration_seconds{stage="status_updater"} 5.3
+
+# Event metrics
+enrichment_events_created_total 150
+enrichment_events_matched_messages_total 1250
+enrichment_events_tier_transitions_total{from="1", to="2"} 45
+```
 
 ### Wikidata Enrichment
 
@@ -543,24 +1119,6 @@ Wikidata enrichment runs automatically via the Maintenance Worker, but can also 
 - [`entity_relationships`](../../reference/database-tables.md#entity_relationships) - Dedicated relationship storage (alternative to JSONB)
 
 ---
-
-### 8. Coordinator (Legacy)
-
-**Purpose**: Original batch processor (being phased out)
-
-**Queue**: None (polls DB directly)
-**File**: `/services/enrichment/src/coordinator.py`
-**Tasks**: Any task not assigned to dedicated worker
-
-**Why Deprecated?**
-
-- LLM tasks run sequentially (prevents Ollama contention)
-- Non-LLM tasks run in parallel (slower than dedicated workers)
-- No Redis queue (less efficient work distribution)
-- All tasks share same time budget
-
-**Migration Path**:
-New tasks should use dedicated workers. Coordinator remains for backward compatibility.
 
 ## Key Tasks
 
@@ -874,6 +1432,120 @@ async def fetch_comments(channel_id: int, msg_id: int, discussion_group_id: int)
 - Default: **Off** (translations cached, fetched on-demand via API)
 - Optional: Enable auto-translate with `COMMENT_AUTO_TRANSLATE=true`
 
+#### Forward Discovery
+
+**File**: `/services/enrichment/src/tasks/forward_discovery.py`
+
+Automatically discovers new channels from message forwards - a "snowball" discovery mechanism.
+
+**How It Works**:
+
+```mermaid
+graph LR
+    A[Archived Message] --> B{Has Forward?}
+    B -->|Yes| C[Extract Source Channel]
+    C --> D{Channel Known?}
+    D -->|No| E[Add to Discovery Queue]
+    D -->|Yes| F[Skip]
+    E --> G[Auto-Join if Criteria Met]
+    G --> H[Start Monitoring]
+
+    style E fill:#e1f5ff
+    style G fill:#e1ffe1
+```
+
+1. **Message Scan**: Queries messages with `forward_from_chat` metadata
+2. **Channel Extraction**: Extracts source channel ID from forward header
+3. **Deduplication**: Checks if channel already in `channels` or `channel_discovery_queue`
+4. **Quality Scoring**: Scores channel based on forward frequency and source reputation
+5. **Auto-Join Decision**: Channels with score ≥70 auto-joined to probation folder
+
+**Query**:
+
+```sql
+SELECT m.id, m.metadata->>'forward_from_chat' as forward_channel_id
+FROM messages m
+WHERE m.metadata ? 'forward_from_chat'
+  AND NOT EXISTS (
+    SELECT 1 FROM channel_discovery_queue cdq
+    WHERE cdq.telegram_id = (m.metadata->>'forward_from_chat')::bigint
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM channels c
+    WHERE c.telegram_id = (m.metadata->>'forward_from_chat')::bigint
+  )
+ORDER BY m.telegram_date DESC
+LIMIT :batch_size
+```
+
+**Output**:
+
+```sql
+INSERT INTO channel_discovery_queue (
+    telegram_id, discovered_via, discovered_from_channel_id,
+    discovery_count, first_seen, status
+)
+VALUES (:channel_id, 'forward', :source_channel_id, 1, NOW(), 'pending')
+ON CONFLICT (telegram_id) DO UPDATE
+SET discovery_count = channel_discovery_queue.discovery_count + 1,
+    last_seen = NOW()
+```
+
+**Priority**: 50 (background maintenance)
+**Worker**: Maintenance Worker (database-scan pattern)
+
+#### Comment On-Demand
+
+**File**: `/services/enrichment/src/tasks/comment_ondemand.py`
+
+API-triggered comment fetching for specific messages. Unlike scheduled comment tasks, this responds to user requests.
+
+**Trigger Flow**:
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant API
+    participant Redis
+    participant TelegramWorker
+    participant Telegram
+
+    User->>API: GET /messages/{id}/comments?refresh=true
+    API->>Redis: XADD enrich:telegram {msg_id, task: comment_ondemand}
+    API->>User: 202 Accepted (fetching)
+    Redis->>TelegramWorker: Dequeue task
+    TelegramWorker->>Telegram: GetReplies(msg_id)
+    Telegram->>TelegramWorker: Comments[]
+    TelegramWorker->>DB: Upsert comments
+    User->>API: GET /messages/{id}/comments
+    API->>User: 200 OK (comments)
+```
+
+**Use Cases**:
+
+1. **User requests comments**: Frontend refresh button triggers fetch
+2. **Viral post detection**: High-engagement posts trigger immediate fetch
+3. **Investigation mode**: Analyst needs current comments on specific message
+
+**Query** (checks if fetch needed):
+
+```sql
+SELECT m.id, m.channel_id, m.telegram_message_id,
+       c.discussion_group_id,
+       m.last_comment_fetch
+FROM messages m
+JOIN channels c ON m.channel_id = c.id
+WHERE m.id = :message_id
+  AND c.discussion_group_id IS NOT NULL
+  AND (
+    m.last_comment_fetch IS NULL
+    OR m.last_comment_fetch < NOW() - INTERVAL '5 minutes'
+  )
+```
+
+**Priority**: 75 (high - user-triggered)
+**Worker**: Telegram Worker (queue-based pattern)
+
 ## Configuration
 
 ### Environment Variables
@@ -1065,6 +1737,8 @@ TASK_TO_QUEUE = {
     "comment_fetcher": "telegram",
     "comment_realtime": "telegram",
     "comment_backfill": "telegram",
+    "comment_ondemand": "telegram",
+    "forward_discovery": "telegram",
 
     # Decision tasks
     "decision_verifier": "decision",
@@ -1129,32 +1803,25 @@ done
 
 ### Prometheus Endpoints
 
-Each worker exposes metrics on unique port:
+Each worker exposes metrics on a unique port:
+
+| Worker | Metrics Port | Container Name |
+|--------|--------------|----------------|
+| **Router** | 9198 | `osint-enrichment-router` |
+| **AI Tagging** | 9096 | `osint-enrichment-ai-tagging` |
+| **RSS Validation** | 9097 | `osint-enrichment-rss-validation` |
+| **Event Detection** | 9098 | `osint-enrichment-event-detection` |
+| **Fast Pool** | 9199 | `osint-enrichment-fast-pool` |
+| **Telegram** | 9200 | `osint-enrichment-telegram` |
+| **Decision** | 9201 | `osint-enrichment-decision` |
+| **Maintenance** | 9202 | `osint-enrichment-maintenance` |
+
+**Quick check all endpoints**:
 
 ```bash
-# Router
-curl http://localhost:9198/metrics
-
-# AI Tagging Worker
-curl http://localhost:9096/metrics
-
-# RSS Validation Worker
-curl http://localhost:9097/metrics
-
-# Fast Pool Worker
-curl http://localhost:9199/metrics
-
-# Telegram Worker
-curl http://localhost:9200/metrics
-
-# Decision Worker
-curl http://localhost:9201/metrics
-
-# Maintenance Worker
-curl http://localhost:9202/metrics
-
-# Event Detection Worker
-curl http://localhost:9098/metrics
+for port in 9198 9096 9097 9098 9199 9200 9201 9202; do
+  echo "Port $port: $(curl -s http://localhost:$port/metrics | head -1)"
+done
 ```
 
 ### Key Metrics
@@ -1415,9 +2082,8 @@ MAX_OVERFLOW=10
 
 | File | Purpose |
 |------|---------|
-| `/services/enrichment/src/main.py` | Service entry point (deprecated coordinator) |
-| `/services/enrichment/src/coordinator.py` | Legacy batch processor |
-| `/services/enrichment/src/router.py` | Message router (DB → Redis) |
+| `/services/enrichment/src/main.py` | Service entry point |
+| `/services/enrichment/src/router.py` | Message router (DB → Redis queues) |
 | `/services/enrichment/src/config.py` | Configuration management |
 | `/services/enrichment/src/redis_queue.py` | Redis Streams queue implementation |
 | `/services/enrichment/src/metrics.py` | Prometheus metrics |
@@ -1436,7 +2102,7 @@ MAX_OVERFLOW=10
 | `/services/enrichment/src/workers/maintenance_worker.py` | Maintenance worker |
 | `/services/enrichment/src/workers/event_detection_worker.py` | Event detection pipeline |
 
-### Task Files (26 total)
+### Task Files (22 total)
 
 | Task | File | Type |
 |------|------|------|
@@ -1451,6 +2117,7 @@ MAX_OVERFLOW=10
 | Comment Fetcher | `/services/enrichment/src/tasks/comment_fetcher.py` | Telegram |
 | Comment Realtime | `/services/enrichment/src/tasks/comment_realtime.py` | Telegram |
 | Comment Backfill | `/services/enrichment/src/tasks/comment_backfill.py` | Telegram |
+| Comment On-Demand | `/services/enrichment/src/tasks/comment_ondemand.py` | Telegram |
 | Forward Discovery | `/services/enrichment/src/tasks/forward_discovery.py` | Telegram |
 | RSS Event Creator | `/services/enrichment/src/tasks/rss_event_creator.py` | LLM |
 | Telegram Event Matcher | `/services/enrichment/src/tasks/telegram_event_matcher.py` | LLM |
@@ -1462,10 +2129,77 @@ MAX_OVERFLOW=10
 | Discovery Evaluator | `/services/enrichment/src/tasks/discovery_evaluator.py` | CPU |
 | Wikidata Enrichment | `/services/enrichment/src/tasks/wikidata_enrichment.py` | CPU |
 
+## Known Issues
+
+!!! warning "Event Detection V2 - Known Limitations"
+
+    The following are known issues and limitations in the current Event Detection V2 implementation:
+
+### 1. Schema Considerations
+
+**`event_messages_v2.channel_id` Denormalization**
+
+The `channel_id` column is stored directly in `event_messages_v2` even though it could be derived via `messages.channel_id`. This is intentional for query performance (avoids join when aggregating events by channel coverage), but creates potential for data inconsistency if message channel changes.
+
+**Mitigation**: Messages don't change channels, so this is acceptable. Consider a trigger if this assumption changes.
+
+### 2. Prompt Versioning
+
+**Single Active Prompt per Task**
+
+Only the latest active prompt is used for `event_extract` and `event_match` tasks. There's no:
+- A/B testing between prompt versions
+- Rollback UI in admin interface
+- Automatic fallback if prompt parse fails
+
+**Impact**: Prompt changes require careful testing. Bad prompt could affect all event detection until reverted.
+
+**Workaround**: Test new prompts manually before activating. Use `is_active=false` for draft prompts.
+
+### 3. Embedding Storage Redundancy
+
+**Dual Embedding Storage**
+
+Both `events_v2.content_embedding` and `external_news.embedding` store 384-dimension vectors. When an event is created from an RSS article, the article's embedding is copied to the event.
+
+**Impact**: ~3KB per event of storage redundancy.
+
+**Justification**: Enables independent lifecycle - events can be updated/re-embedded without affecting source articles.
+
+### 4. Cascade Delete Behavior
+
+**Hard Delete Propagation**
+
+Deleting an RSS article (`external_news`) will cascade delete its event source links (`event_sources_v2`). If this was the only source, the event becomes orphaned but remains.
+
+**Impact**: No soft delete means no audit trail for removed content.
+
+**Recommendation**: Consider adding `deleted_at` columns for soft delete if audit trail becomes important.
+
+### 5. Time Window Constraints
+
+**48-Hour Matching Window**
+
+The Telegram Event Matcher only considers messages from the last 48 hours. Older messages won't be matched to events even if semantically relevant.
+
+**Impact**: Late-breaking Telegram coverage of older events won't be linked.
+
+**Workaround**: Increase `INTERVAL '48 hours'` in matcher query if longer windows needed. Trade-off is query performance.
+
+### 6. LLM Contention
+
+**Dedicated Worker Isolation**
+
+Event Detection uses a separate Ollama instance (`ollama-batch`) and dedicated 300s time budget. However, if AI Tagging also runs against `ollama-batch`, they will contend.
+
+**Mitigation**: Current architecture routes AI Tagging to separate Ollama instance. Ensure `OLLAMA_HOST` is correctly configured per worker.
+
+---
+
 ## See Also
 
 - [Processor Service](processor.md) - Real-time message processing
 - [API Service](api.md) - REST API endpoints
-- [Database Schema](/home/rick/code/osintukraine/osint-intelligence-platform/infrastructure/postgres/init.sql) - PostgreSQL schema
-- [LLM Prompts](/home/rick/code/osintukraine/osint-intelligence-platform/docs/architecture/LLM_PROMPTS.md) - LLM prompt design
-- [Knowledge Graph](/home/rick/code/osintukraine/osint-intelligence-platform/docs/architecture/KNOWLEDGE_GRAPH_ARCHITECTURE.md) - Entity matching details
+- [Database Schema](../../reference/database-tables.md) - Database table reference
+- [LLM Integration](../llm-integration.md) - LLM prompt design and usage
+- [Knowledge Graph Architecture](../../concepts/knowledge-graph.md) - Entity matching details
