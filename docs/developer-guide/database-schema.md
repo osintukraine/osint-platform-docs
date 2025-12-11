@@ -285,7 +285,7 @@ CREATE TABLE IF NOT EXISTS llm_prompts (
 Detected OSINT events:
 
 ```sql
-CREATE TABLE IF NOT EXISTS events_v2 (
+CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
     event_id VARCHAR(100) UNIQUE NOT NULL,
 
@@ -417,7 +417,7 @@ erDiagram
 
     opensanctions_entities ||--o{ opensanctions_message_entities : mentioned_in
 
-    events_v2 ||--o{ event_messages_v2 : contains
+    events ||--o{ event_messages : contains
 
     rss_feeds ||--o{ external_news : produces
     external_news ||--o{ message_news_correlations : correlates
@@ -435,7 +435,7 @@ erDiagram
 | **Auth** | feed_tokens, export_jobs |
 | **AI/LLM** | llm_prompts, model_configuration, message_tags, tag_stats |
 | **Entities** | curated_entities, opensanctions_entities, message_entities, opensanctions_message_entities, entity_relationships |
-| **Events** | events_v2, event_messages_v2, event_sources_v2, event_config |
+| **Events** | events, event_messages, event_sources, event_config |
 | **RSS** | rss_feeds, news_sources, external_news, message_validations, message_news_correlations |
 | **Translation** | translation_config, translation_usage |
 | **Config** | platform_config, folder_rules, military_slang |

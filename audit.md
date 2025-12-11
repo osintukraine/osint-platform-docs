@@ -219,9 +219,9 @@ Documentation Audit Report: OSINT Intelligence Platform
        From the grep output, these tables exist but aren't fully documented:
 
        1. export_jobs (line 87 in init.sql)
-       2. events_v2 (line 500) - Documented as "Events & Incidents (V2)" but implementation details missing
-       3. event_messages_v2 (line 555)
-       4. event_sources_v2 (line 580)
+       2. events (line 500) - Documented as "Events & Incidents" but implementation details missing
+       3. event_messages (line 555)
+       4. event_sources (line 580)
        5. event_config (line 604)
        6. translation_config (line 740)
        7. translation_usage (line 756)

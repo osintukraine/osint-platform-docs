@@ -71,9 +71,9 @@
 |-------|---------|----------|
 | `entity_relationships` | Wikidata relationship storage | CRITICAL |
 | `export_jobs` | Export job tracking | Medium |
-| `events_v2` | Event detection V2 | Medium |
-| `event_messages_v2` | Event-message links | Medium |
-| `event_sources_v2` | Event sources | Medium |
+| `events` | Event detection V2 | Medium |
+| `event_messages` | Event-message links | Medium |
+| `event_sources` | Event sources | Medium |
 | `event_config` | Event configuration | Medium |
 | `translation_config` | Translation settings | Low |
 | `translation_usage` | DeepL usage tracking | Low |
@@ -857,7 +857,7 @@ The platform uses Docker Compose profiles for modular deployment:
 **Action:** NEW
 
 **Source files to verify:**
-- `infrastructure/postgres/init.sql` (events_v2 tables)
+- `infrastructure/postgres/init.sql` (events tables)
 - `services/enrichment/src/tasks/` (event detection)
 
 **Content:**
@@ -1044,7 +1044,7 @@ All pull requests MUST include documentation updates if they:
 **Action:** UPDATE - Document remaining tables from Phase 1
 
 **Tables to complete (if not fully done in 1.2):**
-- events_v2, event_messages_v2, event_sources_v2, event_config
+- events, event_messages, event_sources, event_config
 - export_jobs
 - translation_config, translation_usage
 - news_sources, external_news

@@ -656,7 +656,7 @@ graph TD
     subgraph "Stage 1: RSS Event Creator"
         A[RSS Articles<br/>No Event Link] --> B[LLM Extract<br/>Event Data]
         B --> C{Event<br/>Exists?}
-        C -->|No| D[Create events_v2]
+        C -->|No| D[Create events]
         C -->|Yes| E[Link to Existing]
     end
 
@@ -696,7 +696,7 @@ Extracts structured event data from RSS articles using LLM analysis.
 1. Query RSS articles without event links
 2. Call LLM to extract: event type, title, description, date, location, entities
 3. Check if similar event already exists (by embedding similarity)
-4. Create new `events_v2` record or link to existing
+4. Create new `events` record or link to existing
 5. Mark article as processed
 
 **LLM Prompt** (simplified):
@@ -716,10 +716,10 @@ Return JSON with:
 - entities: List of people/organizations/equipment mentioned
 ```
 
-**Output Schema** (events_v2):
+**Output Schema** (events):
 
 ```sql
-INSERT INTO events_v2 (
+INSERT INTO events (
     title, description, event_type, event_date,
     location, status, tier, confidence,
     created_from_source, created_from_source_id,
@@ -757,7 +757,7 @@ graph TD
 ```
 
 1. **Candidate Selection** (embedding similarity ≥ 0.75):
-   - Uses pgvector cosine distance against `events_v2.content_embedding`
+   - Uses pgvector cosine distance against `events.content_embedding`
    - Returns top 3 most similar events
    - Only considers non-archived events
 
@@ -781,7 +781,7 @@ SELECT
     e.id, e.title, e.event_type, e.location_name,
     e.event_date, e.summary,
     1 - (e.content_embedding <=> CAST(:embedding AS vector)) as similarity
-FROM events_v2 e
+FROM events e
 WHERE e.content_embedding IS NOT NULL
   AND e.archived_at IS NULL
   AND 1 - (e.content_embedding <=> :embedding) >= :threshold
@@ -807,10 +807,10 @@ Summary: {summary}
 → Returns JSON: {is_match, confidence, match_reason, location_match, entity_overlap}
 ```
 
-**Output** (event_messages_v2):
+**Output** (event_messages):
 
 ```sql
-INSERT INTO event_messages_v2 (
+INSERT INTO event_messages (
     event_id, message_id, channel_id,
     match_confidence, match_method
 )
@@ -867,7 +867,7 @@ def calculate_confidence(event) -> float:
 **Update Query**:
 
 ```sql
-UPDATE events_v2
+UPDATE events
 SET tier = :new_tier,
     confidence = :new_confidence,
     status = :new_status,
@@ -888,11 +888,11 @@ The Event Detection Worker uses the database-scan pattern (not queue-based) for 
 3. **Batch efficiency**: Processing related articles/messages together improves LLM context
 4. **Transaction guarantees**: ACID ensures event + links created atomically
 
-**Database Schema** (events_v2):
+**Database Schema** (events):
 
 ```sql
 -- Main events table
-CREATE TABLE events_v2 (
+CREATE TABLE events (
     id SERIAL PRIMARY KEY,
     title TEXT NOT NULL,
     summary TEXT,
@@ -909,9 +909,9 @@ CREATE TABLE events_v2 (
 );
 
 -- Links RSS articles (authoritative sources) to events
-CREATE TABLE event_sources_v2 (
+CREATE TABLE event_sources (
     id SERIAL PRIMARY KEY,
-    event_id INTEGER REFERENCES events_v2(id) ON DELETE CASCADE,
+    event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
     article_id INTEGER REFERENCES external_news(id) ON DELETE CASCADE,
     is_primary_source BOOLEAN DEFAULT false,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -919,9 +919,9 @@ CREATE TABLE event_sources_v2 (
 );
 
 -- Links Telegram messages to events
-CREATE TABLE event_messages_v2 (
+CREATE TABLE event_messages (
     id SERIAL PRIMARY KEY,
-    event_id INTEGER REFERENCES events_v2(id) ON DELETE CASCADE,
+    event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
     message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
     channel_id INTEGER REFERENCES channels(id),   -- Denormalized for query efficiency
     match_confidence FLOAT NOT NULL,              -- LLM confidence (0.0-1.0)
@@ -931,7 +931,7 @@ CREATE TABLE event_messages_v2 (
 );
 
 -- Helper function for finding similar events
-CREATE OR REPLACE FUNCTION find_similar_events_v2(
+CREATE OR REPLACE FUNCTION find_similar_events(
     query_embedding VECTOR,
     similarity_threshold FLOAT DEFAULT 0.78,
     max_results INT DEFAULT 1,
@@ -944,7 +944,7 @@ BEGIN
         e.id,
         e.title,
         1 - (e.content_embedding <=> query_embedding) as sim
-    FROM events_v2 e
+    FROM events e
     WHERE e.content_embedding IS NOT NULL
       AND e.archived_at IS NULL
       AND e.created_at > NOW() - (max_hours_old || ' hours')::INTERVAL
@@ -956,7 +956,7 @@ $$ LANGUAGE plpgsql;
 ```
 
 !!! warning "Known Schema Issue"
-    The `event_messages_v2` table includes `channel_id` as a denormalized column for query efficiency.
+    The `event_messages` table includes `channel_id` as a denormalized column for query efficiency.
     The channel is technically available via `messages.channel_id`, but storing it directly avoids
     a join when querying events by channel coverage.
 
@@ -2137,9 +2137,9 @@ MAX_OVERFLOW=10
 
 ### 1. Schema Considerations
 
-**`event_messages_v2.channel_id` Denormalization**
+**`event_messages.channel_id` Denormalization**
 
-The `channel_id` column is stored directly in `event_messages_v2` even though it could be derived via `messages.channel_id`. This is intentional for query performance (avoids join when aggregating events by channel coverage), but creates potential for data inconsistency if message channel changes.
+The `channel_id` column is stored directly in `event_messages` even though it could be derived via `messages.channel_id`. This is intentional for query performance (avoids join when aggregating events by channel coverage), but creates potential for data inconsistency if message channel changes.
 
 **Mitigation**: Messages don't change channels, so this is acceptable. Consider a trigger if this assumption changes.
 
@@ -2160,7 +2160,7 @@ Only the latest active prompt is used for `event_extract` and `event_match` task
 
 **Dual Embedding Storage**
 
-Both `events_v2.content_embedding` and `external_news.embedding` store 384-dimension vectors. When an event is created from an RSS article, the article's embedding is copied to the event.
+Both `events.content_embedding` and `external_news.embedding` store 384-dimension vectors. When an event is created from an RSS article, the article's embedding is copied to the event.
 
 **Impact**: ~3KB per event of storage redundancy.
 
@@ -2170,7 +2170,7 @@ Both `events_v2.content_embedding` and `external_news.embedding` store 384-dimen
 
 **Hard Delete Propagation**
 
-Deleting an RSS article (`external_news`) will cascade delete its event source links (`event_sources_v2`). If this was the only source, the event becomes orphaned but remains.
+Deleting an RSS article (`external_news`) will cascade delete its event source links (`event_sources`). If this was the only source, the event becomes orphaned but remains.
 
 **Impact**: No soft delete means no audit trail for removed content.
 

@@ -135,7 +135,7 @@ Deduplication: Same file = same hash = single storage.
 
 **Tables with embeddings**:
 - `messages.content_embedding` - Message semantic search
-- `events_v2.content_embedding` - Event similarity
+- `events.content_embedding` - Event similarity
 - `curated_entities.entity_embedding` - Entity matching
 - `opensanctions_entities.entity_embedding` - Sanctions entities
 - `external_news.embedding` - RSS article search

@@ -99,7 +99,7 @@ All Telegram messages after spam filtering.
 **Foreign Keys**:
 - `channel_id` → `channels(id)` ON DELETE CASCADE
 
-**Related Tables**: `message_media`, `message_tags`, `message_entities`, `message_quarantine`, `event_messages_v2`
+**Related Tables**: `message_media`, `message_tags`, `message_entities`, `message_quarantine`, `event_messages`
 
 ---
 
@@ -340,9 +340,8 @@ Tag popularity tracking for autocomplete and trending tags.
 
 ---
 
-## Events & Incidents (V2)
-
-### `events_v2`
+## Events & Incidents 
+### `events`
 
 Real-world incidents detected from RSS articles and Telegram clustering.
 
@@ -366,18 +365,18 @@ Real-world incidents detected from RSS articles and Telegram clustering.
 - `archived_at` (TIMESTAMPTZ): NULL = active
 
 **Important Indexes**:
-- `idx_events_v2_tier_status` (WHERE archived_at IS NULL)
-- `idx_events_v2_is_major` (WHERE is_major = TRUE)
-- `idx_events_v2_last_activity`
-- `idx_events_v2_event_type`
-- `idx_events_v2_embedding` (IVFFLAT)
-- `idx_events_v2_search_vector` (GIN)
+- `idx_events_tier_status` (WHERE archived_at IS NULL)
+- `idx_events_is_major` (WHERE is_major = TRUE)
+- `idx_events_last_activity`
+- `idx_events_event_type`
+- `idx_events_embedding` (IVFFLAT)
+- `idx_events_search_vector` (GIN)
 
-**Related Tables**: `event_messages_v2`, `event_sources_v2`, `event_config`
+**Related Tables**: `event_messages`, `event_sources`, `event_config`
 
 ---
 
-### `event_messages_v2`
+### `event_messages`
 
 Junction table linking Telegram messages to events.
 
@@ -385,24 +384,24 @@ Junction table linking Telegram messages to events.
 
 **Key Columns**:
 - `id` (BIGSERIAL PRIMARY KEY)
-- `event_id` (BIGINT FK → events_v2)
+- `event_id` (BIGINT FK → events)
 - `message_id` (BIGINT FK → messages)
 - `match_confidence` (NUMERIC(4,3)): 0.000-1.000
 - `match_method` (VARCHAR): embedding_similarity, location_match, llm_confirmed, cluster_detection
 - `matched_at` (TIMESTAMPTZ)
 
 **Important Indexes**:
-- `idx_event_messages_v2_message`
-- `idx_event_messages_v2_event`
-- `uq_event_messages_v2` (UNIQUE on event_id, message_id)
+- `idx_event_messages_message`
+- `idx_event_messages_event`
+- `uq_event_messages` (UNIQUE on event_id, message_id)
 
 **Foreign Keys**:
-- `event_id` → `events_v2(id)` ON DELETE CASCADE
+- `event_id` → `events(id)` ON DELETE CASCADE
 - `message_id` → `messages(id)` ON DELETE CASCADE
 
 ---
 
-### `event_sources_v2`
+### `event_sources`
 
 Links RSS articles to events (validation layer).
 
@@ -410,19 +409,19 @@ Links RSS articles to events (validation layer).
 
 **Key Columns**:
 - `id` (BIGSERIAL PRIMARY KEY)
-- `event_id` (BIGINT FK → events_v2)
+- `event_id` (BIGINT FK → events)
 - `rss_article_id` (BIGINT FK → external_news)
 - `is_primary_source` (BOOLEAN): The article that created/seeded the event
 - `linked_at` (TIMESTAMPTZ)
 
 **Important Indexes**:
-- `idx_event_sources_v2_event`
-- `idx_event_sources_v2_article`
-- `idx_event_sources_v2_primary` (WHERE is_primary_source = TRUE)
-- `uq_event_sources_v2` (UNIQUE on event_id, rss_article_id)
+- `idx_event_sources_event`
+- `idx_event_sources_article`
+- `idx_event_sources_primary` (WHERE is_primary_source = TRUE)
+- `uq_event_sources` (UNIQUE on event_id, rss_article_id)
 
 **Foreign Keys**:
-- `event_id` → `events_v2(id)` ON DELETE CASCADE
+- `event_id` → `events(id)` ON DELETE CASCADE
 - `rss_article_id` → `external_news(id)` ON DELETE CASCADE
 
 ---
@@ -693,7 +692,7 @@ RSS articles for cross-correlation and fact-checking.
 - `feed_id` → `rss_feeds(id)` ON DELETE SET NULL
 - `source_id` → `news_sources(id)` ON DELETE SET NULL
 
-**Related Tables**: `message_news_correlations`, `event_sources_v2`
+**Related Tables**: `message_news_correlations`, `event_sources`
 
 ---
 
@@ -1373,7 +1372,7 @@ Combines full-text search + vector similarity.
 
 ---
 
-### `find_similar_events_v2(embedding, threshold, limit, hours_lookback)`
+### `find_similar_events(embedding, threshold, limit, hours_lookback)`
 
 Find similar events for novelty detection (deduplication).
 
@@ -1394,7 +1393,7 @@ Returns user role: anonymous, authenticated, admin, moderator
 - `update_channels_updated_at` - Auto-update channels.updated_at on UPDATE
 - `update_messages_updated_at` - Auto-update messages.updated_at on UPDATE
 - `messages_search_vector_trigger` - Auto-populate search_vector from content + translated_content
-- `events_v2_search_vector_trigger` - Auto-populate events_v2.search_vector
+- `events_search_vector_trigger` - Auto-populate events.search_vector
 - `external_news_search_vector_trigger` - Auto-populate external_news.search_vector
 
 ### Statistics triggers
@@ -1477,7 +1476,7 @@ Used for frequent, high-quality searches (messages, opensanctions_entities).
 
 ### IVFFLAT Indexes (pgvector)
 
-Used for large datasets with less frequent searches (events_v2, curated_entities, external_news).
+Used for large datasets with less frequent searches (events, curated_entities, external_news).
 
 **Parameters**: lists=100
 
@@ -1508,7 +1507,7 @@ WHERE clauses optimize storage and query performance:
 ### Vector Search Performance
 
 - **messages.content_embedding**: HNSW for <100ms semantic search on 1M+ messages
-- **events_v2.content_embedding**: IVFFLAT for event deduplication (less frequent)
+- **events.content_embedding**: IVFFLAT for event deduplication (less frequent)
 - **Similarity thresholds**: 0.85 for auto-linking, 0.75 for LLM confirmation, 0.88 for novelty detection
 
 ### Full-Text Search Performance
