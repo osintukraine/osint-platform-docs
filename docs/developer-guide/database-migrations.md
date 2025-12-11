@@ -4,337 +4,480 @@ Guide for modifying the database schema in the OSINT Intelligence Platform.
 
 ---
 
-## Philosophy: No Alembic
+## Philosophy: Hybrid Migration Strategy
 
-The platform uses `init.sql` as the single source of truth. **No Alembic migrations.**
+The platform uses a **hybrid approach** combining the best of both worlds:
 
-### Why?
+- **`init.sql`** - Single source of truth for fresh deployments
+- **SQL migrations** - Incremental changes for production systems
 
-1. **Simplicity**: One file defines complete schema
-2. **Self-hosted**: Full control over deployment timing
-3. **Clean testing**: Always start from known state
-4. **Predictable**: No migration ordering issues
-5. **Readable**: Entire schema visible in one place
+### Why Hybrid?
 
-### When This Works Well
+| Approach | Fresh Install | Production Update |
+|----------|---------------|-------------------|
+| init.sql only | Perfect | Requires data wipe |
+| Migrations only | Complex ordering | Perfect |
+| **Hybrid** | **Perfect** | **Perfect** |
 
-- Self-hosted deployments with controlled update windows
-- Teams comfortable with SQL
-- Projects where data can be re-imported if needed
+This mirrors industry standards used by GitLab, Mastodon, and other mature platforms.
 
-### When This Is Challenging
+### Benefits
 
-- Zero-downtime requirements (requires manual migration scripts)
-- Frequent schema changes with production data
-- Multiple deployment environments with different schema versions
+1. **Fresh installs**: Clean, fast bootstrap from `init.sql`
+2. **Production updates**: Safe incremental migrations without data loss
+3. **Schema tracking**: `schema_migrations` table tracks applied changes
+4. **Predictable**: No ORM magic, pure SQL you can review
+5. **Rollback**: Each migration includes DOWN instructions
 
 ---
 
-## Schema Location
+## Schema Locations
 
-**Source of truth**: `infrastructure/postgres/init.sql`
+### Source of Truth
 
-This file:
+**`infrastructure/postgres/init.sql`**
+
 - Creates all tables, indexes, constraints
 - Defines all functions and triggers
 - Inserts seed data (prompts, slang, etc.)
 - ~3000+ lines (complete schema)
+- Used for fresh deployments
+
+### Migration Files
+
+**`infrastructure/postgres/migrations/`**
+
+- `000_template.sql` - Template for new migrations
+- `001_*.sql`, `002_*.sql`, etc. - Incremental migrations
+- `README.md` - Migration workflow documentation
+
+### Migration Tracking
+
+**`schema_migrations` table**
+
+```sql
+CREATE TABLE schema_migrations (
+    version VARCHAR(50) PRIMARY KEY,      -- '001', '002', etc.
+    description TEXT NOT NULL,            -- Human-readable description
+    applied_at TIMESTAMPTZ DEFAULT NOW(), -- When applied
+    checksum VARCHAR(64),                 -- Optional integrity check
+    applied_by VARCHAR(100)               -- Who ran it
+);
+```
 
 ---
 
-## Making Schema Changes
+## Choosing Your Workflow
 
-### Step 1: Edit init.sql
+### Fresh Deployment (New Install)
 
-```sql
--- Add new column
-ALTER TABLE messages ADD COLUMN new_field TEXT;
-
--- Or in CREATE TABLE (preferred for new tables)
-CREATE TABLE IF NOT EXISTS my_new_table (
-    id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Add index
-CREATE INDEX IF NOT EXISTS idx_messages_new_field
-ON messages(new_field);
-```
-
-### Step 2: Test with Clean Rebuild
+Use `init.sql` directly - no migrations needed:
 
 ```bash
-# Stop services
-docker-compose down
-
-# Remove database volume (DESTRUCTIVE!)
-docker volume rm osint-intelligence-platform_postgres_data
-
-# Rebuild and start
-docker-compose up -d
-
-# Verify schema
-docker-compose exec postgres psql -U osint_user -d osint_platform \
-  -c "\d messages"
+docker-compose up -d postgres
+# init.sql runs automatically, schema_migrations seeded with version '000'
 ```
 
-### Step 3: Update ORM Models
+### Production Update (Existing Data)
+
+Use the migration system:
+
+```bash
+# Check what's pending
+./scripts/migrate.sh --dry-run
+
+# Apply migrations
+./scripts/migrate.sh
+
+# Verify
+./scripts/migrate.sh --status
+```
+
+---
+
+## Creating a Migration
+
+### Step 1: Copy the Template
+
+```bash
+cd infrastructure/postgres/migrations
+cp 000_template.sql 001_add_user_preferences.sql
+```
+
+### Step 2: Edit the Migration
+
+```sql
+-- ============================================================================
+-- Migration: 001 - Add user preferences table
+-- ============================================================================
+-- Date: 2025-01-15
+-- Author: @username
+--
+-- Description:
+--   Adds user_preferences table for storing UI preferences per user.
+--
+-- Prerequisites:
+--   - None (first migration after init.sql)
+--
+-- Rollback:
+--   See DOWN section at bottom of file
+-- ============================================================================
+
+-- ============================================================================
+-- UP MIGRATION
+-- ============================================================================
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id SERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL UNIQUE,
+    theme VARCHAR(20) DEFAULT 'system',
+    notifications_enabled BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_preferences_user_id
+ON user_preferences(user_id);
+
+-- Record this migration
+INSERT INTO schema_migrations (version, description, checksum)
+VALUES (
+    '001',
+    'Add user preferences table',
+    NULL
+);
+
+COMMIT;
+
+-- ============================================================================
+-- DOWN MIGRATION (Rollback)
+-- ============================================================================
+-- Run these statements manually to rollback this migration.
+-- WARNING: Data loss may occur. Test in staging first.
+--
+-- BEGIN;
+--
+-- DROP TABLE IF EXISTS user_preferences;
+--
+-- DELETE FROM schema_migrations WHERE version = '001';
+--
+-- COMMIT;
+```
+
+### Step 3: Update init.sql
+
+**Important**: After creating a migration, also add the changes to `init.sql`:
+
+```sql
+-- In infrastructure/postgres/init.sql
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id SERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL UNIQUE,
+    theme VARCHAR(20) DEFAULT 'system',
+    notifications_enabled BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_preferences_user_id
+ON user_preferences(user_id);
+```
+
+This ensures fresh deployments get the new schema automatically.
+
+### Step 4: Update ORM Models
 
 Edit `shared/python/models/` to match:
 
 ```python
-# shared/python/models/message.py
-class Message(Base):
-    __tablename__ = "messages"
+# shared/python/models/user_preferences.py
+from sqlalchemy import Column, Integer, String, Boolean
+from sqlalchemy.sql import func
+from shared.python.database import Base
+
+class UserPreferences(Base):
+    __tablename__ = "user_preferences"
 
     id = Column(Integer, primary_key=True)
-    # ... existing columns ...
-    new_field = Column(String, nullable=True)  # Add new column
+    user_id = Column(String, nullable=False, unique=True)
+    theme = Column(String(20), default='system')
+    notifications_enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
 ```
 
-### Step 4: Verify ORM Compatibility
+### Step 5: Test the Migration
 
 ```bash
-# Run a simple test to verify ORM works
-docker-compose exec api python -c "
-from shared.python.models import Message
-print('ORM loaded successfully')
-"
-```
-
----
-
-## Data Preservation Strategies
-
-When you need to preserve existing data:
-
-### Strategy 1: Export/Import
-
-For additive changes (new columns, new tables):
-
-```bash
-# 1. Export data
-docker-compose exec postgres pg_dump -U osint_user \
-  --data-only \
-  osint_platform > backup-$(date +%Y%m%d).sql
-
-# 2. Recreate database with new schema
+# Test on fresh install (rebuild)
 docker-compose down
 docker volume rm osint-intelligence-platform_postgres_data
 docker-compose up -d postgres
-sleep 10  # Wait for init
+./scripts/migrate.sh --status  # Should show only '000'
 
-# 3. Import data (may need column adjustments)
-docker-compose exec -T postgres psql -U osint_user -d osint_platform \
-  < backup-$(date +%Y%m%d).sql
-```
-
-### Strategy 2: Manual ALTER
-
-For simple changes, skip the volume wipe:
-
-```bash
-# Connect to database
-docker-compose exec postgres psql -U osint_user -d osint_platform
-
-# Add column with default
-ALTER TABLE messages ADD COLUMN new_field TEXT DEFAULT '';
-
-# Add index (CONCURRENTLY = no lock)
-CREATE INDEX CONCURRENTLY idx_messages_new_field
-ON messages(new_field);
-
-# Exit
-\q
-```
-
-**Then update init.sql to match** for future deployments.
-
-### Strategy 3: Migration Script
-
-For complex changes, write a Python migration:
-
-```python
-# scripts/migrate_add_new_field.py
-import asyncio
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy import text
-
-DATABASE_URL = "postgresql+asyncpg://osint_user:password@localhost:5432/osint_platform"
-
-async def migrate():
-    engine = create_async_engine(DATABASE_URL)
-
-    async with AsyncSession(engine) as session:
-        # Add new column
-        await session.execute(text("""
-            ALTER TABLE messages
-            ADD COLUMN IF NOT EXISTS new_field TEXT
-        """))
-
-        # Backfill data
-        await session.execute(text("""
-            UPDATE messages
-            SET new_field = 'default'
-            WHERE new_field IS NULL
-        """))
-
-        await session.commit()
-        print("Migration complete")
-
-if __name__ == "__main__":
-    asyncio.run(migrate())
-```
-
-Run:
-```bash
-docker-compose exec api python scripts/migrate_add_new_field.py
+# Test migration path (simulate production)
+docker-compose exec postgres psql -U osint_user -d osint_platform \
+  -c "DELETE FROM schema_migrations WHERE version = '001'"
+./scripts/migrate.sh --dry-run  # Should list 001
+./scripts/migrate.sh            # Apply it
+./scripts/migrate.sh --status   # Should show 000 and 001
 ```
 
 ---
 
-## Common Patterns
+## Using migrate.sh
+
+The helper script manages migrations:
+
+```bash
+# Show help
+./scripts/migrate.sh --help
+
+# Show current status
+./scripts/migrate.sh --status
+
+# Preview pending migrations (no changes)
+./scripts/migrate.sh --dry-run
+
+# Apply all pending migrations
+./scripts/migrate.sh
+```
+
+### Environment Variables
+
+```bash
+DB_CONTAINER=osint-postgres    # Docker container name
+POSTGRES_USER=osint_user       # Database user
+POSTGRES_DB=osint_platform     # Database name
+```
+
+---
+
+## Common Migration Patterns
 
 ### Adding a Column
 
 ```sql
--- In init.sql (for new deployments)
-CREATE TABLE messages (
-    id SERIAL PRIMARY KEY,
-    -- existing columns...
-    new_field TEXT  -- Add here
-);
+-- UP
+BEGIN;
 
--- Manual migration (for existing data)
-ALTER TABLE messages ADD COLUMN new_field TEXT;
+ALTER TABLE messages ADD COLUMN priority INTEGER DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_messages_priority ON messages(priority);
+
+INSERT INTO schema_migrations (version, description)
+VALUES ('002', 'Add priority column to messages');
+
+COMMIT;
+
+-- DOWN (commented)
+-- ALTER TABLE messages DROP COLUMN priority;
+-- DELETE FROM schema_migrations WHERE version = '002';
 ```
 
-### Adding an Index
+### Adding an Index (Production-Safe)
 
 ```sql
--- In init.sql
-CREATE INDEX IF NOT EXISTS idx_messages_new_field
-ON messages(new_field);
+-- UP
+BEGIN;
 
--- Manual (no downtime)
-CREATE INDEX CONCURRENTLY idx_messages_new_field
-ON messages(new_field);
-```
+-- Use CONCURRENTLY for zero-downtime (must be outside transaction)
+COMMIT;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_messages_channel_date
+ON messages(channel_id, message_date);
+BEGIN;
 
-### Adding a Table
+INSERT INTO schema_migrations (version, description)
+VALUES ('003', 'Add composite index on channel_id and message_date');
 
-```sql
--- In init.sql
-CREATE TABLE IF NOT EXISTS my_table (
-    id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_my_table_message_id
-ON my_table(message_id);
-```
-
-### Removing a Column
-
-```sql
--- Manual (existing deployments)
-ALTER TABLE messages DROP COLUMN old_field;
-
--- Update init.sql: remove column from CREATE TABLE
+COMMIT;
 ```
 
 ### Renaming a Column
 
 ```sql
--- Manual migration
+-- UP
+BEGIN;
+
 ALTER TABLE messages RENAME COLUMN old_name TO new_name;
 
--- Update init.sql to use new name
+INSERT INTO schema_migrations (version, description)
+VALUES ('004', 'Rename old_name to new_name');
+
+COMMIT;
+
+-- DOWN
+-- ALTER TABLE messages RENAME COLUMN new_name TO old_name;
 ```
+
+### Adding a Table with Foreign Key
+
+```sql
+-- UP
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS message_reactions (
+    id SERIAL PRIMARY KEY,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    reaction TEXT NOT NULL,
+    count INTEGER DEFAULT 0,
+    UNIQUE(message_id, reaction)
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_reactions_message_id
+ON message_reactions(message_id);
+
+INSERT INTO schema_migrations (version, description)
+VALUES ('005', 'Add message_reactions table');
+
+COMMIT;
+
+-- DOWN
+-- DROP TABLE IF EXISTS message_reactions;
+```
+
+### Data Backfill
+
+```sql
+-- UP
+BEGIN;
+
+-- Add column
+ALTER TABLE channels ADD COLUMN member_count INTEGER;
+
+-- Backfill with default
+UPDATE channels SET member_count = 0 WHERE member_count IS NULL;
+
+-- Add NOT NULL constraint after backfill
+ALTER TABLE channels ALTER COLUMN member_count SET DEFAULT 0;
+ALTER TABLE channels ALTER COLUMN member_count SET NOT NULL;
+
+INSERT INTO schema_migrations (version, description)
+VALUES ('006', 'Add member_count to channels with backfill');
+
+COMMIT;
+```
+
+---
+
+## Production Deployment Workflow
+
+### Pre-Deployment
+
+1. **Backup database**:
+   ```bash
+   docker-compose exec postgres pg_dump -U osint_user osint_platform \
+     | gzip > backup-$(date +%Y%m%d_%H%M).sql.gz
+   ```
+
+2. **Test migration in staging**:
+   ```bash
+   # On staging server
+   ./scripts/migrate.sh --dry-run
+   ./scripts/migrate.sh
+   ```
+
+3. **Review migration SQL**:
+   ```bash
+   cat infrastructure/postgres/migrations/00X_*.sql
+   ```
+
+### Deployment
+
+```bash
+# 1. Pull latest code
+git pull origin master
+
+# 2. Check pending migrations
+./scripts/migrate.sh --dry-run
+
+# 3. Apply migrations (services can stay running for additive changes)
+./scripts/migrate.sh
+
+# 4. Restart services to pick up ORM changes
+docker-compose restart api processor enrichment
+
+# 5. Verify
+./scripts/migrate.sh --status
+curl http://localhost:8000/health
+```
+
+### Rollback
+
+If something goes wrong:
+
+```bash
+# 1. Stop affected services
+docker-compose stop api processor enrichment
+
+# 2. Run DOWN migration manually
+docker-compose exec postgres psql -U osint_user -d osint_platform <<'EOF'
+BEGIN;
+-- Paste DOWN migration statements here
+DROP TABLE IF EXISTS new_table;
+DELETE FROM schema_migrations WHERE version = '00X';
+COMMIT;
+EOF
+
+# 3. Revert code
+git checkout HEAD~1
+
+# 4. Restart services
+docker-compose up -d
+```
+
+---
+
+## Migration Numbering
+
+Use sequential three-digit numbers:
+
+```
+001_add_user_preferences.sql
+002_add_message_priority.sql
+003_add_channel_indexes.sql
+...
+099_some_change.sql
+100_another_change.sql
+```
+
+### Naming Conventions
+
+- `add_*` - Adding new tables/columns/indexes
+- `remove_*` - Removing schema elements
+- `rename_*` - Renaming tables/columns
+- `update_*` - Modifying existing structures
+- `backfill_*` - Data migrations
 
 ---
 
 ## Testing Schema Changes
 
-### Local Testing Workflow
+### Local Development Workflow
 
 ```bash
-# 1. Make changes to init.sql
+# 1. Make changes to init.sql AND create migration
 
-# 2. Rebuild database
+# 2. Test fresh install
 docker-compose down
 docker volume rm osint-intelligence-platform_postgres_data
 docker-compose up -d postgres
+./scripts/migrate.sh --status
 
-# 3. Verify schema
-docker-compose exec postgres psql -U osint_user -d osint_platform -c "\d messages"
+# 3. Test migration path
+# Reset to simulate existing deployment
+docker-compose exec postgres psql -U osint_user -d osint_platform \
+  -c "DELETE FROM schema_migrations WHERE version > '000'"
+./scripts/migrate.sh
 
-# 4. Run application tests
+# 4. Verify schema
+docker-compose exec postgres psql -U osint_user -d osint_platform \
+  -c "\d your_table"
+
+# 5. Run application tests
 docker-compose exec api pytest
-
-# 5. Test manually
-docker-compose up -d
-curl http://localhost:8000/api/messages?limit=5
 ```
-
----
-
-## Rollback Procedures
-
-### If Schema Change Breaks Production
-
-```bash
-# 1. Stop application
-docker-compose stop api processor enrichment
-
-# 2. Restore from backup
-docker-compose exec -T postgres psql -U osint_user -d osint_platform \
-  < backup-YYYYMMDD.sql
-
-# 3. Revert code changes
-git checkout HEAD~1 -- infrastructure/postgres/init.sql
-git checkout HEAD~1 -- shared/python/models/
-
-# 4. Restart
-docker-compose up -d
-```
-
-### If Volume Wipe Was Premature
-
-```bash
-# Restore from most recent backup
-docker-compose down
-docker volume rm osint-intelligence-platform_postgres_data
-docker-compose up -d postgres
-docker-compose exec -T postgres psql -U osint_user -d osint_platform \
-  < backup-YYYYMMDD.sql
-docker-compose up -d
-```
-
----
-
-## Best Practices
-
-### DO
-
-- ✅ Test schema changes locally before production
-- ✅ Backup database before any change
-- ✅ Use `IF NOT EXISTS` for idempotent init.sql
-- ✅ Add `ON DELETE CASCADE` for foreign keys
-- ✅ Create indexes for commonly queried columns
-- ✅ Update ORM models to match schema
-- ✅ Update init.sql after manual ALTER commands
-
-### DON'T
-
-- ❌ Edit production database without backup
-- ❌ Remove columns without deprecation period
-- ❌ Create indexes without `CONCURRENTLY` in production
-- ❌ Forget to update init.sql after manual changes
-- ❌ Mix ORM and raw SQL for the same operation
 
 ---
 
@@ -343,11 +486,13 @@ docker-compose up -d
 For production:
 
 ```bash
-# Daily backup script
 #!/bin/bash
+# /etc/cron.d/osint-backup
+
 BACKUP_DIR="/backups/postgres"
 DATE=$(date +%Y%m%d_%H%M)
 
+# Daily backup
 docker-compose exec -T postgres pg_dump -U osint_user osint_platform \
   | gzip > "${BACKUP_DIR}/osint_platform_${DATE}.sql.gz"
 
@@ -357,8 +502,39 @@ find "${BACKUP_DIR}" -name "*.sql.gz" -mtime +7 -delete
 
 ---
 
+## Best Practices
+
+### DO
+
+- Always create both a migration file AND update init.sql
+- Use `IF NOT EXISTS` / `IF EXISTS` for idempotency
+- Include DOWN migration instructions (commented)
+- Test on staging before production
+- Backup before applying migrations
+- Use `CONCURRENTLY` for index creation in production
+- Keep migrations small and focused
+- Number migrations sequentially
+
+### DON'T
+
+- Skip updating init.sql after creating a migration
+- Create migrations without testing locally
+- Apply migrations without backup
+- Use Alembic/ORM-generated migrations
+- Create non-reversible migrations without documentation
+- Combine unrelated changes in one migration
+
+---
+
+## Historical Note: Alembic
+
+The platform previously used Alembic migrations during early development. These have been archived to `migrations/alembic-archive/` for historical reference. The hybrid approach (init.sql + manual SQL migrations) provides better control for self-hosted deployments.
+
+---
+
 ## Related Documentation
 
 - [Database Tables Reference](../reference/database-tables.md) - Schema documentation
 - [Upgrades Guide](../operator-guide/upgrades.md) - Production upgrade procedures
 - [Backup & Restore](../operator-guide/backup-restore.md) - Backup procedures
+- [Migrations README](https://github.com/osintukraine/osint-intelligence-platform/blob/master/infrastructure/postgres/migrations/README.md) - In-repo migration docs
