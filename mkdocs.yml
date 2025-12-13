@@ -105,13 +105,33 @@ nav:
       - Telegram Setup: operator-guide/telegram-setup.md
       - Monitoring & Metrics: operator-guide/monitoring.md
       - Backup & Restore: operator-guide/backup-restore.md
+      - Performance Tuning: operator-guide/performance-tuning.md
+      - Scaling: operator-guide/scaling.md
+      - Upgrades: operator-guide/upgrades.md
       - Troubleshooting: operator-guide/troubleshooting.md
   - Developer Guide:
       - developer-guide/index.md
       - Architecture Overview: developer-guide/architecture.md
-      - Services Deep Dive: developer-guide/services/index.md
+      - Services:
+          - developer-guide/services/index.md
+          - Listener: developer-guide/services/listener.md
+          - Processor: developer-guide/services/processor.md
+          - API: developer-guide/services/api.md
+          - Frontend: developer-guide/services/frontend.md
+          - Enrichment: developer-guide/services/enrichment.md
+          - RSS Ingestor: developer-guide/services/rss-ingestor.md
+          - Notifier: developer-guide/services/notifier.md
+          - OpenSanctions: developer-guide/services/opensanctions.md
+          - Entity Ingestion: developer-guide/services/entity-ingestion.md
+          - Analytics: developer-guide/services/analytics.md
+          - Migration: developer-guide/services/migration.md
+          - Translation Backfill: developer-guide/services/translation-backfill.md
       - Shared Libraries: developer-guide/shared-libraries.md
       - Database Schema: developer-guide/database-schema.md
+      - Database Migrations: developer-guide/database-migrations.md
+      - LLM Integration: developer-guide/llm-integration.md
+      - Frontend API Patterns: developer-guide/frontend-api-patterns.md
+      - Testing Guide: developer-guide/testing-guide.md
       - Adding Features: developer-guide/adding-features.md
       - Contributing: developer-guide/contributing.md
   - Security Guide:

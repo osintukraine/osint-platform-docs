@@ -18,7 +18,7 @@ Comprehensive documentation of all REST API endpoints in the OSINT Intelligence 
 - [Events](#events)
 - [Comments](#comments)
 - [Analytics](#analytics)
-- [Network & Social Graph](#network--social-graph)
+- [Network & Social Graph](#network-social-graph)
 - [Metrics](#metrics)
 - [About](#about)
 - [Admin Endpoints](#admin-endpoints)

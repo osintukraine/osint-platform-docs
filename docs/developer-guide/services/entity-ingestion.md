@@ -1079,10 +1079,10 @@ CREATE INDEX idx_curated_entities_embedding ON curated_entities
 
 ## Related Documentation
 
-- [Knowledge Graph Architecture](../../architecture/knowledge-graph.md) - Entity system design
+- [Database Tables Reference](../../reference/database-tables.md) - Entity and message table schemas
 - [Processor Service](processor.md) - How entities are matched against messages
 - [API Service](api.md) - Entity API endpoints
-- [Database Schema](../../database/schema.md) - Full schema documentation
+- [Enrichment Service](enrichment.md) - Entity matching and enrichment tasks
 
 ## Migration from External APIs
 

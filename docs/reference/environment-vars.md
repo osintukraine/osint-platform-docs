@@ -18,7 +18,7 @@ Before starting the platform:
 
 ## Table of Contents
 
-- [Environment & Logging](#environment--logging)
+- [Environment & Logging](#environment-logging)
 - [PostgreSQL Database](#postgresql-database)
 - [Redis Configuration](#redis-configuration)
 - [MinIO (S3 Storage)](#minio-s3-storage)
@@ -36,13 +36,13 @@ Before starting the platform:
 - [Authentication](#authentication)
 - [Frontend Configuration](#frontend-configuration)
 - [Monitoring](#monitoring)
-- [Deployment & Domain](#deployment--domain)
+- [Deployment & Domain](#deployment-domain)
 - [Production-Only Settings](#production-only-settings)
 - [NocoDB](#nocodb)
 - [RSS Intelligence Layer](#rss-intelligence-layer)
 - [Entity Ingestion](#entity-ingestion)
 - [Development Helpers](#development-helpers)
-- [Backup & Maintenance](#backup--maintenance)
+- [Backup & Maintenance](#backup-maintenance)
 
 ---
 

@@ -537,7 +537,7 @@ docker-compose --profile enrichment up -d --scale enrichment-fast-pool=2
 - [Service Reference](services/index.md) - Detailed documentation for each service
 - [Data Models](database-schema.md) - SQLAlchemy model reference
 - [Shared Libraries](shared-libraries.md) - Shared Python module documentation
-- [Deployment Guide](../operations/deployment.md) - Production deployment checklist
+- [Installation Guide](../operator-guide/installation.md) - Production deployment checklist
 
 ---
 

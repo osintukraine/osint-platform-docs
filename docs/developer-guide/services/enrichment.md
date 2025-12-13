@@ -2202,4 +2202,4 @@ Event Detection uses a separate Ollama instance (`ollama-batch`) and dedicated 3
 - [API Service](api.md) - REST API endpoints
 - [Database Schema](../../reference/database-tables.md) - Database table reference
 - [LLM Integration](../llm-integration.md) - LLM prompt design and usage
-- [Knowledge Graph Architecture](../../concepts/knowledge-graph.md) - Entity matching details
+- [Database Tables Reference](../../reference/database-tables.md) - Entity and message table schemas

@@ -11,15 +11,15 @@ Complete reference documentation for all database tables in the OSINT Intelligen
 ## Table of Contents
 
 - [Core Data Tables](#core-data-tables)
-- [User Management & Authentication](#user-management--authentication)
-- [Message Processing & Classification](#message-processing--classification)
-- [Events & Incidents (V2)](#events--incidents-v2)
+- [User Management & Authentication](#user-management-authentication)
+- [Message Processing & Classification](#message-processing-classification)
+- [Events & Incidents](#events-incidents)
 - [Entity Knowledge Graph](#entity-knowledge-graph)
 - [RSS Intelligence Layer](#rss-intelligence-layer)
-- [Social Graph & Engagement](#social-graph--engagement)
-- [Configuration & Runtime Settings](#configuration--runtime-settings)
-- [Enrichment & Background Tasks](#enrichment--background-tasks)
-- [Audit & Decision Tracking](#audit--decision-tracking)
+- [Social Graph & Engagement](#social-graph-engagement)
+- [Configuration & Runtime Settings](#configuration-runtime-settings)
+- [Enrichment & Background Tasks](#enrichment-background-tasks)
+- [Audit & Decision Tracking](#audit-decision-tracking)
 
 ---
 

@@ -235,7 +235,7 @@ docker-compose --profile multi-account up -d listener-russia listener-ukraine
 - Risk isolation (one account ban doesn't affect the other)
 - Organizational clarity (Russia channels use Russia account)
 
-See [Telegram Patterns Documentation](../../architecture/telegram-patterns.md) for full multi-account setup.
+See [Telegram Setup Guide](../../operator-guide/telegram-setup.md) for full multi-account setup.
 
 ## Key Features
 
@@ -798,16 +798,14 @@ curl http://localhost:8001/metrics | head -20
 ## Related Documentation
 
 - [Processor Service](processor.md) - Downstream message processing
-- [Redis Queue Architecture](../../architecture/redis-streams.md) - Message queue design
-- [Telegram Patterns](../../architecture/telegram-patterns.md) - Session management, multi-account
-- [Channel Management Guide](../../user-guide/channel-management.md) - Folder-based workflow
-- [Backfill Guide](../../user-guide/backfill.md) - Historical message fetching
-- [Monitoring Setup](../../operations/monitoring.md) - Prometheus + Grafana
+- [Architecture Overview](../architecture.md) - Platform architecture and data flow
+- [Telegram Setup Guide](../../operator-guide/telegram-setup.md) - Session management, multi-account
+- [Monitoring & Metrics](../../operator-guide/monitoring.md) - Prometheus + Grafana setup
 
 ---
 
 **Next Steps**:
 
 1. Read [Processor Service Documentation](processor.md) to understand downstream processing
-2. Review [Telegram Patterns](../../architecture/telegram-patterns.md) for session management rules
-3. Set up [Monitoring](../../operations/monitoring.md) to track listener health
+2. Review [Telegram Setup Guide](../../operator-guide/telegram-setup.md) for session management rules
+3. Set up [Monitoring](../../operator-guide/monitoring.md) to track listener health
