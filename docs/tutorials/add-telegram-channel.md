@@ -45,7 +45,8 @@ The platform recognizes specific folder name patterns:
 |---|---|---|---|
 | `Archive-*` | Archive tier | Lenient (most messages pass) | Primary sources, official channels |
 | `Monitor-*` | Monitor tier | Strict (only high-value passes) | News aggregators, noisy sources |
-| `Discover-*` | Discovery tier | Very strict + 14-day probation | Auto-discovered channels |
+| `Discover-*` | Discovery tier | Very strict + 14-day probation | Auto-discovered from forward chains |
+| `Rec-*` | Recommendation tier | Very strict + 14-day probation | Auto-discovered from Telegram's "Similar Channels" |
 
 !!! important "The LLM is the Arbiter"
     Unlike simple rule-based systems, the OSINT platform uses an **AI classifier** to decide what gets archived. The folder tier sets how strict the LLM should be, but the **LLM makes the final `should_archive` decision** for every message.
@@ -62,7 +63,9 @@ The platform recognizes specific folder name patterns:
 - `Archive-RU` - Archive tier, Russia sources (10 chars) ✅
 - `Monitor` - Monitor tier (7 chars) ✅
 - `Monitor-UA` - Monitor tier, Ukraine (10 chars) ✅
-- `Discover-UA` - Discovery tier (11 chars) ✅
+- `Discover-UA` - Discovery tier, forward chains (11 chars) ✅
+- `Rec-UA` - Recommendation tier (6 chars) ✅
+- `Rec-?` - Needs human review (5 chars) ✅
 
 **Invalid folder names**:
 
@@ -70,6 +73,15 @@ The platform recognizes specific folder name patterns:
 - `Monitor-Russia` - Too long (14 chars) ❌
 - `Personal` - Ignored (doesn't match pattern) ❌
 - `News-Archive` - Ignored (pattern must match prefix) ❌
+
+!!! tip "Auto-Discovery with Country Detection"
+    The platform automatically detects whether a channel is Ukrainian (UA), Russian (RU), or uncertain (?) using a **3-round voting system**:
+
+    1. **Keywords** - Fast check for Ukrainian/Russian keywords
+    2. **LLM Basic** - AI analyzes channel title/description
+    3. **LLM Deep** - AI analyzes sample messages
+
+    Channels with uncertain classification go to `Discover-?` or `Rec-?` folders for manual review.
 
 ---
 
@@ -488,8 +500,10 @@ Now that you have channels being monitored, you can:
 | **Folder Management** | Use native Telegram folders - no admin panel needed |
 | **12-Char Limit** | Folder names max 12 characters: `Archive-UA` not `Archive-Ukraine` |
 | **LLM is Arbiter** | AI decides what to archive; folder tier sets strictness level |
-| **Three Tiers** | `Archive-*` (lenient), `Monitor-*` (strict), `Discover-*` (very strict) |
-| **Auto-Discovery** | Platform checks every 5 minutes - wait for sync |
+| **Four Tiers** | `Archive-*` (lenient), `Monitor-*` (strict), `Discover-*` (very strict), `Rec-*` (recommendations) |
+| **Auto-Discovery** | Channels discovered from forwards (`Discover-*`) and Telegram recommendations (`Rec-*`) |
+| **3-Round Detection** | Country detection uses keywords + 2x LLM analysis for high confidence |
+| **Human Review** | Uncertain channels go to `Discover-?` or `Rec-?` for manual classification |
 | **Flexible Rules** | Change rules by moving channels between folders |
 
 ---

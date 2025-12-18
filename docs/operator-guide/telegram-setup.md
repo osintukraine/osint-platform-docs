@@ -296,7 +296,8 @@ The platform uses Telegram app folders to organize and manage channels. No datab
 |----------------|-----------------|--------------|
 | `Archive-*` | Archive tier | Lenient - archives most Ukraine-relevant content |
 | `Monitor-*` | Monitor tier | Strict - only high-value OSINT content |
-| `Discover-*` | Discovery tier | Very strict + 14-day probation period |
+| `Discover-*` | Discovery tier | Very strict + 14-day probation (from forward chains) |
+| `Rec-*` | Recommendation tier | Very strict + 14-day probation (from Telegram recommendations) |
 
 !!! important "The LLM is the Arbiter"
     The folder tier sets how strict the LLM should be, but the **AI makes the final `should_archive` decision** for every message. Even Archive-tier messages can be rejected if the LLM determines they lack OSINT value.
@@ -306,7 +307,10 @@ The platform uses Telegram app folders to organize and manage channels. No datab
 - `Archive-UA` - Archive tier, Ukraine sources (10 chars) ✅
 - `Archive-RU` - Archive tier, Russia sources (10 chars) ✅
 - `Monitor-UA` - Monitor tier, Ukraine (10 chars) ✅
-- `Discover-UA` - Discovery tier (11 chars) ✅
+- `Discover-UA` - Discovery tier, forward chains (11 chars) ✅
+- `Rec-UA` - Recommendation tier (6 chars) ✅
+- `Rec-RU` - Recommendation tier (6 chars) ✅
+- `Rec-?` - Needs human review (5 chars) ✅
 
 **Invalid Examples** (too long):
 
@@ -471,12 +475,51 @@ flowchart LR
 - **Probation period**: 14 days
 - **Auto-removal**: After 14 days if inactive or spam
 
+**Discovery Sources**:
+
+The platform discovers new channels through two mechanisms:
+
+| Source | Folder Pattern | Description |
+|--------|----------------|-------------|
+| **Forward chains** | `Discover-UA/RU/?` | Channels referenced in forwarded messages |
+| **Telegram recommendations** | `Rec-UA/RU/?` | Telegram's "Similar Channels" algorithm |
+
+!!! info "3-Round Country Detection"
+    The platform uses a robust **3-round voting system** to classify channels as Ukrainian (UA), Russian (RU), or uncertain (?):
+
+    1. **Round 1 - Keywords**: Fast deterministic check using Ukrainian/Russian keywords
+    2. **Round 2 - LLM Basic**: AI analyzes channel title + description
+    3. **Round 3 - LLM Deep**: AI analyzes 10 sample messages for content patterns
+
+    **Voting Logic**:
+
+    - All 3 rounds agree → **High confidence** → Assign country
+    - 2/3 rounds agree → **Medium confidence** → Assign with review flag
+    - No consensus → **Low confidence** → Put in `Discover-?` or `Rec-?` folder
+
+**Folder Naming**:
+
+| Folder | Source | Country |
+|--------|--------|---------|
+| `Discover-UA` | Forward chains | Ukrainian channels |
+| `Discover-RU` | Forward chains | Russian channels |
+| `Discover-?` | Forward chains | Uncertain - needs human review |
+| `Rec-UA` | Recommendations | Ukrainian channels |
+| `Rec-RU` | Recommendations | Russian channels |
+| `Rec-?` | Recommendations | Uncertain - needs human review |
+
+!!! warning "Recommendation Discovery is One-Time"
+    When a channel is discovered via forwards, the platform fetches up to **3 recommendations** from Telegram's "Similar Channels" feature. This is a one-time expansion - recommendations don't trigger more recommendations (prevents infinite loops).
+
 **Workflow**:
 
 1. Platform detects new channel in forwards
-2. Auto-joins and adds to `Discover-*` folder
-3. Monitors for 14 days with very strict filtering
-4. **Decision after 14 days**:
+2. Runs **3-round country detection** (keywords + LLM x2)
+3. Auto-joins and adds to `Discover-{country}` folder
+4. Fetches top 3 Telegram recommendations for that channel
+5. For each recommendation: runs 3-round detection → adds to `Rec-{country}` folder
+6. Monitors for 14 days with very strict filtering
+7. **Decision after 14 days**:
    - **Active + valuable**: Move to `Archive-*` or `Monitor-*`
    - **Inactive or spam**: Auto-removed
 
@@ -484,9 +527,23 @@ flowchart LR
 
 ```bash
 docker-compose exec postgres psql -U osint_user -d osint_platform -c "
-SELECT name, folder, message_count, created_at
+SELECT name, folder, discovery_status,
+       discovery_metadata->>'detected_country' as country,
+       discovery_metadata->>'confidence' as confidence,
+       discovery_metadata->>'discovered_via' as source
 FROM channels
-WHERE folder LIKE 'Discover-%'
+WHERE folder LIKE 'Discover-%' OR folder LIKE 'Rec-%'
+ORDER BY created_at DESC;
+"
+```
+
+**View channels needing human review**:
+
+```bash
+docker-compose exec postgres psql -U osint_user -d osint_platform -c "
+SELECT name, folder, discovery_metadata->>'votes' as votes
+FROM channels
+WHERE discovery_metadata->>'needs_human_review' = 'true'
 ORDER BY created_at DESC;
 "
 ```
