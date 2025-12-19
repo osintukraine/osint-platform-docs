@@ -11,6 +11,7 @@ This guide covers everything needed to deploy and operate the platform in produc
 - [Installation](installation.md) - Deploy the platform using Docker Compose
 - [Configuration](configuration.md) - Configure services and environment variables
 - [Telegram Setup](telegram-setup.md) - Configure Telegram monitoring and session management
+- [Hetzner Storage](hetzner-storage.md) - Offsite storage redundancy with Hetzner Storage Box
 - [Monitoring & Metrics](monitoring.md) - Monitor health, performance, and metrics
 - [Scaling](scaling.md) - Scale workers and services as demand grows
 - [Performance Tuning](performance-tuning.md) - Optimize Ollama, PostgreSQL, Redis
@@ -284,6 +285,14 @@ This guide is maintained in the `osint-platform-docs` repository. To suggest imp
     Configure Telegram monitoring and sessions
 
     [:octicons-arrow-right-24: Telegram Guide](telegram-setup.md)
+
+-   :material-harddisk:{ .lg .middle } __Hetzner Storage__
+
+    ---
+
+    Offsite storage redundancy with Hetzner Storage Box
+
+    [:octicons-arrow-right-24: Storage Guide](hetzner-storage.md)
 
 -   :material-chart-line:{ .lg .middle } __Monitoring__
 

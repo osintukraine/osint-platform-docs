@@ -18,6 +18,7 @@ Comprehensive troubleshooting guide based on 3+ years of production operations. 
 - [Storage Issues](#storage-issues)
 - [LLM and AI Issues](#llm-and-ai-issues)
 - [Search Issues](#search-issues)
+- [Geolocation & Map Issues](#geolocation--map-issues)
 - [Network and Connectivity Issues](#network-and-connectivity-issues)
 - [Getting Help](#getting-help)
 
@@ -1431,6 +1432,234 @@ from tasks.embedding import EmbeddingTask
 task = EmbeddingTask()
 task.run()
 "
+```
+
+---
+
+## Geolocation & Map Issues
+
+Issues related to the Event Detection V3 geolocation pipeline and map interface.
+
+### Issue: High Unresolved Location Rate
+
+**Symptoms:**
+- Many messages with `extraction_method='unresolved'`
+- Map showing fewer markers than expected
+
+**Diagnosis:**
+
+```sql
+-- Check geolocation success rate by stage
+SELECT extraction_method, COUNT(*) as total,
+       ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) as percentage
+FROM message_locations
+WHERE extracted_at >= NOW() - INTERVAL '24 hours'
+GROUP BY extraction_method
+ORDER BY total DESC;
+
+-- Expected: gazetteer >50%, unresolved <10%
+```
+
+**Solutions:**
+
+1. **Add missing locations to gazetteer:**
+```sql
+-- Find most common unresolved locations
+SELECT location_name, COUNT(*) as occurrences
+FROM message_locations
+WHERE extraction_method = 'unresolved'
+GROUP BY location_name
+ORDER BY occurrences DESC
+LIMIT 20;
+
+-- Add to gazetteer (get coords from GeoNames)
+INSERT INTO location_gazetteer (name_primary, name_local, latitude, longitude, country_code)
+VALUES ('MissingCity', 'Місто', 48.123, 37.456, 'UA');
+```
+
+2. **Check Nominatim availability:**
+```bash
+# Test Nominatim API
+curl "https://nominatim.openstreetmap.org/search?q=Bakhmut&format=json"
+
+# Check enrichment logs for rate limit errors
+docker-compose logs enrichment | grep -i nominatim
+```
+
+3. **Verify Cyrillic encoding:**
+```bash
+# Check for encoding issues in logs
+docker-compose logs enrichment | grep -i "encoding\|unicode"
+```
+
+---
+
+### Issue: Cluster Detection Not Working
+
+**Symptoms:**
+- No new clusters appearing on map
+- Messages not being grouped into events
+
+**Diagnosis:**
+
+```sql
+-- Check cluster detection rate
+SELECT tier, COUNT(*) as count
+FROM telegram_event_clusters
+WHERE detected_at >= NOW() - INTERVAL '24 hours'
+  AND archived_at IS NULL
+GROUP BY tier;
+
+-- Check if messages have embeddings (required for clustering)
+SELECT COUNT(*) as total,
+       COUNT(content_embedding) as with_embedding
+FROM messages
+WHERE telegram_date >= NOW() - INTERVAL '24 hours';
+```
+
+**Solutions:**
+
+1. **Verify embedding generation:**
+```bash
+# Check embedding task is running
+docker-compose logs enrichment | grep -i embedding
+
+# Check embedding queue
+docker-compose exec redis redis-cli XLEN enrich:fast
+```
+
+2. **Adjust detection sensitivity:**
+```bash
+# Lower threshold for more clusters (in .env)
+CLUSTER_VELOCITY_THRESHOLD=1.5  # default 2.0
+CLUSTER_SIMILARITY_THRESHOLD=0.75  # default 0.80
+MIN_MESSAGES_FOR_CLUSTER=2  # default 3
+
+# Restart enrichment
+docker-compose restart enrichment
+```
+
+---
+
+### Issue: Too Many False Positive Clusters
+
+**Symptoms:**
+- Clusters containing unrelated messages
+- Low similarity scores in cluster_messages
+
+**Diagnosis:**
+
+```sql
+-- Find clusters with low similarity
+SELECT c.id, c.tier, AVG(cm.similarity) as avg_similarity
+FROM telegram_event_clusters c
+JOIN cluster_messages cm ON c.id = cm.cluster_id
+WHERE c.detected_at >= NOW() - INTERVAL '7 days'
+GROUP BY c.id, c.tier
+HAVING AVG(cm.similarity) < 0.85
+ORDER BY avg_similarity;
+```
+
+**Solutions:**
+
+1. **Increase similarity threshold:**
+```bash
+# In .env
+CLUSTER_SIMILARITY_THRESHOLD=0.85  # stricter matching
+docker-compose restart enrichment
+```
+
+2. **Archive false positives:**
+```sql
+-- Archive specific cluster
+UPDATE telegram_event_clusters
+SET archived_at = NOW(), archive_reason = 'false_positive'
+WHERE id = 123;
+```
+
+---
+
+### Issue: Map API Slow Responses
+
+**Symptoms:**
+- Map taking >2s to load markers
+- Timeout errors in browser console
+
+**Diagnosis:**
+
+```bash
+# Check API response time
+time curl "http://localhost:8000/api/map/messages?south=48&west=35&north=50&east=40"
+
+# Check Redis cache hit rate
+docker-compose exec redis redis-cli INFO stats | grep keyspace
+```
+
+**Solutions:**
+
+1. **Verify spatial indexes:**
+```sql
+-- Check index exists
+SELECT indexname FROM pg_indexes
+WHERE tablename = 'message_locations'
+  AND indexname LIKE '%bbox%';
+
+-- Recreate if missing
+CREATE INDEX IF NOT EXISTS idx_message_locations_bbox
+ON message_locations (latitude, longitude)
+WHERE latitude IS NOT NULL;
+
+ANALYZE message_locations;
+```
+
+2. **Enable server-side clustering:**
+```
+# In frontend, always use cluster=true at zoom < 12
+/api/map/messages?...&cluster=true&zoom=10
+```
+
+---
+
+### Issue: WebSocket Not Receiving Updates
+
+**Symptoms:**
+- Map not showing new locations in real-time
+- Connection indicator shows red/yellow
+
+**Diagnosis:**
+
+```bash
+# Check Redis pub/sub
+docker-compose exec redis redis-cli PUBSUB CHANNELS
+
+# Should show: map:new_location
+
+# Check if geolocation task is publishing
+docker-compose logs enrichment | grep "map:new_location"
+```
+
+**Solutions:**
+
+1. **Verify Redis pub/sub:**
+```bash
+# Subscribe to channel (should see messages)
+docker-compose exec redis redis-cli SUBSCRIBE map:new_location
+```
+
+2. **Check proxy WebSocket support:**
+```nginx
+# nginx.conf - ensure WebSocket upgrade headers
+proxy_http_version 1.1;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+proxy_read_timeout 90s;
+```
+
+3. **Test WebSocket directly:**
+```javascript
+// In browser console
+const ws = new WebSocket('ws://localhost:8000/api/map/ws/map/live?south=48&west=35&north=50&east=40');
+ws.onmessage = (e) => console.log(JSON.parse(e.data));
 ```
 
 ---

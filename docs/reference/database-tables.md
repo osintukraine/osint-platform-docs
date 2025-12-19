@@ -450,6 +450,117 @@ Configurable thresholds for event detection.
 
 ---
 
+## Geolocation Tables
+
+### `location_gazetteer`
+
+Offline geocoding database for UA/RU locations (GeoNames).
+
+**Purpose**: ~30,000 pre-loaded location names from GeoNames for fast offline geocoding (Stage 1 of geolocation pipeline).
+
+**Key Columns**:
+- `id` (SERIAL PRIMARY KEY)
+- `name_primary` (VARCHAR): Primary location name
+- `name_ascii` (VARCHAR): ASCII transliteration
+- `name_local` (VARCHAR): Local language name (Cyrillic)
+- `aliases` (TEXT[]): Alternative names/spellings
+- `latitude` (NUMERIC(10,7)): Coordinate
+- `longitude` (NUMERIC(10,7)): Coordinate
+- `country_code` (VARCHAR(2)): UA, RU
+- `population` (INTEGER): Population size
+- `name_search` (TSVECTOR GENERATED): Auto-generated full-text search vector
+
+**Important Indexes**:
+- `idx_gazetteer_name_search` (GIN) - Full-text search on all name variants
+- `idx_gazetteer_country` (B-tree) - Filter by country
+- `idx_gazetteer_geography` (GIST) - Spatial index for reverse geocoding
+
+---
+
+### `message_locations`
+
+Geocoded coordinates extracted from message content.
+
+**Purpose**: Stores extracted location coordinates with confidence scores from 4-stage geolocation pipeline.
+
+**Key Columns**:
+- `id` (SERIAL PRIMARY KEY)
+- `message_id` (BIGINT FK → messages ON DELETE CASCADE)
+- `location_name` (VARCHAR): Extracted location text
+- `latitude` (NUMERIC(10,7)): Resolved coordinate
+- `longitude` (NUMERIC(10,7)): Resolved coordinate
+- `extraction_method` (VARCHAR): gazetteer, llm_relative, nominatim, manual, unresolved
+- `confidence` (NUMERIC(4,3)): 0.000-1.000 confidence score
+- `gazetteer_id` (INTEGER FK → location_gazetteer): Reference if gazetteer match
+- `relative_to` (VARCHAR): For relative locations (e.g., "Bakhmut")
+- `offset_km` (NUMERIC): Distance from reference location
+- `direction` (VARCHAR): north, south, east, west, etc.
+- UNIQUE (`message_id`, `location_name`)
+
+**Extraction Methods**:
+- `gazetteer`: Stage 1 - Offline GeoNames lookup (0.95 confidence)
+- `llm_relative`: Stage 2 - LLM parsing of relative locations (0.75 confidence)
+- `nominatim`: Stage 3 - OpenStreetMap API fallback (0.85 confidence)
+- `unresolved`: Failed all stages, queued for manual review
+
+**Important Indexes**:
+- `idx_message_locations_bbox` - Fast bounding box queries for map (lat, lon)
+- `idx_message_locations_spatial_covering` - Covering index for index-only scans
+
+**Note**: Coordinates stored as (latitude, longitude) but GeoJSON uses [longitude, latitude].
+
+---
+
+### `telegram_event_clusters`
+
+Velocity-based event detection from message clusters.
+
+**Purpose**: Detects potential real-world events using velocity-based clustering (messages/hour spike) with semantic similarity and tiered validation.
+
+**Key Columns**:
+- `id` (SERIAL PRIMARY KEY)
+- `cluster_embedding` (vector(384)): Average embedding of cluster messages
+- `tier` (VARCHAR): rumor, unconfirmed, confirmed, verified
+- `status` (VARCHAR): detected, validated, promoted, archived
+- `channel_count` (INTEGER): Unique channels discussing (auto-updated)
+- `ru_affiliated_count` (INTEGER): Russian-affiliated channels
+- `ua_affiliated_count` (INTEGER): Ukrainian-affiliated channels
+- `cross_affiliation_met` (BOOLEAN): Both RU and UA channels reporting
+- `claim_type` (VARCHAR): strike, advance, casualties, equipment, diplomatic
+- `detected_at` (TIMESTAMPTZ)
+- `last_activity_at` (TIMESTAMPTZ)
+
+**Tier Progression (Automatic)**:
+- `rumor`: 1 channel (red marker on map)
+- `unconfirmed`: 2-3 channels, same affiliation (yellow marker)
+- `confirmed`: 3+ channels OR cross-affiliation met (orange marker)
+- `verified`: Human verification (green marker)
+
+**Important Indexes**:
+- `idx_clusters_tier` - Filter by tier for map display
+- `idx_clusters_embedding` (HNSW) - Similarity search for deduplication
+
+---
+
+### `cluster_messages`
+
+Many-to-many link between event clusters and messages.
+
+**Purpose**: Junction table linking messages to their detected clusters with similarity scores.
+
+**Key Columns**:
+- `cluster_id` (INTEGER FK → telegram_event_clusters ON DELETE CASCADE)
+- `message_id` (BIGINT FK → messages ON DELETE CASCADE)
+- `similarity` (NUMERIC(4,3)): Embedding similarity to cluster centroid (0.000-1.000)
+- `added_at` (TIMESTAMPTZ)
+- PRIMARY KEY (`cluster_id`, `message_id`)
+
+**Triggers**:
+- AFTER INSERT/DELETE: `update_cluster_stats()` - Recalculates channel_count, affiliation breakdown
+- AFTER UPDATE: `auto_upgrade_cluster_tier()` - Checks if tier should progress
+
+---
+
 ## Entity Knowledge Graph
 
 ### `curated_entities`

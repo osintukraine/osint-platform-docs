@@ -29,6 +29,7 @@ Comprehensive documentation of all REST API endpoints in the OSINT Intelligence 
 - [Admin Dashboard](#admin-dashboard)
 - [Admin Kanban](#admin-kanban)
 - [Admin Configuration](#admin-configuration)
+- [Media Storage](#media-storage)
 
 ---
 
@@ -1377,6 +1378,139 @@ Bulk update multiple configuration values.
 
 ---
 
+## Map API
+
+The Map API provides GeoJSON endpoints for the map interface, supporting real-time geolocation visualization and event detection. Part of Event Detection V3.
+
+**Performance Features**:
+- Server-side point clustering (zoom < 12)
+- Redis caching: 60s messages, 300s clusters, 180s heatmap
+- Spatial index usage for bbox queries
+- Real-time WebSocket updates
+
+**Important**: Database stores `(latitude, longitude)` but GeoJSON uses `[longitude, latitude]`.
+
+### GET /api/map/messages
+
+Get geocoded messages within bounding box as GeoJSON FeatureCollection.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/map/messages` | Optional | Get geocoded messages |
+
+**Query Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `south` | float | Required | South boundary latitude |
+| `west` | float | Required | West boundary longitude |
+| `north` | float | Required | North boundary latitude |
+| `east` | float | Required | East boundary longitude |
+| `zoom` | integer | None | Map zoom level (0-22) |
+| `cluster` | boolean | `false` | Enable server-side clustering |
+| `limit` | integer | `500` | Maximum messages (1-2000) |
+| `min_confidence` | float | `0.5` | Minimum confidence (0.0-1.0) |
+| `start_date` | datetime | None | Start date (ISO 8601) |
+| `end_date` | datetime | None | End date (ISO 8601) |
+
+**Example**:
+```bash
+curl "http://localhost:8000/api/map/messages?south=48&west=35&north=50&east=40&limit=500"
+```
+
+### GET /api/map/clusters
+
+Get event clusters within bounding box as GeoJSON FeatureCollection.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/map/clusters` | Optional | Get event clusters by tier |
+
+**Query Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `south` | float | Required | South boundary latitude |
+| `west` | float | Required | West boundary longitude |
+| `north` | float | Required | North boundary latitude |
+| `east` | float | Required | East boundary longitude |
+| `tier` | string | None | Filter: rumor, unconfirmed, confirmed, verified |
+| `limit` | integer | `200` | Maximum clusters (1-1000) |
+
+**Tier Colors**: rumor (red), unconfirmed (yellow), confirmed (orange), verified (green)
+
+### GET /api/map/clusters/{cluster_id}/messages
+
+Get messages for a specific cluster (expansion data).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/map/clusters/{id}/messages` | Optional | Get cluster messages |
+
+### GET /api/map/heatmap
+
+Get aggregated heatmap data for message density visualization.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/map/heatmap` | Optional | Get density aggregation |
+
+**Query Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `south` | float | Required | South boundary |
+| `west` | float | Required | West boundary |
+| `north` | float | Required | North boundary |
+| `east` | float | Required | East boundary |
+| `grid_size` | float | `0.1` | Grid cell size in degrees |
+
+### GET /api/map/locations/suggest
+
+Location autocomplete for frontend search.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/map/locations/suggest` | Optional | Location autocomplete |
+
+**Query Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `q` | string | Required | Location name prefix (min 2 chars) |
+| `limit` | integer | `10` | Maximum suggestions (1-50) |
+
+### GET /api/map/locations/reverse
+
+Reverse geocoding - find nearest location to coordinates.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/map/locations/reverse` | Optional | Reverse geocode |
+
+**Query Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `lat` | float | Required | Latitude |
+| `lng` | float | Required | Longitude |
+
+### WS /api/map/ws/map/live
+
+WebSocket endpoint for real-time map updates.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| WS | `/api/map/ws/map/live` | Real-time location updates |
+
+**Query Parameters**: `south`, `west`, `north`, `east` (bounding box)
+
+**Message Types**:
+- `feature`: New geocoded message (GeoJSON)
+- `heartbeat`: Keep-alive (every 30s)
+
+---
+
 ## Common Response Patterns
 
 ### Pagination
@@ -1410,6 +1544,134 @@ X-Cached: true
 X-Cache-TTL: 15
 X-Prometheus-Available: true
 ```
+
+---
+
+## Media Storage
+
+Internal API endpoints for media routing and caching. These endpoints are used by Caddy for media delivery.
+
+### GET /media/internal/media-redirect/{file_hash:path}
+
+Route a media request to the appropriate storage location.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/media/internal/media-redirect/{file_hash}` | Internal | Route media to storage box |
+
+**Path Parameters**:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `file_hash` | string | Media file path (e.g., `ab/cd/abcd1234.jpg`) |
+
+**Response**: HTTP 302 redirect to storage location
+
+**Response Headers**:
+```http
+HTTP/1.1 302 Found
+Location: /storage/default/media/ab/cd/abcd1234.jpg
+X-Media-Source: storage-box
+X-Cache-Status: hit
+```
+
+**Cache Status Values**:
+
+| Value | Description |
+|-------|-------------|
+| `hit` | Route found in Redis cache |
+| `miss` | Route not cached, queried from database |
+| `populated` | Cache miss, now populated |
+
+**Error Response** (404):
+```json
+{
+  "detail": "Media file not found"
+}
+```
+
+---
+
+### POST /media/internal/media-invalidate/{file_hash}
+
+Invalidate the Redis cache entry for a media file.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/media/internal/media-invalidate/{file_hash}` | Internal | Invalidate cache entry |
+
+**Path Parameters**:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `file_hash` | string | SHA-256 hash of the media file |
+
+**Response** (200):
+```json
+{
+  "status": "ok",
+  "sha256": "abcd1234...",
+  "cache_deleted": true
+}
+```
+
+---
+
+### GET /media/internal/media-stats
+
+Get media cache statistics.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/media/internal/media-stats` | Internal | Get cache statistics |
+
+**Response** (200):
+```json
+{
+  "cache_size": 15234,
+  "estimated_hit_rate": 0.994,
+  "cache_ttl_seconds": 86400
+}
+```
+
+**Response Fields**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cache_size` | integer | Number of entries in Redis cache |
+| `estimated_hit_rate` | float | Estimated cache hit rate (0.0-1.0) |
+| `cache_ttl_seconds` | integer | Cache entry TTL in seconds |
+
+---
+
+### Media Delivery Flow
+
+The media delivery system uses a tiered approach:
+
+```
+Browser Request: /media/ab/cd/abcd1234.jpg
+         │
+         ▼
+    ┌─────────┐
+    │  Caddy  │
+    └─────────┘
+         │
+    1. Check local buffer (/var/cache/osint-media-buffer)
+         │
+    ┌────┴────┐
+   HIT       MISS
+    │         │
+    ▼         ▼
+  Serve    Call API: /media/internal/media-redirect/ab/cd/abcd1234.jpg
+  from          │
+  SSD           ▼
+           Redis Cache → Database → 302 Redirect
+```
+
+**Related Documentation**:
+
+- [Operator Guide: Hetzner Storage](../operator-guide/hetzner-storage.md)
+- [Developer Guide: Media Storage](../developer-guide/media-storage.md)
 
 ---
 

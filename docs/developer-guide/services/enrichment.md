@@ -974,6 +974,88 @@ enrichment_events_matched_messages_total 1250
 enrichment_events_tier_transitions_total{from="1", to="2"} 45
 ```
 
+### Geolocation Task
+
+**File**: `/services/enrichment/src/tasks/geolocation.py`
+**Worker**: Fast Pool (`enrich:fast` queue)
+
+Extracts geographic coordinates from location mentions in messages using a 4-stage pipeline.
+
+#### 4-Stage Pipeline
+
+```
+Stage 1: Gazetteer Match (offline, 0.95 confidence)
+    ↓ miss
+Stage 2: LLM Relative Location ("10km north of X", 0.75 confidence)
+    ↓ miss
+Stage 3: Nominatim API (OSM, 0.85 confidence)
+    ↓ miss
+Stage 4: Mark Unresolved (manual review queue)
+```
+
+**Stage 1 - Gazetteer**: Instant lookup against local GeoNames database (~30,000 UA/RU locations). Returns 0.95 confidence.
+
+**Stage 2 - LLM Relative**: Handles "10km north of Bakhmut" patterns. Uses qwen2.5:3b via Ollama. Returns 0.75 confidence.
+
+**Stage 3 - Nominatim**: OpenStreetMap API fallback. Rate-limited to 1 req/sec. Returns 0.85 confidence.
+
+**Stage 4 - Unresolved**: Failed all stages. Creates entry with `extraction_method='unresolved'` for manual review.
+
+#### Configuration
+
+```bash
+NOMINATIM_URL=https://nominatim.openstreetmap.org
+GEOLOCATION_MODEL=qwen2.5:3b
+```
+
+#### Real-Time Updates
+
+Publishes to Redis `map:new_location` for WebSocket live map updates.
+
+---
+
+### Cluster Detection Task
+
+**File**: `/services/enrichment/src/tasks/cluster_detection.py`
+**Worker**: Decision Worker (`enrich:decision` queue)
+
+Detects event clusters from message velocity spikes using embedding similarity.
+
+#### Detection Algorithm
+
+1. Monitor message velocity per location (messages/hour)
+2. Trigger when velocity > `CLUSTER_VELOCITY_THRESHOLD` in time window
+3. Check embedding similarity > `CLUSTER_SIMILARITY_THRESHOLD` (0.80)
+4. Create cluster if >= `MIN_MESSAGES_FOR_CLUSTER` similar messages
+
+#### Tier Progression
+
+Tiers auto-upgrade via database triggers:
+
+| Tier | Channels | Cross-Affiliation |
+|------|----------|-------------------|
+| `rumor` | 1 | No |
+| `unconfirmed` | 2-3 | No |
+| `confirmed` | 3+ | Yes |
+| `verified` | Any | Human verified |
+
+#### Configuration
+
+```bash
+CLUSTER_VELOCITY_THRESHOLD=2.0      # messages/hour
+CLUSTER_TIME_WINDOW_HOURS=2
+CLUSTER_SIMILARITY_THRESHOLD=0.80   # embedding cosine
+MIN_MESSAGES_FOR_CLUSTER=3
+```
+
+#### Key Tables
+
+- `telegram_event_clusters`: Detected clusters with tier/status
+- `cluster_messages`: Junction table with similarity scores
+- `message_locations`: Geocoded coordinates from geolocation task
+
+---
+
 ### Wikidata Enrichment
 
 The Wikidata Enrichment task enriches curated and OpenSanctions entities with data from Wikidata, providing:

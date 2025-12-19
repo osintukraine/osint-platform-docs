@@ -897,6 +897,56 @@ cat data/entities/processed/status.json
 
 ---
 
+## Event Detection V3 & Geolocation
+
+Geolocation pipeline and velocity-based cluster detection for real-time event mapping.
+
+### Core Configuration
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `CLUSTER_VELOCITY_THRESHOLD` | Messages per hour to trigger cluster detection | `2.0` | No |
+| `CLUSTER_TIME_WINDOW_HOURS` | Sliding time window for velocity calculation (hours) | `2` | No |
+| `CLUSTER_SIMILARITY_THRESHOLD` | Minimum embedding cosine similarity for cluster membership (0.0-1.0) | `0.80` | No |
+| `MIN_MESSAGES_FOR_CLUSTER` | Minimum messages required to form a cluster | `3` | No |
+| `CLUSTER_RUMOR_TTL_HOURS` | Hours before unconfirmed rumors auto-archive | `24` | No |
+| `NOMINATIM_URL` | OpenStreetMap Nominatim geocoding API URL | `https://nominatim.openstreetmap.org` | No |
+
+**Architecture Overview:**
+- 4-stage geolocation pipeline: Gazetteer → LLM → Nominatim → Unresolved
+- Velocity-based cluster detection with embedding similarity
+- 4-tier progression: rumor → unconfirmed → confirmed → verified
+- Real-time WebSocket updates for live map tracking
+
+**Performance Tuning:**
+
+**Development (more sensitive detection):**
+```bash
+CLUSTER_VELOCITY_THRESHOLD=1.0      # Lower = more sensitive
+CLUSTER_TIME_WINDOW_HOURS=2
+MIN_MESSAGES_FOR_CLUSTER=3
+```
+
+**Production (reduce false positives):**
+```bash
+CLUSTER_VELOCITY_THRESHOLD=2.0      # Higher = stricter
+CLUSTER_TIME_WINDOW_HOURS=2
+MIN_MESSAGES_FOR_CLUSTER=3
+```
+
+**High-volume environments:**
+```bash
+CLUSTER_VELOCITY_THRESHOLD=3.0
+CLUSTER_TIME_WINDOW_HOURS=2
+MIN_MESSAGES_FOR_CLUSTER=5          # Require more messages
+```
+
+**Nominatim API:**
+- Public API: `https://nominatim.openstreetmap.org` (rate-limited to 1 req/sec)
+- For production: Consider self-hosted Nominatim to avoid rate limits
+
+---
+
 ## Development Helpers
 
 Development-only convenience settings.
