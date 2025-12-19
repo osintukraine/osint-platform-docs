@@ -1056,6 +1056,306 @@ MIN_MESSAGES_FOR_CLUSTER=3
 
 ---
 
+### Geolocation LLM Task
+
+**File**: `/services/enrichment/src/tasks/geolocation_llm.py`
+**Worker**: Fast Pool (`enrich:fast` queue)
+**Priority**: 60
+**LLM Required**: Yes (qwen2.5:3b via Ollama)
+
+Handles messages that the fast geolocation task couldn't process by using LLM to extract location names, then geocoding them.
+
+#### Pipeline
+
+```
+1. LLM extracts location names from text (handles RU/UA/EN)
+2. Gazetteer lookup for extracted names (offline, 0.95 confidence)
+3. Nominatim API for names not in gazetteer (online, 0.85 confidence)
+4. Store coordinates in message_locations table
+```
+
+**Use Case**: Messages containing location mentions that aren't direct matches (e.g., "near the city center", "eastern part of Bakhmut").
+
+#### Work Query
+
+Selects messages that:
+- Have content > 50 chars
+- Are not spam
+- Are older than 1 hour (gives fast pool time first)
+- Don't already have `message_locations` entries
+
+#### Configuration
+
+```bash
+OLLAMA_HOST=http://ollama:11434
+GEOLOCATION_MODEL=qwen2.5:3b
+NOMINATIM_URL=https://nominatim.openstreetmap.org
+```
+
+#### Key Methods
+
+- `_extract_locations_with_llm()` - LLM prompt returns location names, one per line
+- `_geocode_location()` - Gazetteer first, then Nominatim fallback
+- `_save_location()` - Stores with `extraction_method='llm_gazetteer'` or `'llm_nominatim'`
+
+---
+
+### Discovery Metrics Collector Task
+
+**File**: `/services/enrichment/src/tasks/discovery_metrics_collector.py`
+**Worker**: Maintenance Worker (`enrich:maintenance` queue)
+**Priority**: 50
+**Dependencies**: Telegram client (passed from main.py)
+
+Polls discovery channels via Telegram API to collect quality metrics WITHOUT archiving messages.
+
+#### Role in Discovery Pipeline
+
+```
+1. ForwardDiscoveryTask → Joins channels (adds to channels table)
+2. THIS TASK → Polls and analyzes messages (updates quality_metrics)
+3. DiscoveryEvaluatorTask → Promotes/rejects based on metrics
+```
+
+**Why This Matters**: Enables evaluation of channels BEFORE committing to archive them. Channels in probation period (14 days) are monitored but not archived until quality is proven.
+
+#### How It Works
+
+1. Fetches last 30 messages from each discovery channel
+2. Runs through spam filter + relevance classifier
+3. Updates `channels.quality_metrics` with counts
+4. Does NOT store message content in database
+
+#### Quality Analysis
+
+**Spam Indicators** (2+ required to flag): casino, crypto, bitcoin, buy now, giveaway, etc.
+
+**Relevance Keywords (UA)**: зсу, всу, drone, артилер, tank, фронт, military, etc.
+
+**Relevance Keywords (RU)**: сво, спецоперац, вагнер, dnr, lnr, донецк, etc.
+
+**Off-Topic Keywords**: recipe, fashion, celebrity, sport, weather, horoscope, etc.
+
+#### Output Metrics
+
+```json
+{
+  "total_messages_received": 156,
+  "spam_messages": 12,
+  "off_topic_messages": 8,
+  "high_quality_messages": 98,
+  "spam_rate": 0.0769,
+  "off_topic_rate": 0.0513,
+  "last_poll_at": "2025-12-18T15:30:00Z"
+}
+```
+
+#### Configuration
+
+- Poll interval: 6 hours between polls for same channel
+- Messages per poll: 30
+- Rate limiting: 2 second delay between channel polls
+
+---
+
+### RSS Correlation Task
+
+**File**: `/services/enrichment/src/tasks/rss_correlation.py`
+**Worker**: Fast Pool (`enrich:fast` queue)
+**Priority**: 60 (after embeddings, before validation)
+**Dependencies**: pgvector extension
+
+Matches Telegram messages with RSS news articles using semantic similarity.
+
+#### Purpose
+
+Creates correlation records between Telegram messages and RSS articles for:
+- Unified intelligence display (show related sources)
+- Downstream validation by `RSSValidationTask` (LLM classification)
+- Perspective difference detection (RU vs UA sources)
+
+#### Algorithm
+
+```
+1. For each message with embedding:
+   - Search for RSS articles within time window (±24 hours)
+   - Calculate cosine similarity using pgvector <=> operator
+   - Create correlation records for matches above threshold
+```
+
+#### Correlation Types
+
+| Similarity | Type | Description |
+|------------|------|-------------|
+| ≥ 0.85 | `same_event` | Very high match - likely same event |
+| ≥ 0.75 | `related_topic` | High match - related coverage |
+| ≥ 0.40 | `possibly_related` | Lower match - may be related |
+
+#### Configuration
+
+```bash
+# Defaults (can be overridden in platform_config table)
+RSS_CORRELATION_SIMILARITY_THRESHOLD=0.40  # Lower for cross-lingual
+RSS_CORRELATION_TIME_WINDOW_HOURS=24       # News often lags Telegram
+MAX_ARTICLES_PER_MESSAGE=10
+```
+
+#### Perspective Detection
+
+Automatically flags when sources represent opposing perspectives:
+- `channel_folder` contains "RU" + `article.source_category` contains "UA" → `perspective_difference=true`
+
+---
+
+### Cluster Tier Updater Task
+
+**File**: `/services/enrichment/src/tasks/cluster_tier_updater.py`
+**Worker**: Maintenance Worker (`enrich:maintenance` queue)
+**Priority**: 40
+**LLM Required**: No (rule-based)
+
+Periodically recalculates cluster tiers to catch edge cases missed by database triggers.
+
+#### Purpose
+
+Complements automatic triggers but ensures no edge cases are missed (e.g., RSS articles added after initial cluster validation).
+
+#### How It Works
+
+Calls PostgreSQL function `recalculate_cluster_tiers()` which:
+1. Checks all validated clusters
+2. Recalculates tier based on current evidence
+3. Returns list of upgrades
+
+#### Tier Recalculation Logic (in PostgreSQL function)
+
+```sql
+-- Tier hierarchy:
+-- verified: RSS corroboration + 3+ channels
+-- confirmed: RSS corroboration OR (cross-affiliation + 5+ channels)
+-- unconfirmed: Cross-affiliation + 3+ channels
+-- rumor: Everything else
+```
+
+#### Stats Output
+
+```json
+{
+  "clusters_checked": 150,
+  "tiers_upgraded": 3,
+  "recent_upgrades": [
+    [456, "unconfirmed", "confirmed"],
+    [789, "rumor", "unconfirmed"]
+  ]
+}
+```
+
+---
+
+### Cluster Validation Task
+
+**File**: `/services/enrichment/src/tasks/cluster_validation.py`
+**Worker**: Decision Worker (`enrich:decision` queue)
+**Priority**: 75 (high - after detection, before other enrichment)
+**LLM Required**: Yes (qwen2.5:3b via Ollama)
+
+Validates detected clusters using LLM claim analysis.
+
+#### Validation Stages
+
+1. **LLM Claim Analysis**: Classifies as `factual_report`, `rumor`, `propaganda`, or `opinion`
+2. **Cross-Affiliation Check**: RU + UA sources = higher confidence
+3. **RSS Corroboration**: Check if RSS articles support the cluster
+4. **Tier Assignment**: Based on evidence
+5. **Auto-Archive**: Propaganda clusters archived immediately
+
+#### Claim Types
+
+| Type | Characteristics |
+|------|-----------------|
+| `factual_report` | Specific details, named sources, verifiable claims |
+| `rumor` | Unverified claims, "reportedly", "allegedly" |
+| `propaganda` | Emotional language, extreme claims, clear bias |
+| `opinion` | Commentary, analysis, personal views |
+
+#### Tier Assignment Logic
+
+```python
+if has_rss and channel_count >= 3:
+    tier = 'verified'
+elif has_rss:
+    tier = 'confirmed'
+elif cross_affiliation_met and channel_count >= 5:
+    tier = 'confirmed'
+elif cross_affiliation_met and channel_count >= 3:
+    tier = 'unconfirmed'
+else:
+    tier = 'rumor'
+```
+
+#### Promotion to Event
+
+Clusters with tier `confirmed` or `verified` are promoted to events:
+1. Creates entry in `events` table
+2. Links cluster via `promoted_to_event_id`
+3. Copies messages to `event_messages` table
+
+#### Configuration
+
+```bash
+CLUSTER_RUMOR_TTL_HOURS=24  # Auto-archive rumors after this
+OLLAMA_HOST=http://ollama:11434
+AI_TAGGING_MODEL=qwen2.5:3b
+```
+
+---
+
+### Cluster Archiver Task
+
+**File**: `/services/enrichment/src/tasks/cluster_archiver.py`
+**Worker**: Maintenance Worker (`enrich:maintenance` queue)
+**Priority**: 20 (lowest - maintenance task)
+**LLM Required**: No (rule-based)
+
+Auto-archives stale rumors and propaganda clusters to keep the event timeline clean.
+
+#### Archive Conditions
+
+1. **Stale Rumors**: Clusters with `tier='rumor'` older than TTL (default 24 hours)
+   - Archive reason: `no_confirmation`
+
+2. **Propaganda**: Clusters with `claim_type='propaganda'` (from validation)
+   - Archive reason: `rejected_propaganda`
+
+#### Archive Process
+
+```sql
+UPDATE telegram_event_clusters
+SET status = 'archived',
+    archived_at = NOW(),
+    archive_reason = :reason
+WHERE ...
+```
+
+#### Configuration
+
+```bash
+CLUSTER_RUMOR_TTL_HOURS=24  # Hours before auto-archiving unconfirmed rumors
+```
+
+#### Stats Output
+
+```json
+{
+  "total_archived": 15,
+  "rumors_archived": 12,
+  "propaganda_archived": 3,
+  "rumor_ttl_hours": 24
+}
+```
+
+---
+
 ### Wikidata Enrichment
 
 The Wikidata Enrichment task enriches curated and OpenSanctions entities with data from Wikidata, providing:
