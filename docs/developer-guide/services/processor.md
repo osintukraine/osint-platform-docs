@@ -38,7 +38,7 @@ graph LR
 | File | Size | Purpose |
 |------|------|---------|
 | `main.py` | - | Worker initialization and Redis consumer loop |
-| `message_processor.py` | 58 KB | Main orchestrator for 9-stage pipeline |
+| `message_processor.py` | - | Main orchestrator for 5-stage pipeline (with sub-steps) |
 | `llm_classifier.py` | 49 KB | Unified LLM classification (spam + topic + importance) |
 | `media_archiver.py` | - | Content-addressed storage with SHA-256 deduplication |
 | `entity_matcher.py` | - | Semantic entity matching against 1,425 curated entities |
@@ -47,7 +47,19 @@ graph LR
 
 ### Processing Pipeline
 
-The processor executes **8 stages** for each message:
+The processor executes **5 major stages** for each message, with sub-steps:
+
+!!! note "Pipeline Architecture"
+    The code comments describe 5 major stages. The detailed view below shows sub-steps (9 total) to clarify the decision flow.
+
+**5 Major Stages** (from code):
+1. **LLM Classification** - Spam detection + topic + importance + archive decision
+2. **Entity Extraction** - Regex-based (hashtags, mentions, coordinates)
+3. **Media Archival** - If has media and should_archive
+4. **Translation** - If needed and enabled
+5. **PostgreSQL Persistence** - Store structured intelligence
+
+**Detailed Flow (9 sub-steps)**:
 
 ```mermaid
 graph TD
