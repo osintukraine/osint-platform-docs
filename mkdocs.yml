@@ -103,6 +103,7 @@ nav:
       - Installation: operator-guide/installation.md
       - Configuration: operator-guide/configuration.md
       - Telegram Setup: operator-guide/telegram-setup.md
+      - Telegram Disaster Recovery: operator-guide/telegram-disaster-recovery.md
       - Monitoring & Metrics: operator-guide/monitoring.md
       - Backup & Restore: operator-guide/backup-restore.md
       - Performance Tuning: operator-guide/performance-tuning.md
