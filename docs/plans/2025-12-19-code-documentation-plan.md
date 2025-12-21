@@ -126,13 +126,13 @@ async def helper_function(arg1: str, arg2: int) -> dict:
 - [x] events.py ✅ **COMPLETE** - Event listing, tiers, timeline, archive/major status
 - [x] analytics.py ✅ **COMPLETE** - Timeline, distributions, heatmap, channel/entity analytics
 
-### Phase 2: Admin Routers (1/6 complete)
+### Phase 2: Admin Routers (6/6 complete) ✅
 - [x] export.py ✅ **COMPLETE** - 88% comprehensive docstrings
-- [ ] feeds.py ⚠️ 40% comprehensive, 60% minimal single-line
-- [ ] config.py ⚠️ 18% comprehensive, needs most work
-- [ ] spam.py ⚠️ 50% comprehensive
-- [ ] prompts.py ⚠️ 29% comprehensive
-- [ ] users.py ⚠️ 56% comprehensive
+- [x] feeds.py ✅ **COMPLETE** - RSS feed CRUD, polling, articles (10 endpoints)
+- [x] config.py ✅ **COMPLETE** - Platform config, model configs, env vars (12 endpoints)
+- [x] spam.py ✅ **COMPLETE** - Queue, review, bulk ops, purge (8 endpoints)
+- [x] prompts.py ✅ **COMPLETE** - Prompt versioning, activation, history (7 endpoints)
+- [x] users.py ✅ **COMPLETE** - Ory Kratos users/sessions, recovery links (12 endpoints)
 
 ### Phase 3: Remaining Routers (0/10)
 - [ ] social_graph.py
