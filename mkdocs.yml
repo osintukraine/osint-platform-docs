@@ -97,11 +97,14 @@ nav:
       - RSS Feed Management: user-guide/rss-feeds.md
       - Entity Exploration: user-guide/entities.md
       - Social Graph Analysis: user-guide/social-graph.md
+      - Map Interface: user-guide/map-interface.md
       - Notifications & Alerts: user-guide/notifications.md
   - Operator Guide:
       - operator-guide/index.md
       - Installation: operator-guide/installation.md
       - Configuration: operator-guide/configuration.md
+      - Caddy Reverse Proxy: operator-guide/caddy.md
+      - Hetzner Storage: operator-guide/hetzner-storage.md
       - Telegram Setup: operator-guide/telegram-setup.md
       - Telegram Disaster Recovery: operator-guide/telegram-disaster-recovery.md
       - Monitoring & Metrics: operator-guide/monitoring.md
@@ -128,6 +131,7 @@ nav:
           - Migration: developer-guide/services/migration.md
           - Translation Backfill: developer-guide/services/translation-backfill.md
       - Shared Libraries: developer-guide/shared-libraries.md
+      - Media Storage Architecture: developer-guide/media-storage.md
       - Database Schema: developer-guide/database-schema.md
       - Database Migrations: developer-guide/database-migrations.md
       - LLM Integration: developer-guide/llm-integration.md
@@ -150,7 +154,7 @@ nav:
   - Reference:
       - reference/index.md
       - API Endpoints: reference/api-endpoints.md
-      - Environment Variables: reference/environment-vars.md
+      - Environment Variables: reference/environment-variables.md
       - Database Tables: reference/database-tables.md
       - Docker Services: reference/docker-services.md
 
