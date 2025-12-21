@@ -134,17 +134,17 @@ async def helper_function(arg1: str, arg2: int) -> dict:
 - [x] prompts.py ✅ **COMPLETE** - Prompt versioning, activation, history (7 endpoints)
 - [x] users.py ✅ **COMPLETE** - Ory Kratos users/sessions, recovery links (12 endpoints)
 
-### Phase 3: Remaining Routers (0/10)
-- [ ] social_graph.py
-- [ ] map.py
-- [ ] media.py
-- [ ] rss.py
-- [ ] stream.py
-- [ ] validation.py
-- [ ] semantic.py
-- [ ] auth.py
-- [ ] comments.py
-- [ ] bookmarks.py
+### Phase 3: Remaining Routers (10/10 complete) ✅
+- [x] social_graph.py ✅ **COMPLETE** - Channel influence, engagement timeline, forwarding network
+- [x] map.py ✅ **COMPLETE** - GeoJSON endpoints, WebSocket, clustering, heatmaps (19 functions)
+- [x] media.py ✅ **COMPLETE** - Media routing, gallery, stats, cache invalidation
+- [x] rss.py ✅ **COMPLETE** - Dynamic RSS/Atom/JSON feeds, search-based subscriptions
+- [x] stream.py ✅ **COMPLETE** - Unified cross-source stream, semantic correlations
+- [x] validation.py ✅ **COMPLETE** - Message credibility validation, cache-first architecture
+- [x] semantic.py ✅ **COMPLETE** - Vector search, similar messages, tag management
+- [x] auth.py ✅ **COMPLETE** - JWT login, user management, password changes
+- [x] comments.py ✅ **COMPLETE** - Comment translation, retrieval with status
+- [x] bookmarks.py ✅ **COMPLETE** - User bookmark CRUD operations
 
 ### Phase 4: Service Core (2/3 complete)
 - [x] llm_classifier.py ✅ **COMPLETE** - 85% coverage, excellent docs
