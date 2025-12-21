@@ -441,6 +441,65 @@ erDiagram
 | **Config** | platform_config, folder_rules, military_slang |
 | **Audit** | decision_logs |
 | **Comments** | message_comments, telegram_users |
+| **User Activity** | user_roles, user_bookmarks, user_comments, admin_audit_log, api_keys |
+
+---
+
+## User Identity Pattern
+
+!!! warning "Critical Pattern for User-Related Tables"
+    All user-related tables use `kratos_identity_id` (UUID), NOT the legacy `users.id` (INTEGER).
+
+### The Legacy `users` Table (DEPRECATED)
+
+The `users` table was designed for local authentication with password hashing. **Do not use it for new features.**
+
+```sql
+-- ❌ LEGACY - Do not reference in new tables
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,           -- Integer ID
+    username VARCHAR(50) UNIQUE,
+    email VARCHAR(255) UNIQUE,
+    hashed_password VARCHAR(255),    -- Local auth only
+    ...
+);
+```
+
+### The Correct Pattern: kratos_identity_id
+
+All user-facing features must use `kratos_identity_id` (UUID) directly:
+
+```sql
+-- ✅ CORRECT - Use this pattern for new tables
+CREATE TABLE my_user_feature (
+    id SERIAL PRIMARY KEY,
+    kratos_identity_id UUID NOT NULL,  -- Ory Kratos identity UUID
+    ...
+);
+
+CREATE INDEX idx_my_feature_user ON my_user_feature(kratos_identity_id);
+```
+
+### Tables Using kratos_identity_id
+
+| Table | Purpose |
+|-------|---------|
+| `user_roles` | Application roles per Kratos identity |
+| `user_bookmarks` | User-saved messages |
+| `user_comments` | User comments on messages |
+| `admin_audit_log` | Admin action audit trail |
+| `feed_tokens` | RSS/Atom feed authentication tokens |
+| `api_keys` | Programmatic API access keys |
+
+### Why This Matters
+
+Ory Kratos manages user identities externally and uses 128-bit UUIDs. Converting UUIDs to integers causes PostgreSQL INTEGER overflow:
+
+```
+ERROR: value out of int32 range: 27537564199611862328462258318740097659
+```
+
+See [Authentication - Developer Guide](../security-guide/authentication.md#developer-guide-user-identity-in-database) for ORM and router patterns.
 
 ---
 

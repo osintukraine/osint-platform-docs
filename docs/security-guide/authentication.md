@@ -633,9 +633,105 @@ docker-compose --profile auth up -d
 # 4. Users must re-register (password migration not supported)
 ```
 
+## Developer Guide: User Identity in Database
+
+When building features that need to track user ownership (bookmarks, tokens, audit logs), you must use the correct identity pattern.
+
+### The Kratos Identity UUID Pattern
+
+!!! warning "Critical: Use kratos_identity_id, NOT users.id"
+    The platform has a **legacy `users` table** with integer IDs that should NOT be used for new features. Always use `kratos_identity_id` (UUID) directly.
+
+**Correct Pattern (new tables):**
+
+```sql
+CREATE TABLE my_feature (
+    id SERIAL PRIMARY KEY,
+    kratos_identity_id UUID NOT NULL,  -- ✅ Correct: Kratos identity UUID
+    -- ... other columns
+);
+
+CREATE INDEX idx_my_feature_user ON my_feature(kratos_identity_id);
+```
+
+**Incorrect Pattern (legacy - DO NOT USE):**
+
+```sql
+CREATE TABLE my_feature (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),  -- ❌ Wrong: Legacy table reference
+    -- ... other columns
+);
+```
+
+### Why This Matters
+
+The legacy `users` table was designed for local authentication with password hashing. With Ory Kratos, user identities are managed externally and identified by UUIDs.
+
+**Converting a UUID to an integer causes overflow errors:**
+
+```python
+# ❌ WRONG - This causes int32 overflow!
+user_id = int(kratos_user_id)  # UUID → huge 128-bit integer
+
+# ✅ CORRECT - Use UUID directly
+kratos_identity_id = user.user_id  # Already a UUID
+```
+
+### Tables Using the Correct Pattern
+
+These tables correctly use `kratos_identity_id`:
+
+| Table | Purpose |
+|-------|---------|
+| `user_roles` | Application roles per Kratos identity |
+| `user_bookmarks` | User-saved messages |
+| `user_comments` | User comments on messages |
+| `admin_audit_log` | Admin action audit trail |
+| `feed_tokens` | RSS/Atom feed authentication |
+| `api_keys` | Programmatic API access |
+
+### ORM Model Pattern
+
+When creating SQLAlchemy models:
+
+```python
+from uuid import UUID
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+
+class MyFeature(Base):
+    __tablename__ = "my_feature"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    # ✅ Correct: UUID column for Kratos identity
+    kratos_identity_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+    )
+```
+
+### Router/Service Pattern
+
+When accessing the current user in FastAPI routes:
+
+```python
+from ..dependencies.auth import AuthenticatedUser
+
+@router.get("/my-items")
+async def list_items(user: AuthenticatedUser, db: AsyncSession = Depends(get_db)):
+    # ✅ Correct: Use user.user_id directly (already a UUID)
+    items = await service.get_user_items(user.user_id)
+
+    # ❌ Wrong: Never convert to int
+    # items = await service.get_user_items(int(user.user_id))
+```
+
 ## Related Documentation
 
 - [Authorization Guide](authorization.md) - Role-based access control
+- [Database Schema](../developer-guide/database-schema.md) - Table definitions
 - [API Endpoint Protection](https://github.com/osintukraine/osint-intelligence-platform/blob/master/services/api/ENDPOINT_PROTECTION.md) - Detailed endpoint security
 - [Configuration Reference](../operator-guide/configuration.md) - Environment variables
 
