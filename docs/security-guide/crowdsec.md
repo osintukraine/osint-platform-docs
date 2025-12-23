@@ -61,78 +61,91 @@ IP Bans enforced by Caddy Bouncer
 
 ## Installation
 
-### Quick Setup (Recommended)
+CrowdSec is integrated into the main `docker-compose.yml` using the `auth` profile. The `crowdsecurity/caddy` collection is **auto-installed** on first startup via the `COLLECTIONS` environment variable.
 
-Use the automated setup script to configure CrowdSec:
+### First-Time Setup
+
+**Step 1: Start the Auth Profile Stack**
 
 ```bash
-# Run automated setup
-./scripts/setup-crowdsec.sh
+# Start all auth profile services (includes CrowdSec, Caddy, Kratos)
+docker-compose --profile auth up -d
 ```
 
-**What the script does:**
+On first startup, CrowdSec automatically:
 
-1. Generates CrowdSec API keys
-2. Installs required scenarios and collections
-3. Configures Caddy bouncer
-4. Updates `.env` file
-5. Starts secured stack
+- Installs `crowdsecurity/caddy` collection (HTTP scenarios, Caddy log parser)
+- Loads custom OSINT scenarios from mounted volumes
+- Starts the Local API for bouncer communication
 
-### Manual Setup
-
-**Step 1: Start CrowdSec**
+**Step 2: Generate Bouncer API Key**
 
 ```bash
-# Start CrowdSec detection engine
-docker-compose -f docker-compose.yml -f docker-compose.security.yml up -d crowdsec
+# Generate API key for Caddy bouncer (save the output!)
+docker exec osint-crowdsec cscli bouncers add caddy-bouncer -o raw
 ```
 
-**Step 2: Generate API Keys**
+**Step 3: Configure Environment**
+
+Add the bouncer key to `.env`:
 
 ```bash
-# Generate Caddy bouncer API key
-docker-compose exec crowdsec cscli bouncers add caddy-bouncer
-# Save the generated key
+# CrowdSec Bouncer API Key (required for Caddy integration)
+CROWDSEC_BOUNCER_API_KEY=<paste-key-from-step-2>
 
-# Generate dashboard API key (optional)
-docker-compose exec crowdsec cscli machines add crowdsec-dashboard
-# Save the generated key
-```
-
-**Step 3: Update Environment**
-
-Add the generated keys to `.env`:
-
-```bash
-# CrowdSec configuration
-CROWDSEC_BOUNCER_API_KEY=<your-bouncer-key>
-CROWDSEC_DASHBOARD_API_KEY=<your-dashboard-key>
-
-# Domain for production
+# Your production domain
 DOMAIN=yourdomain.com
 ```
 
-**Step 4: Start Secured Stack**
+**Step 4: Restart Caddy to Apply Key**
 
 ```bash
-# Start full production stack with CrowdSec
-docker-compose -f docker-compose.yml \
-  -f docker-compose.production.yml \
-  -f docker-compose.security.yml up -d
+# Restart Caddy to pick up the bouncer API key
+docker-compose --profile auth up -d caddy --force-recreate
 ```
 
 **Step 5: Verify Installation**
 
 ```bash
-# Check CrowdSec is running
-docker-compose ps crowdsec
+# Check CrowdSec is healthy
+docker exec osint-crowdsec cscli lapi status
 
-# Check bouncer is connected
-docker-compose exec crowdsec cscli bouncers list
+# Verify bouncer is connected (should show caddy-bouncer)
+docker exec osint-crowdsec cscli bouncers list
 
-# Verify scenarios are installed
-docker-compose exec crowdsec cscli scenarios list
+# Check scenarios are loaded (56+ standard + 7 OSINT custom)
+docker exec osint-crowdsec cscli scenarios list | head -20
+
+# Verify OSINT scenarios specifically
+docker exec osint-crowdsec cscli scenarios list | grep osint
+
+# Check Caddy logs are being parsed
+docker exec osint-crowdsec cscli metrics
 ```
+
+### What Gets Auto-Installed
+
+The `COLLECTIONS=crowdsecurity/caddy` environment variable triggers automatic installation of:
+
+| Collection | Scenarios | Description |
+|------------|-----------|-------------|
+| `crowdsecurity/caddy` | 1 | Caddy log parser |
+| `crowdsecurity/base-http-scenarios` | 15+ | SQL injection, XSS, path traversal, etc. |
+| `crowdsecurity/http-cve` | 40+ | CVE-specific exploit detection |
+
+### Custom OSINT Scenarios
+
+Seven platform-specific scenarios are mounted from `infrastructure/crowdsec/scenarios/`:
+
+| Scenario | Ban Duration | Trigger |
+|----------|--------------|---------|
+| `osint/api-abuse` | 6 hours | 20+ distinct API paths in 10s |
+| `osint/auth-bruteforce` | 24 hours | 3 failed auth in 60s |
+| `osint/admin-abuse` | 48 hours | 5 admin panel requests in 5min |
+| `osint/search-abuse` | 12 hours | 20 search/messages in 60s |
+| `osint/data-extraction` | 72 hours | 50 successful API calls in 5s |
+| `osint/rss-abuse` | 3 minutes | 15 RSS requests in 30s |
+| `osint/suspicious-ua` | 1 hour | 15 requests with bot/curl/python UA |
 
 ## Security Scenarios
 
@@ -155,7 +168,14 @@ CrowdSec includes built-in web application firewall scenarios:
 
 ### OSINT Platform-Specific Scenarios
 
-Custom scenarios tailored for intelligence platform protection:
+Custom scenarios tailored for intelligence platform protection. These use field mappings from the `crowdsecurity/caddy-logs` parser:
+
+!!! note "Field Mapping Reference"
+    - `evt.Meta.log_type` = `http_access-log` (set by Caddy parser)
+    - `evt.Meta.http_path` = Request URI (e.g., `/api/messages`)
+    - `evt.Meta.http_status` = HTTP status code (e.g., `200`, `401`)
+    - `evt.Meta.http_user_agent` = User-Agent header
+    - `evt.Meta.source_ip` = Client IP address
 
 #### 1. API Abuse Detection (`osint/api-abuse`)
 
@@ -166,22 +186,24 @@ Detects automated scraping and excessive API usage.
 ```yaml
 name: osint/api-abuse
 type: leaky
-description: "Detects API abuse via excessive requests"
-filter: "evt.Meta.log_type == 'caddy_access' && evt.Parsed.request_path startsWith '/api/'"
-capacity: 50
+description: "Detect API abuse against OSINT platform endpoints"
+filter: "evt.Meta.log_type == 'http_access-log' && evt.Meta.http_path contains '/api/'"
 leakspeed: "10s"
+capacity: 50
 groupby: "evt.Meta.source_ip"
+distinct: "evt.Meta.http_path"
+condition: "len(queue.Queue) >= 20"
+blackhole: 300s
 labels:
-  service: api
-  type: abuse
-  remediation: ban
-blackhole: 300s  # 5-minute ban
+  service: osint-api
+  type: api_abuse
+  remediation: true
 ```
 
 **Detection:**
 
-- Triggers on >20 API calls in 10 seconds
-- Bans IP for 5 minutes
+- Triggers on 20+ distinct API paths in 10 seconds
+- Bans IP for 6 hours (via profiles.yaml)
 - Protects against automated data scraping
 
 #### 2. Search API Protection (`osint/search-abuse`)
@@ -192,16 +214,20 @@ Prevents abuse of search and message endpoints.
 
 ```yaml
 name: osint/search-abuse
-filter: "evt.Parsed.request_path in ['/api/search', '/api/messages']"
-capacity: 20
+type: leaky
+filter: "evt.Meta.log_type == 'http_access-log' && (evt.Meta.http_path contains '/api/search' || evt.Meta.http_path contains '/api/messages')"
 leakspeed: "60s"
-blackhole: 600s  # 10-minute ban
+capacity: 30
+groupby: "evt.Meta.source_ip"
+distinct: "evt.Meta.http_path"
+condition: "len(queue.Queue) >= 20"
+blackhole: 600s
 ```
 
 **Detection:**
 
-- Triggers on >20 searches per minute
-- Bans IP for 10 minutes
+- Triggers on 20+ distinct search/message queries per minute
+- Bans IP for 12 hours
 - Prevents search result harvesting
 
 #### 3. RSS Feed Protection (`osint/rss-abuse`)
@@ -212,16 +238,19 @@ Prevents RSS feed hammering.
 
 ```yaml
 name: osint/rss-abuse
-filter: "evt.Parsed.request_path startsWith '/api/rss/'"
-capacity: 10
-leakspeed: "120s"  # 2 minutes
-blackhole: 180s  # 3-minute ban
+type: leaky
+filter: "evt.Meta.log_type == 'http_access-log' && evt.Meta.http_path contains '/rss/'"
+leakspeed: "30s"
+capacity: 20
+groupby: "evt.Meta.source_ip"
+condition: "len(queue.Queue) >= 15"
+blackhole: 180s
 ```
 
 **Detection:**
 
-- Triggers on >10 RSS requests per 2 minutes
-- Allows reasonable polling intervals
+- Triggers on 15+ RSS requests in 30 seconds
+- Allows reasonable polling intervals (1 req/2s)
 - Bans for 3 minutes
 
 #### 4. Authentication Security (`osint/auth-bruteforce`)
@@ -232,17 +261,21 @@ Protects against credential stuffing and brute force.
 
 ```yaml
 name: osint/auth-bruteforce
-filter: "evt.Parsed.request_path == '/api/auth/login' && evt.Meta.http_status == '401'"
-capacity: 3
-leakspeed: "10s"
-blackhole: 900s  # 15-minute ban
+type: leaky
+filter: "evt.Meta.log_type == 'http_access-log' && evt.Meta.http_path contains '/auth/' && evt.Meta.http_status in ['400', '401', '403', '422']"
+leakspeed: "60s"
+capacity: 5
+groupby: "evt.Meta.source_ip"
+condition: "len(queue.Queue) >= 3"
+blackhole: 900s
 ```
 
 **Detection:**
 
-- Triggers on 3 failed login attempts in 10 seconds
-- Bans IP for 15 minutes
-- Protects Ory Kratos and JWT login endpoints
+- Triggers on 3 failed auth attempts in 60 seconds
+- Covers all error codes (400, 401, 403, 422)
+- Bans IP for 24 hours
+- Protects Ory Kratos authentication endpoints
 
 #### 5. Admin Interface Protection (`osint/admin-abuse`)
 
@@ -252,37 +285,44 @@ Monitors access to admin panels (NocoDB, Grafana, Prometheus).
 
 ```yaml
 name: osint/admin-abuse
-filter: "evt.Parsed.request_path in ['/nocodb', '/grafana', '/prometheus']"
+type: leaky
+filter: "evt.Meta.log_type == 'http_access-log' && (evt.Meta.http_path contains '/nocodb/' || evt.Meta.http_path contains '/grafana/' || evt.Meta.http_path contains '/prometheus/')"
+leakspeed: "300s"
 capacity: 10
-leakspeed: "600s"  # 10 minutes
-blackhole: 1800s  # 30-minute ban
+groupby: "evt.Meta.source_ip"
+condition: "len(queue.Queue) >= 5"
+blackhole: 1800s
 ```
 
 **Detection:**
 
-- Triggers on >10 admin requests per 10 minutes
+- Triggers on 5+ admin requests in 5 minutes
 - Stricter limits for sensitive endpoints
-- Bans for 30 minutes
+- Bans for 48 hours
 
 #### 6. Data Extraction Prevention (`osint/data-extraction`)
 
-Detects bulk download attempts.
+Detects rapid successful API calls indicating bulk data extraction.
 
 **Configuration:**
 
 ```yaml
 name: osint/data-extraction
-filter: "evt.Meta.http_status == '200' && evt.Meta.bytes_sent > 1048576"
-capacity: 5
-leakspeed: "300s"  # 5 minutes
-blackhole: 1200s  # 20-minute ban
+type: leaky
+filter: "evt.Meta.log_type == 'http_access-log' && evt.Meta.http_path contains '/api/' && evt.Meta.http_status == '200'"
+leakspeed: "5s"
+capacity: 100
+groupby: "evt.Meta.source_ip"
+distinct: "evt.Meta.http_path"
+condition: "len(queue.Queue) >= 50"
+blackhole: 1200s
 ```
 
 **Detection:**
 
-- Triggers on large response payloads (>1MB)
+- Triggers on 50+ successful API calls across distinct paths in 5 seconds
 - Identifies bulk download patterns
-- Bans for 20 minutes
+- Bans for 72 hours
 
 #### 7. Bot Detection (`osint/suspicious-ua`)
 
@@ -292,18 +332,25 @@ Filters automated tools and scrapers.
 
 ```yaml
 name: osint/suspicious-ua
-filter: "evt.Parsed.user_agent in ['curl', 'wget', 'python-requests', 'scrapy']"
-capacity: 3
+type: leaky
+filter: "evt.Meta.log_type == 'http_access-log' && evt.Meta.http_user_agent != nil && (Lower(evt.Meta.http_user_agent) contains 'bot' || Lower(evt.Meta.http_user_agent) contains 'crawler' || Lower(evt.Meta.http_user_agent) contains 'scraper' || Lower(evt.Meta.http_user_agent) contains 'curl' || Lower(evt.Meta.http_user_agent) contains 'wget' || Lower(evt.Meta.http_user_agent) contains 'python')"
 leakspeed: "60s"
+capacity: 20
+groupby: "evt.Meta.source_ip"
+condition: "len(queue.Queue) >= 15"
+blackhole: 300s
 labels:
-  remediation: captcha  # CAPTCHA challenge instead of ban
+  service: osint-platform
+  type: suspicious_ua
+  remediation: true
 ```
 
 **Detection:**
 
-- Detects common scraping tools
-- Challenges with CAPTCHA (future)
-- Allows legitimate research tools with proper user agents
+- Triggers on 15+ requests with suspicious user agent in 60 seconds
+- Detects common scraping tools (bot, crawler, curl, wget, python)
+- Bans for 1 hour
+- Case-insensitive matching via `Lower()` function
 
 ## Rate Limiting
 
