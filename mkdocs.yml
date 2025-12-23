@@ -1,7 +1,9 @@
 site_name: OSINT Intelligence Platform
 site_description: Production-ready system for archiving, enriching, and analyzing Telegram channels with multi-model AI enrichment
 site_author: OSINT Ukraine Team
-site_url: https://docs.osint-platform.local
+# site_url is set via MKDOCS_SITE_URL env var in docker-compose.yml
+# Falls back to localhost for local development
+site_url: !ENV [MKDOCS_SITE_URL, 'http://localhost:8001/']
 
 repo_name: osintukraine/osint-intelligence-platform
 repo_url: https://github.com/osintukraine/osint-intelligence-platform
