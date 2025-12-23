@@ -105,6 +105,7 @@ nav:
       - operator-guide/index.md
       - Installation: operator-guide/installation.md
       - Configuration: operator-guide/configuration.md
+      - Stack Manager: operator-guide/stack-manager.md
       - Caddy Reverse Proxy: operator-guide/caddy.md
       - Hetzner Storage: operator-guide/hetzner-storage.md
       - Telegram Setup: operator-guide/telegram-setup.md
@@ -115,6 +116,7 @@ nav:
       - Scaling: operator-guide/scaling.md
       - Upgrades: operator-guide/upgrades.md
       - Troubleshooting: operator-guide/troubleshooting.md
+      - Production Gotchas: operator-guide/production-gotchas.md
   - Developer Guide:
       - developer-guide/index.md
       - Architecture Overview: developer-guide/architecture.md

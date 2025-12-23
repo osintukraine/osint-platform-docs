@@ -242,3 +242,42 @@ docker-compose exec caddy ls -la /var/cache/osint-media-buffer/
 curl http://localhost:4433/health/ready  # Kratos
 curl http://localhost:4456/health/ready  # Oathkeeper
 ```
+
+### HTTPS Redirect Issues (Production)
+
+!!! warning "Critical Production Issue"
+    This is the #1 cause of production deployment failures. Read carefully.
+
+**Symptom**: API redirects go to `http://` instead of `https://`
+
+When FastAPI performs automatic trailing slash redirects (e.g., `/api/channels` → `/api/channels/`), the redirect URL uses `http://` even though the original request was `https://`.
+
+```bash
+# Test for this issue:
+curl -I https://yoursite.com/api/channels
+
+# BAD - redirect goes to http:
+HTTP/2 307
+location: http://yoursite.com/api/channels/
+
+# GOOD - redirect stays https:
+HTTP/2 307
+location: https://yoursite.com/api/channels/
+```
+
+**Root Cause**: FastAPI doesn't automatically respect `X-Forwarded-Proto` header from Caddy.
+
+**Solution**: This is **already fixed** in the codebase (December 2025). The fix adds `ProxyHeadersMiddleware`:
+
+```python
+# services/api/src/main.py
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
+```
+
+**If you're on the latest code**, you don't need to do anything. Just `git pull` and rebuild.
+
+**Caddy automatically sends** `X-Forwarded-Proto: https` for HTTPS requests. The middleware makes FastAPI respect this header.
+
+**See also**: [Production Gotchas](production-gotchas.md#https-redirect-issues)

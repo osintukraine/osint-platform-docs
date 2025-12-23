@@ -151,6 +151,11 @@ GET /api/messages              # Search messages
 GET /api/messages/{id}         # Message details
 GET /api/channels              # List channels
 GET /api/channels/{id}         # Channel details
+GET /api/events                # Detected events list
+GET /api/events/{id}           # Event details
+GET /api/map/*                 # Map data (GeoJSON, clusters, heatmap)
+GET /api/search                # Full-text search
+GET /api/about/*               # Platform information
 GET /api/rss/*                 # All RSS feeds
 GET /api/analytics/*           # Analytics dashboards
 GET /api/semantic/search       # Semantic search

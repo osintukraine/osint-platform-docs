@@ -455,6 +455,34 @@ docker-compose logs processor-worker | tail -50
 # "Connected to Ollama"
 ```
 
+### Step 6: Verify Storage Box Configuration
+
+!!! warning "Required for Media Archival"
+    Media archival requires a default storage box entry. Without it, media files won't be archived (fails silently).
+
+```bash
+# Check for default storage box
+docker-compose exec postgres psql -U osint_user -d osint_platform -c \
+  "SELECT id, name, is_default FROM storage_boxes WHERE is_default = true;"
+```
+
+**Expected output**: One row with `is_default = true`
+
+If no rows returned, migration 017 may not have run. Fix with:
+
+```bash
+# Run migrations
+./scripts/migrate.sh
+
+# Or manually add default storage box
+docker-compose exec postgres psql -U osint_user -d osint_platform -c \
+  "INSERT INTO storage_boxes (name, box_type, is_default, is_active, created_at)
+   VALUES ('local', 'local', true, true, NOW())
+   ON CONFLICT DO NOTHING;"
+```
+
+See [Production Gotchas](production-gotchas.md#storage-boxes-default-entry) for more details.
+
 ## Initial Configuration
 
 ### Step 1: Add Telegram Channels

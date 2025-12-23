@@ -264,6 +264,23 @@ ENVIRONMENT=production
 POSTGRES_POOL_SIZE=20
 ```
 
+!!! danger "Critical: Frontend Build Args"
+    **`NEXT_PUBLIC_*` environment variables are baked at BUILD time, not runtime!**
+
+    If your frontend calls `localhost:8000` instead of your production URL, you need to add these variables to `build.args` in `docker-compose.yml`:
+
+    ```yaml
+    frontend:
+      build:
+        args:
+          NEXT_PUBLIC_API_URL: https://your-domain.com
+          NEXT_PUBLIC_BASE_URL: https://your-domain.com
+    ```
+
+    Then rebuild: `docker compose build frontend && docker compose up -d frontend`
+
+    See [Production Gotchas](../operator-guide/production-gotchas.md#frontend-build-args) for details.
+
 !!! warning "Security: Passwords"
     Generate strong passwords (min 32 characters). Use: `openssl rand -base64 32`
 
@@ -747,6 +764,31 @@ docker compose restart caddy
 nslookup your-domain.com
 # Should show your server IP
 ```
+
+### "Frontend calls wrong API URL (localhost)"
+
+The browser's Network tab shows API calls going to `localhost:8000` instead of your production URL.
+
+**Cause**: `NEXT_PUBLIC_*` variables are baked at build time, not runtime.
+
+**Fix**:
+
+```bash
+# 1. Add build args to docker-compose.yml (or docker-compose.production.yml)
+# frontend:
+#   build:
+#     args:
+#       NEXT_PUBLIC_API_URL: https://your-domain.com
+#       NEXT_PUBLIC_BASE_URL: https://your-domain.com
+
+# 2. Rebuild the frontend
+docker compose build frontend
+
+# 3. Restart
+docker compose up -d frontend
+```
+
+See [Production Gotchas](../operator-guide/production-gotchas.md#frontend-build-args) for details.
 
 ---
 

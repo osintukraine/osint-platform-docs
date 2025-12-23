@@ -283,6 +283,49 @@ gpg -c sessions-backup-$(date +%Y%m%d).tar.gz  # Encrypt with password
 rm sessions-backup-$(date +%Y%m%d).tar.gz      # Remove unencrypted backup
 ```
 
+### Upgrading from Previous Versions
+
+!!! warning "Session Location Changed (December 2025)"
+    If you're upgrading from a pre-December 2025 installation, session file locations have changed.
+
+**Changes Made:**
+
+| Setting | Old Value | New Value |
+|---------|-----------|-----------|
+| Session directory | `/app/data/` | `/data/sessions/` |
+| Mount propagation | `:rshared` flag | Removed (incompatible with SSHFS) |
+
+**Symptoms if not migrated:**
+
+- "Session file not found" errors in listener logs
+- Telegram prompts for re-authentication
+- Listener fails to start
+
+**Migration Steps:**
+
+```bash
+# 1. Check where your old sessions are
+ls -la data/*.session 2>/dev/null
+ls -la data/telegram_sessions/*.session 2>/dev/null
+
+# 2. Create new directory
+mkdir -p data/sessions
+
+# 3. Move session files
+mv data/*.session data/sessions/ 2>/dev/null
+mv data/telegram_sessions/*.session data/sessions/ 2>/dev/null
+
+# 4. Restart listener
+docker-compose restart listener
+
+# 5. Verify it's working
+docker-compose logs listener | tail -20
+```
+
+**If session files are corrupted**, you'll need to re-authenticate (see [Session Creation](#creating-telegram-sessions)).
+
+See [Production Gotchas](production-gotchas.md#session-file-location-changes) for more details.
+
 ## Folder-Based Channel Management
 
 The platform uses Telegram app folders to organize and manage channels. No database configuration required.
