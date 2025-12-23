@@ -19,8 +19,8 @@ The Map API provides GeoJSON endpoints for rendering geocoded messages, event cl
 **Base URL:** `http://localhost:8000/api/map` (development)
 
 **Related Documentation:**
-- [Event Detection V3](../architecture/EVENT_DETECTION_V3.md)
-- [Map Interface Guide](../guides/MAP_INTERFACE.md)
+- [Architecture Overview](./architecture.md) - System architecture including geolocation pipeline
+- [Map Interface User Guide](../user-guide/map-interface.md) - End-user guide for map features
 - [API Service](services/api.md)
 
 ## Architecture
@@ -1458,8 +1458,8 @@ curl "/api/map/messages?south=40&west=20&north=60&east=50&zoom=8&cluster=true"
 
 ## Related Documentation
 
-- **Architecture:** [Event Detection V3](../architecture/EVENT_DETECTION_V3.md) - Full geolocation pipeline
-- **User Guide:** [Map Interface](../guides/MAP_INTERFACE.md) - End-user map features
+- **Architecture:** [Architecture Overview](./architecture.md) - System architecture including geolocation pipeline
+- **User Guide:** [Map Interface](../user-guide/map-interface.md) - End-user map features
 - **API Service:** [API Documentation](services/api.md) - Complete API documentation
 - **Database:** [Database Schema](database-schema.md) - Schema for `message_locations`, `telegram_event_clusters`
 - **Frontend:** [Frontend API Patterns](frontend-api-patterns.md) - How frontend consumes Map API
@@ -1491,5 +1491,5 @@ curl "/api/map/messages?south=40&west=20&north=60&east=50&zoom=8&cluster=true"
 
 **File Locations:**
 
-- **Source Code:** `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/map.py` (1951 lines)
-- **Documentation:** `/home/rick/code/osintukraine/osint-platform-docs/docs/developer-guide/map-api.md` (this file)
+- **Source Code:** `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/map.py` (1951 lines)
+- **Documentation:** `~/code/osintukraine/osint-platform-docs/docs/developer-guide/map-api.md` (this file)

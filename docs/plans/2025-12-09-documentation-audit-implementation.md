@@ -230,7 +230,7 @@ The platform uses Docker Compose profiles for modular deployment:
 
 ### Task 1.8: Update CLAUDE.md (Phase 1 Sync)
 
-**File:** `/home/rick/code/osintukraine/osint-intelligence-platform/CLAUDE.md`
+**File:** `~/code/osintukraine/osint-intelligence-platform/CLAUDE.md`
 **Action:** UPDATE - Sync critical changes
 
 **Changes:**
@@ -433,7 +433,7 @@ The platform uses Docker Compose profiles for modular deployment:
 
 ### Task 2.6: Update CLAUDE.md (Phase 2 Sync)
 
-**File:** `/home/rick/code/osintukraine/osint-intelligence-platform/CLAUDE.md`
+**File:** `~/code/osintukraine/osint-intelligence-platform/CLAUDE.md`
 **Action:** UPDATE
 
 **Changes:**
@@ -713,7 +713,7 @@ The platform uses Docker Compose profiles for modular deployment:
 
 ### Task 3.8: Update CLAUDE.md (Phase 3 Sync)
 
-**File:** `/home/rick/code/osintukraine/osint-intelligence-platform/CLAUDE.md`
+**File:** `~/code/osintukraine/osint-intelligence-platform/CLAUDE.md`
 **Action:** UPDATE
 
 **Changes:**
@@ -938,7 +938,7 @@ The platform uses Docker Compose profiles for modular deployment:
 
 ### Task 4.8: Update CLAUDE.md (Phase 4 Sync)
 
-**File:** `/home/rick/code/osintukraine/osint-intelligence-platform/CLAUDE.md`
+**File:** `~/code/osintukraine/osint-intelligence-platform/CLAUDE.md`
 **Action:** UPDATE
 
 **Changes:**
@@ -1116,7 +1116,7 @@ All pull requests MUST include documentation updates if they:
 
 ### Task 5.7: Final CLAUDE.md Sync
 
-**File:** `/home/rick/code/osintukraine/osint-intelligence-platform/CLAUDE.md`
+**File:** `~/code/osintukraine/osint-intelligence-platform/CLAUDE.md`
 **Action:** UPDATE - Final sync
 
 **Changes:**

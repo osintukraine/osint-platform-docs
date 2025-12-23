@@ -1649,4 +1649,4 @@ For prompt evolution history, see `/docs/architecture/LLM_PROMPTS.md`
 
 ---
 
-**File**: `/home/rick/code/osintukraine/osint-platform-docs/docs/reference/database-tables.md`
+**File**: `~/code/osintukraine/osint-platform-docs/docs/reference/database-tables.md`

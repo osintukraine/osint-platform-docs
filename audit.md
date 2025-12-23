@@ -1,8 +1,8 @@
 Documentation Audit Report: OSINT Intelligence Platform
 
        Audit Date: 2025-12-09
-       Documentation Repository: /home/rick/code/osintukraine/osint-platform-docs/
-       Source Code Repository: /home/rick/code/osintukraine/osint-intelligence-platform/
+       Documentation Repository: ~/code/osintukraine/osint-platform-docs/
+       Source Code Repository: ~/code/osintukraine/osint-intelligence-platform/
        Auditor: Claude (Technical Writing Specialist)
 
        ---
@@ -568,7 +568,7 @@ Documentation Audit Report: OSINT Intelligence Platform
 
        ---
        File Paths Referenced (all absolute):
-       - Docs: /home/rick/code/osintukraine/osint-platform-docs/docs/
-       - Source: /home/rick/code/osintukraine/osint-intelligence-platform/
+       - Docs: ~/code/osintukraine/osint-platform-docs/docs/
+       - Source: ~/code/osintukraine/osint-intelligence-platform/
 
        Generated: 2025-12-09 | Audit Version: 1.0 | Confidence: High (based on source code review)

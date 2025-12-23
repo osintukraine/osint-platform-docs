@@ -224,7 +224,7 @@ Configuration precedence (highest to lowest):
 
 **No Alembic migrations**. Schema is managed via `init.sql`:
 
-1. Make changes to `/home/rick/code/osintukraine/osint-intelligence-platform/infrastructure/postgres/init.sql`
+1. Make changes to `~/code/osintukraine/osint-intelligence-platform/infrastructure/postgres/init.sql`
 2. Rebuild database:
    ```bash
    docker-compose down
@@ -241,6 +241,6 @@ Configuration precedence (highest to lowest):
 
 ## Support
 
-- **Documentation**: `/home/rick/code/osintukraine/osint-intelligence-platform/docs/`
+- **Documentation**: `~/code/osintukraine/osint-intelligence-platform/docs/`
 - **Issues**: GitHub Issues
-- **Source Code**: `/home/rick/code/osintukraine/osint-intelligence-platform/`
+- **Source Code**: `~/code/osintukraine/osint-intelligence-platform/`

@@ -716,11 +716,10 @@ curl http://localhost:8000/health
 
 ## Related Documentation
 
-- **[Notification System Guide](/home/rick/code/osintukraine/osint-intelligence-platform/docs/guides/NOTIFICATION_SYSTEM.md)** - Complete ntfy configuration and usage
-- **[NTFY Topics Reference](/home/rick/code/osintukraine/osint-intelligence-platform/docs/archive/implementation/NTFY_TOPICS_REFERENCE.md)** - Full topic listing
-- **[Monitoring Guide](/home/rick/code/osintukraine/osint-intelligence-platform/docs/guides/MONITORING.md)** - Prometheus and AlertManager setup
-- **[Architecture Overview](/home/rick/code/osintukraine/osint-intelligence-platform/docs/ARCHITECTURE.md)** - Platform architecture
-- **[NotificationClient API](/home/rick/code/osintukraine/osint-intelligence-platform/shared/python/notifications/client.py)** - How services emit events
+- **[Notifications User Guide](../../user-guide/notifications.md)** - Complete ntfy configuration and usage
+- **[Monitoring Guide](../../operator-guide/monitoring.md)** - Prometheus and AlertManager setup
+- **[Architecture Overview](../architecture.md)** - Platform architecture
+- **NotificationClient API**: `shared/python/notifications/client.py` - How services emit events
 
 ## Usage Examples
 

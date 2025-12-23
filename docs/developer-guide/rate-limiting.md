@@ -230,6 +230,6 @@ Potential improvements (not yet implemented):
 
 ---
 
-**File Location**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/utils/rate_limit.py`
+**File Location**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/utils/rate_limit.py`
 
 **Last Updated**: 2025-12-19

@@ -1008,7 +1008,7 @@ Entities power autocomplete and entity tagging:
 ### Running Tests
 
 ```bash
-cd /home/rick/code/osintukraine/osint-intelligence-platform/services/entity-ingestion
+cd ~/code/osintukraine/osint-intelligence-platform/services/entity-ingestion
 
 # Install dev dependencies
 pip install pytest pytest-asyncio aioresponses
@@ -1154,4 +1154,4 @@ This approach leverages the existing CSV pipeline while adding API fetching as a
 
 ---
 
-**File**: `/home/rick/code/osintukraine/osint-platform-docs/docs/developer-guide/services/entity-ingestion.md`
+**File**: `~/code/osintukraine/osint-platform-docs/docs/developer-guide/services/entity-ingestion.md`

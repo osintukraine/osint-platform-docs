@@ -447,5 +447,5 @@ async def warm_cache(db, redis, limit=10000):
 ## Related Documentation
 
 - [Operator Guide: Hetzner Storage](../operator-guide/hetzner-storage.md) - Setup and maintenance
-- [Reference: Media API](../reference/media-api.md) - API endpoint reference
+- [Reference: API Endpoints](../reference/api-endpoints.md) - API endpoint reference (includes media endpoints)
 - [Architecture Overview](./architecture.md) - System architecture

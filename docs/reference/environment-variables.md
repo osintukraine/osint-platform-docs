@@ -751,6 +751,6 @@ WEBSOCKET_ALLOW_NO_ORIGIN=false
 
 ## See Also
 
-- [Architecture Documentation](/home/rick/code/osintukraine/osint-platform-docs/docs/architecture/)
-- [Deployment Guide](/home/rick/code/osintukraine/osint-platform-docs/docs/deployment/)
-- [API Reference](/home/rick/code/osintukraine/osint-platform-docs/docs/api/)
+- [Architecture Documentation](~/code/osintukraine/osint-platform-docs/docs/architecture/)
+- [Deployment Guide](~/code/osintukraine/osint-platform-docs/docs/deployment/)
+- [API Reference](~/code/osintukraine/osint-platform-docs/docs/api/)

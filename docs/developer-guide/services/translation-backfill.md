@@ -304,7 +304,7 @@ Process all untranslated messages once:
 
 ```bash
 # Via Docker (recommended)
-cd /home/rick/code/osintukraine/osint-intelligence-platform
+cd ~/code/osintukraine/osint-intelligence-platform
 docker-compose run translation-backfill
 
 # Via Python directly

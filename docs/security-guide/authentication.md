@@ -361,7 +361,7 @@ REDIS_DB=0
 
 ### Ory Kratos Password Requirements
 
-Configured in `/home/rick/code/osintukraine/osint-intelligence-platform/infrastructure/kratos/kratos.yml`:
+Configured in `~/code/osintukraine/osint-intelligence-platform/infrastructure/kratos/kratos.yml`:
 
 - **Minimum length**: 8 characters
 - **Hashing algorithm**: bcrypt with cost 12

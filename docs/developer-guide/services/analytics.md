@@ -303,7 +303,7 @@ For development without Docker:
 
 ```bash
 # Navigate to service directory
-cd /home/rick/code/osintukraine/osint-intelligence-platform/services/analytics
+cd ~/code/osintukraine/osint-intelligence-platform/services/analytics
 
 # Create virtual environment
 python3.11 -m venv venv
@@ -732,9 +732,9 @@ The service respects Telegram's rate limits:
 ## Related Documentation
 
 - [Enrichment Service](enrichment.md) - Comment scraping tasks
-- [Database Schema](/home/rick/code/osintukraine/osint-intelligence-platform/infrastructure/postgres/init.sql) - Full schema reference
+- [Database Schema](../../reference/database-tables.md) - Full schema reference
 - [API Documentation](api.md) - Querying analytics data
-- [Architecture Deep Dive](/home/rick/code/osintukraine/osint-intelligence-platform/docs/ARCHITECTURE.md) - Overall platform architecture
+- [Architecture Overview](../architecture.md) - Overall platform architecture
 
 ---
 

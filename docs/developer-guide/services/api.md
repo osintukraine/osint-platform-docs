@@ -142,7 +142,7 @@ Frontend / RSS Readers / External APIs
 
 #### Messages Router (`/api/messages`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/messages.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/messages.py`
 
 Message retrieval and full-text search with 15+ filters.
 
@@ -171,7 +171,7 @@ Message retrieval and full-text search with 15+ filters.
 
 #### Channels Router (`/api/channels`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/channels.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/channels.py`
 
 Channel management and statistics.
 
@@ -188,7 +188,7 @@ Channel management and statistics.
 
 #### Entities Router (`/api/entities`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/entities.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/entities.py`
 
 Entity profiles from curated sources (ArmyGuide, Root.NK, ODIN) and OpenSanctions.
 
@@ -212,7 +212,7 @@ Entity profiles from curated sources (ArmyGuide, Root.NK, ODIN) and OpenSanction
 
 #### Search Router (`/api/search`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/search.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/search.py`
 
 Unified search across all data sources (messages, events, RSS articles, entities).
 
@@ -230,7 +230,7 @@ Unified search across all data sources (messages, events, RSS articles, entities
 
 #### Semantic Router (`/api/semantic`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/semantic.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/semantic.py`
 
 AI-powered semantic search using vector embeddings.
 
@@ -253,7 +253,7 @@ AI-powered semantic search using vector embeddings.
 
 #### Similarity Router (`/api/similarity`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/similarity.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/similarity.py`
 
 pgvector-based message similarity queries.
 
@@ -265,7 +265,7 @@ pgvector-based message similarity queries.
 
 #### Social Graph Router (`/api/social-graph`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/social_graph.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/social_graph.py`
 
 Telegram social interaction analysis.
 
@@ -297,7 +297,7 @@ Telegram social interaction analysis.
 
 #### Analytics Router (`/api/analytics`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/analytics.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/analytics.py`
 
 Platform-wide aggregations and metrics.
 
@@ -310,7 +310,7 @@ Platform-wide aggregations and metrics.
 
 #### Timeline Router (`/api/timeline`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/timeline.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/timeline.py`
 
 Temporal analysis and time-series aggregations.
 
@@ -322,7 +322,7 @@ Temporal analysis and time-series aggregations.
 
 #### Events Router (`/api/events`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/events.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/events.py`
 
 Event clustering and chronological timelines.
 
@@ -337,7 +337,7 @@ Event clustering and chronological timelines.
 
 #### RSS Router (`/rss`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/rss.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/rss.py`
 
 Dynamic feed generation in multiple formats.
 
@@ -366,7 +366,7 @@ Dynamic feed generation in multiple formats.
 
 #### Network Router (`/api/network`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/network.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/network.py`
 
 Knowledge graph visualization.
 
@@ -377,7 +377,7 @@ Knowledge graph visualization.
 
 #### Flowsint Export Router (`/api/flowsint`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/flowsint_export.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/flowsint_export.py`
 
 Export network graph data in Flowsint-compatible format for advanced OSINT investigation.
 
@@ -389,7 +389,7 @@ Export network graph data in Flowsint-compatible format for advanced OSINT inves
 
 #### Validation Router (`/api/validation`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/validation.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/validation.py`
 
 Cross-reference Telegram claims with external RSS news sources.
 
@@ -402,7 +402,7 @@ Cross-reference Telegram claims with external RSS news sources.
 
 #### Stream Router (`/api/stream`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/stream.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/stream.py`
 
 Unified intelligence stream combining Telegram messages and RSS articles.
 
@@ -414,7 +414,7 @@ Unified intelligence stream combining Telegram messages and RSS articles.
 
 #### Models Router (`/api/models`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/models.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/models.py`
 
 Multi-model LLM architecture management.
 
@@ -433,7 +433,7 @@ Multi-model LLM architecture management.
 
 #### Bookmarks Router (`/api/bookmarks`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/bookmarks.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/bookmarks.py`
 
 User message bookmarks (requires authentication).
 
@@ -445,7 +445,7 @@ User message bookmarks (requires authentication).
 
 #### User Router (`/api/user`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/user.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/user.py`
 
 User profile and preferences (requires authentication).
 
@@ -456,7 +456,7 @@ User profile and preferences (requires authentication).
 
 #### Feed Tokens Router (`/api/feed-tokens`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/feed_tokens.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/feed_tokens.py`
 
 RSS feed token generation for authenticated RSS feeds.
 
@@ -543,7 +543,7 @@ System management, worker logs, audit trails.
 
 #### System Router (`/api/system`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/system.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/system.py`
 
 Health checks and service status.
 
@@ -555,7 +555,7 @@ Health checks and service status.
 
 #### Metrics Router (`/metrics`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/metrics.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/metrics.py`
 
 Real-time Prometheus metrics.
 
@@ -569,7 +569,7 @@ Real-time Prometheus metrics.
 
 #### About Router (`/api/about`)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/about.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/about.py`
 
 Public platform statistics for "About" page.
 
@@ -589,7 +589,7 @@ The API supports three authentication modes via **provider factory pattern**:
 
 #### 1. None Provider (Development)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/auth/none.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/auth/none.py`
 
 No authentication required. Returns anonymous user.
 
@@ -597,7 +597,7 @@ No authentication required. Returns anonymous user.
 
 #### 2. JWT Provider (Simple Auth)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/auth/jwt.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/auth/jwt.py`
 
 JWT token-based authentication.
 
@@ -620,7 +620,7 @@ curl "http://localhost:8000/api/messages" \
 
 #### 3. Cloudron OAuth
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/auth/cloudron.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/auth/cloudron.py`
 
 Integration with Cloudron OAuth proxy.
 
@@ -628,7 +628,7 @@ Integration with Cloudron OAuth proxy.
 
 #### 4. Ory Kratos/Oathkeeper (Production)
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/middleware/ory_auth.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/middleware/ory_auth.py`
 
 Enterprise SSO via Ory Kratos identity provider and Oathkeeper reverse proxy.
 
@@ -638,7 +638,7 @@ Enterprise SSO via Ory Kratos identity provider and Oathkeeper reverse proxy.
 
 ### Authentication Middleware
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/middleware/auth.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/middleware/auth.py`
 
 Global middleware that enforces authentication rules:
 
@@ -653,7 +653,7 @@ Global middleware that enforces authentication rules:
 
 ### Feed Token Authentication
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/auth/feed_auth.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/auth/feed_auth.py`
 
 Optional token-based authentication for RSS feeds.
 
@@ -795,7 +795,7 @@ https://api.example.com/rss/search?q=artillery&importance_level=high&format=rss
 
 **Background Service**: Processes CSV/JSON export requests asynchronously.
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/export_worker.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/export_worker.py`
 
 **Flow**:
 1. User creates export via `/api/admin/export` (POST)
@@ -840,7 +840,7 @@ https://api.example.com/rss/search?q=artillery&importance_level=high&format=rss
 
 ### Settings Module
 
-**File**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/config/settings.py`
+**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/config/settings.py`
 
 Centralized configuration management with Pydantic `BaseSettings`.
 
@@ -1121,37 +1121,37 @@ print(client.bucket_exists('exports'))
 
 ## Related Documentation
 
-- [Architecture Overview](/home/rick/code/osintukraine/osint-intelligence-platform/docs/ARCHITECTURE.md) - Platform architecture
-- [Frontend Service](/home/rick/code/osintukraine/osint-platform-docs/docs/developer-guide/services/frontend-nextjs.md) - Next.js frontend
-- [Processor Service](/home/rick/code/osintukraine/osint-platform-docs/docs/developer-guide/services/processor.md) - Message processing
-- [Enrichment Service](/home/rick/code/osintukraine/osint-platform-docs/docs/developer-guide/services/enrichment.md) - Background enrichment
-- [LLM Prompts](/home/rick/code/osintukraine/osint-intelligence-platform/docs/architecture/LLM_PROMPTS.md) - AI classification prompts
-- [Ory Authentication](/home/rick/code/osintukraine/osint-intelligence-platform/docs/ORY_AUTHENTICATION_DEPLOYMENT.md) - SSO setup
-- [Semantic Search Guide](/home/rick/code/osintukraine/osint-intelligence-platform/docs/guides/SEMANTIC_SEARCH.md) - pgvector usage
+- [Architecture Overview](../architecture.md) - Platform architecture
+- [Frontend Service](frontend.md) - Next.js frontend
+- [Processor Service](processor.md) - Message processing
+- [Enrichment Service](enrichment.md) - Background enrichment
+- [LLM Integration](../llm-integration.md) - AI classification and prompts
+- [Authentication Guide](../../security-guide/authentication.md) - SSO and auth setup
+- [Semantic Search Guide](../../user-guide/searching.md) - Search features and pgvector
 
 ## Files Reference
 
 All file paths are absolute references to the source code:
 
 **Main Files**:
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/main.py`
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/database.py`
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/feed_generator.py`
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/export_worker.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/main.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/database.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/feed_generator.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/export_worker.py`
 
 **Routers**:
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/__init__.py`
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/messages.py`
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/search.py`
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/semantic.py`
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/rss.py`
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/entities.py`
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/routers/social_graph.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/__init__.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/messages.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/search.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/semantic.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/rss.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/entities.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/social_graph.py`
 
 **Authentication**:
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/auth/factory.py`
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/src/middleware/auth.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/auth/factory.py`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/src/middleware/auth.py`
 
 **Configuration**:
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/requirements.txt`
-- `/home/rick/code/osintukraine/osint-intelligence-platform/services/api/Dockerfile`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/requirements.txt`
+- `~/code/osintukraine/osint-intelligence-platform/services/api/Dockerfile`

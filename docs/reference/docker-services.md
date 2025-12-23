@@ -811,4 +811,4 @@ Healthcheck methods:
 
 ---
 
-**File Path**: `/home/rick/code/osintukraine/osint-platform-docs/docs/reference/docker-services.md`
+**File Path**: `~/code/osintukraine/osint-platform-docs/docs/reference/docker-services.md`

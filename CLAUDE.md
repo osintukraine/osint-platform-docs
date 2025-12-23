@@ -109,10 +109,10 @@ mkdocs gh-deploy
 ## Source Repository Reference
 
 When documenting, analyze code from:
-- **Services**: `/home/rick/code/osintukraine/osint-intelligence-platform/services/`
-- **Shared**: `/home/rick/code/osintukraine/osint-intelligence-platform/shared/python/`
-- **Infrastructure**: `/home/rick/code/osintukraine/osint-intelligence-platform/infrastructure/`
-- **Context Layers**: `/home/rick/code/osintukraine/osint-intelligence-platform/.claude/context/`
+- **Services**: `~/code/osintukraine/osint-intelligence-platform/services/`
+- **Shared**: `~/code/osintukraine/osint-intelligence-platform/shared/python/`
+- **Infrastructure**: `~/code/osintukraine/osint-intelligence-platform/infrastructure/`
+- **Context Layers**: `~/code/osintukraine/osint-intelligence-platform/.claude/context/`
 
 ## Current Task
 
