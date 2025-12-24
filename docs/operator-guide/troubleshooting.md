@@ -484,8 +484,8 @@ CREATE INDEX CONCURRENTLY idx_messages_date_id ON messages(date DESC, id DESC);
 -- Index for channel-specific queries
 CREATE INDEX CONCURRENTLY idx_messages_channel_date ON messages(channel_id, date DESC);
 
--- Index for OSINT score filtering
-CREATE INDEX CONCURRENTLY idx_messages_osint_score ON messages(osint_score DESC) WHERE osint_score > 50;
+-- Index for importance level filtering
+CREATE INDEX CONCURRENTLY idx_messages_importance ON messages(importance_level) WHERE importance_level IS NOT NULL;
 
 -- Index for spam filtering
 CREATE INDEX CONCURRENTLY idx_messages_spam ON messages(spam, date DESC);
@@ -794,18 +794,19 @@ docker-compose exec processor-worker curl -s http://localhost:8002/metrics | gre
 # Check importance level distribution
 docker-compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT
-    CASE
-      WHEN osint_score < 10 THEN '0-10'
-      WHEN osint_score < 30 THEN '10-30'
-      WHEN osint_score < 50 THEN '30-50'
-      WHEN osint_score < 70 THEN '50-70'
-      ELSE '70-100'
-    END AS score_range,
+    importance_level,
     COUNT(*) as count
   FROM messages
-  WHERE date > NOW() - INTERVAL '24 hours'
-  GROUP BY score_range
-  ORDER BY score_range;
+  WHERE created_at > NOW() - INTERVAL '24 hours'
+  GROUP BY importance_level
+  ORDER BY
+    CASE importance_level
+      WHEN 'critical' THEN 1
+      WHEN 'high' THEN 2
+      WHEN 'medium' THEN 3
+      WHEN 'low' THEN 4
+      ELSE 5
+    END;
 "
 ```
 
@@ -1270,7 +1271,7 @@ docker-compose restart processor-worker
 **Symptoms:**
 
 - Grafana → AI/ML Processing → LLM Success Rate shows <90%
-- Many messages have NULL osint_score
+- Many messages have NULL importance_level
 
 **Diagnosis:**
 
