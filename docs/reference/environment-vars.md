@@ -374,8 +374,8 @@ Self-hosted notification system for real-time events.
 |----------|-------------|---------|----------|
 | `NOTIFY_MESSAGE_ARCHIVED` | Notify on message archived | `true` | No |
 | `NOTIFY_SPAM_DETECTED` | Notify on spam detected | `true` | No |
-| `NOTIFY_OSINT_HIGH` | Notify on high OSINT scores (≥70) | `true` | No |
-| `NOTIFY_OSINT_CRITICAL` | Notify on critical OSINT scores (≥90) | `true` | No |
+| `NOTIFY_OSINT_HIGH` | Notify on high importance messages | `true` | No |
+| `NOTIFY_OSINT_CRITICAL` | Notify on critical importance messages | `true` | No |
 | `NOTIFY_LLM_ACTIVITY` | Notify on LLM inference | `true` | No |
 | `NOTIFY_CHANNEL_DISCOVERY` | Notify on channel discovery | `true` | No |
 | `NOTIFY_SYSTEM_HEALTH` | Notify on container health changes | `true` | No |
@@ -815,12 +815,12 @@ Optional RSS ingestion for cross-validation and fact-checking.
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `RSS_FACT_CHECK_ENABLED` | Enable fact-checking | `true` | No |
-| `RSS_FACT_CHECK_MIN_OSINT_SCORE` | Minimum OSINT score for fact-check | `75` | No |
+| `RSS_FACT_CHECK_MIN_OSINT_SCORE` | Minimum importance for fact-check (legacy name) | `75` | No |
 | `RSS_FACT_CHECK_MIN_CORRELATION` | Minimum correlation for display | `80` | No |
 | `RSS_SHOW_ALTERNATIVE_VIEWPOINTS` | Show different perspectives | `true` | No |
 
 **Purpose**:
-- Cross-validate high-OSINT Telegram messages with external news
+- Cross-validate high-importance Telegram messages with external news
 - Show "verified by external sources" or "contradictory reports" flags
 - Display alternative viewpoints (Ukraine vs Russia sources)
 

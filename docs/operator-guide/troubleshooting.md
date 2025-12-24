@@ -788,10 +788,10 @@ watch 'docker-compose exec redis redis-cli XLEN telegram_messages'
 **Diagnosis:**
 
 ```bash
-# Check OSINT scoring metrics
+# Check classification metrics
 docker-compose exec processor-worker curl -s http://localhost:8002/metrics | grep osint_messages_skipped
 
-# Check OSINT score distribution
+# Check importance level distribution
 docker-compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT
     CASE
@@ -811,15 +811,15 @@ docker-compose exec postgres psql -U postgres -d osint_platform -c "
 
 **Solutions:**
 
-**A. OSINT scoring threshold too high:**
+**A. Importance threshold too high:**
 
 ```bash
-# Check current threshold in config/osint_rules.yml or .env
-grep OSINT_SCORE_THRESHOLD .env
+# Check current threshold in .env
+grep MONITORING_OSINT_THRESHOLD .env
 
 # If >70, lowering threshold will archive more messages
 # Edit .env:
-OSINT_SCORE_THRESHOLD=50  # Lower from 70
+MONITORING_OSINT_THRESHOLD=50  # Lower from 70
 
 # Restart processor
 docker-compose restart processor-worker

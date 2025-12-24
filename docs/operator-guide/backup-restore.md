@@ -30,7 +30,7 @@ Complete procedures for protecting platform data, creating recoverable backups, 
 
 **Critical Data Components:**
 
-1. **PostgreSQL Database**: Messages, entities, channels, users, OSINT scores (CRITICAL)
+1. **PostgreSQL Database**: Messages, entities, channels, users, classifications (CRITICAL)
 2. **MinIO Object Storage**: Media files (photos, videos, documents) (CRITICAL)
 3. **Telegram Sessions**: Authentication credentials for listener accounts (CRITICAL)
 4. **Configuration Files**: .env, docker-compose.yml, rules, prompts (IMPORTANT)
@@ -630,7 +630,7 @@ telegram_sessions/
 ```bash
 .env                           # Environment variables and secrets
 docker-compose.yml             # Service configuration
-config/osint_rules.yml         # OSINT scoring rules
+config/osint_rules.yml         # Classification rules
 infrastructure/postgres/init.sql  # Database schema (in git)
 ```
 

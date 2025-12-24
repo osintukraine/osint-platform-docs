@@ -288,7 +288,7 @@ Channels are auto-discovered based on Telegram folder names:
 # Sync interval
 FOLDER_SYNC_INTERVAL=300                # 5 minutes
 
-# OSINT score threshold for selective_archive
+# Importance threshold for selective_archive
 MONITORING_OSINT_THRESHOLD=70           # Messages below this not archived
 ```
 

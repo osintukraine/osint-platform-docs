@@ -198,7 +198,7 @@ The platform includes **11 pre-configured dashboards** located in `/infrastructu
 - **Service Status Grid**: Up/down status of all critical services
 - **Message Processing Rate**: Real-time throughput (messages/second)
 - **Spam Detection Rate**: Percentage of messages flagged as spam
-- **OSINT Score Distribution**: Histogram of message relevance scores (0-100)
+- **Importance Distribution**: Distribution of message importance levels (low/medium/high/critical)
 - **Active Telegram Channels**: Count of channels being monitored
 - **Redis Queue Depth**: Messages waiting to be processed
 - **Database Size**: PostgreSQL storage usage
@@ -487,8 +487,8 @@ osint:llm_response:avg_duration_seconds
 # LLM error rate
 rate(osint_llm_requests_total{status!="success"}[5m]) / rate(osint_llm_requests_total[5m])
 
-# OSINT score distribution
-osint_score_distribution_bucket
+# Importance level distribution
+importance_level_distribution
 
 # Topic classification
 osint_topics_total
@@ -738,7 +738,7 @@ All services use structured JSON logging:
   "message": "Message processed successfully",
   "channel_id": 1234567890,
   "message_id": 987654,
-  "osint_score": 87,
+  "importance_level": "high",
   "spam": false,
   "duration_ms": 234
 }

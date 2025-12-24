@@ -259,7 +259,7 @@ See [Telegram Setup Guide](../../operator-guide/telegram-setup.md) for full mult
 | Folder Pattern | Rule | Behavior |
 |---------------|------|----------|
 | `Archive*` | `archive_all` | Store all non-spam messages |
-| `Monitor*` | `selective_archive` | Only store OSINT score ≥70 |
+| `Monitor*` | `selective_archive` | Only store high importance+ |
 | `Discover*` | `discovery` | Auto-joined channels (14-day probation) |
 
 **Examples** (remember 12-char limit):

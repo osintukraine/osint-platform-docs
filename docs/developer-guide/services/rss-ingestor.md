@@ -426,7 +426,7 @@ RSS_CORRELATION_MAX_PER_MESSAGE=10
 # Enable LLM fact-checking of correlations
 RSS_FACT_CHECK_ENABLED=true
 
-# Minimum OSINT score to trigger fact-check (0-100)
+# Minimum importance threshold for fact-check (legacy env var name)
 RSS_FACT_CHECK_MIN_OSINT_SCORE=75
 
 # Minimum correlation similarity to trigger fact-check (0-100)
