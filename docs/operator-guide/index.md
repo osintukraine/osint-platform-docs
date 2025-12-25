@@ -15,6 +15,7 @@ This guide covers everything needed to deploy and operate the platform in produc
 - [Monitoring & Metrics](monitoring.md) - Monitor health, performance, and metrics
 - [Scaling](scaling.md) - Scale workers and services as demand grows
 - [Performance Tuning](performance-tuning.md) - Optimize Ollama, PostgreSQL, Redis
+- [External LLM](external-llm.md) - Use external Ollama endpoints (Contabo, dedicated VMs)
 - [Upgrades](upgrades.md) - Safely upgrade the platform and handle schema changes
 - [Backup & Restore](backup-restore.md) - Backup strategies and disaster recovery
 - [Troubleshooting](troubleshooting.md) - Common issues and solutions
@@ -317,6 +318,14 @@ This guide is maintained in the `osint-platform-docs` repository. To suggest imp
     Optimize Ollama, PostgreSQL, and Redis
 
     [:octicons-arrow-right-24: Performance Guide](performance-tuning.md)
+
+-   :material-cloud-outline:{ .lg .middle } __External LLM__
+
+    ---
+
+    Use external Ollama endpoints (Contabo, dedicated VMs)
+
+    [:octicons-arrow-right-24: External LLM Guide](external-llm.md)
 
 -   :material-update:{ .lg .middle } __Upgrades__
 
