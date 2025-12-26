@@ -10,12 +10,12 @@ The Enrichment Service handles asynchronous, batch-oriented processing of messag
 graph LR
     A[PostgreSQL<br/>Messages] --> B[Router]
     B --> C[Redis Queues]
-    C --> D[6 Queue Workers]
-    D --> E[22 Task Types]
+    C --> D[11 Queue Workers]
+    D --> E[32 Task Types]
     E --> F[PostgreSQL<br/>Enriched Data]
 
     subgraph "Pipeline"
-        G[Event Detection<br/>Worker]
+        G[Event Detection<br/>Workers]
     end
 
     A --> G
@@ -38,9 +38,9 @@ graph LR
 | **Resource Usage** | CPU/memory intensive | Bounded and predictable |
 
 !!! success "Production Stats"
-    - **22 Task Types** across 6 queue-based workers + 1 event detection pipeline
+    - **32 Task Types** across 11 workers (6 queue-based + 5 pipeline/dedicated)
     - **Background Processing**: Enriches ~50,000 messages/day
-    - **LLM Tasks**: Sequential execution prevents Ollama contention (50% faster)
+    - **LLM Tasks**: Dedicated workers prevent Ollama contention (50% faster)
     - **Cost**: €0/month (self-hosted Ollama CPU inference)
 
 ## Architecture
@@ -127,21 +127,24 @@ for msg in messages:
 
 #### Phase 2: Worker Pools
 
-7 worker types (6 queue-based + 1 pipeline):
+11 worker types (6 queue-based + 5 pipeline/dedicated):
 
 | Worker | Queue | Tasks Handled | LLM? | Rate Limited? |
 |--------|-------|---------------|------|---------------|
 | **AI Tagging** | `enrich:ai_tagging` | AI tag generation | ✅ | ❌ |
 | **RSS Validation** | `enrich:rss_validation` | Article validation | ✅ | ❌ |
-| **Fast Pool** | `enrich:fast` | Embedding, translation, entity matching, RSS correlation | ❌ | ❌ |
+| **Fast Pool** | `enrich:fast` | Embedding, translation, entity matching, geolocation, RSS correlation | ❌ | ❌ |
 | **Telegram** | `enrich:telegram` | Engagement polling, social graph, comments, forward discovery | ❌ | ✅ (20 req/s) |
 | **Decision** | `enrich:decision` | Decision verification, reprocessing | ❌ | ❌ |
 | **Maintenance** | `enrich:maintenance` | Channel cleanup, quarantine, discovery eval, Wikidata | ❌ | ❌ |
 | **Event Detection** | *Pipeline (DB-scan)* | RSS event creator, Telegram matcher, status updater | ✅ | ❌ |
+| **Geolocation LLM** | `enrich:geolocation_llm` | LLM-based location extraction | ✅ | ❌ |
+| **Cluster Detection** | `enrich:cluster_detection` | Cluster detection, archiver, tier updater | ❌ | ❌ |
+| **Cluster Validation** | `enrich:cluster_validation` | LLM-based cluster validation | ✅ | ❌ |
 
 #### Phase 3: Task Execution
 
-22 task types (most inherit from `BaseEnrichmentTask`):
+32 task types (most inherit from `BaseEnrichmentTask`):
 
 ### Task Execution Patterns
 
@@ -1014,12 +1017,22 @@ Publishes to Redis `map:new_location` for WebSocket live map updates.
 
 ---
 
-### Cluster Detection Task
+### Cluster Detection Worker (V3)
 
-**File**: `/services/enrichment/src/tasks/cluster_detection.py`
-**Worker**: Decision Worker (`enrich:decision` queue)
+**File**: `/services/enrichment/src/workers/cluster_detection_worker.py`
+**Tasks**: `cluster_detection`, `cluster_archiver`, `cluster_tier_updater`
+**Queue**: `enrich:cluster_detection`
+**Container**: `enrichment-cluster-detection`
 
-Detects event clusters from message velocity spikes using embedding similarity.
+Dedicated worker for Telegram-centric event detection (Event Detection V3). Detects event clusters from message velocity spikes using embedding similarity, then runs auxiliary maintenance tasks.
+
+#### Architecture
+
+The cluster_detection_worker runs three tasks in sequence each cycle:
+
+1. **cluster_detection**: Main detection task - finds velocity spikes and groups similar messages
+2. **cluster_archiver**: Archives stale rumors (>24h) and propaganda clusters
+3. **cluster_tier_updater**: Recalculates tiers for all validated clusters
 
 #### Detection Algorithm
 
@@ -1252,12 +1265,21 @@ Calls PostgreSQL function `recalculate_cluster_tiers()` which:
 
 ---
 
-### Cluster Validation Task
+### Cluster Validation Worker (V3)
 
-**File**: `/services/enrichment/src/tasks/cluster_validation.py`
-**Worker**: Decision Worker (`enrich:decision` queue)
-**Priority**: 75 (high - after detection, before other enrichment)
+**File**: `/services/enrichment/src/workers/cluster_validation_worker.py`
+**Task**: `cluster_validation`
+**Queue**: `enrich:cluster_validation`
+**Container**: `enrichment-cluster-validation`
 **LLM Required**: Yes (qwen2.5:3b via Ollama)
+
+Dedicated LLM worker for validating detected clusters using claim analysis. Completes the Event Detection V3 pipeline:
+
+```
+cluster_detection → cluster_validation → cluster_tier_updater → cluster_archiver
+                    ^^^^^^^^^^^^^^^^
+                    (this worker)
+```
 
 Validates detected clusters using LLM claim analysis.
 
@@ -2106,11 +2128,14 @@ TASK_TO_QUEUE = {
     # LLM tasks (dedicated queues)
     "ai_tagging": "ai_tagging",
     "rss_validation": "rss_validation",
+    "geolocation_llm": "geolocation_llm",
+    "cluster_validation": "cluster_validation",
 
     # CPU tasks (shared fast queue)
     "embedding": "fast",
     "translation": "fast",
     "entity_matching": "fast",
+    "geolocation": "fast",
     "rss_correlation": "fast",
 
     # Telegram API tasks (rate-limited queue)
@@ -2131,6 +2156,11 @@ TASK_TO_QUEUE = {
     "quarantine_processor": "maintenance",
     "discovery_evaluator": "maintenance",
     "wikidata_enrichment": "maintenance",
+
+    # Cluster detection (with auxiliary tasks)
+    "cluster_detection": "cluster_detection",
+    # Note: cluster_archiver and cluster_tier_updater run as
+    # post-cycle auxiliary tasks in cluster_detection_worker
 }
 ```
 
@@ -2190,13 +2220,16 @@ Each worker exposes metrics on a unique port:
 | Worker | Metrics Port | Container Name |
 |--------|--------------|----------------|
 | **Router** | 9198 | `osint-enrichment-router` |
-| **AI Tagging** | 9096 | `osint-enrichment-ai-tagging` |
+| **AI Tagging** | 9196 | `osint-enrichment-ai-tagging` |
 | **RSS Validation** | 9097 | `osint-enrichment-rss-validation` |
 | **Event Detection** | 9098 | `osint-enrichment-event-detection` |
+| **Geolocation LLM** | 9099 | `osint-enrichment-geolocation-llm` |
 | **Fast Pool** | 9199 | `osint-enrichment-fast-pool` |
 | **Telegram** | 9200 | `osint-enrichment-telegram` |
 | **Decision** | 9201 | `osint-enrichment-decision` |
 | **Maintenance** | 9202 | `osint-enrichment-maintenance` |
+| **Cluster Detection** | 9211 | `osint-enrichment-cluster-detection` |
+| **Cluster Validation** | 9212 | `osint-enrichment-cluster-validation` |
 
 **Quick check all endpoints**:
 
@@ -2482,18 +2515,29 @@ MAX_OVERFLOW=10
 | `/services/enrichment/src/workers/telegram_worker.py` | Telegram API worker |
 | `/services/enrichment/src/workers/decision_worker.py` | Decision verification worker |
 | `/services/enrichment/src/workers/maintenance_worker.py` | Maintenance worker |
-| `/services/enrichment/src/workers/event_detection_worker.py` | Event detection pipeline |
+| `/services/enrichment/src/workers/event_detection_worker.py` | Event detection pipeline (V2) |
+| `/services/enrichment/src/workers/geolocation_llm_worker.py` | LLM geolocation worker |
+| `/services/enrichment/src/workers/cluster_detection_worker.py` | Cluster detection + archiver + tier updater (V3) |
+| `/services/enrichment/src/workers/cluster_validation_worker.py` | LLM cluster validation (V3) |
 
-### Task Files (22 total)
+### Task Files (32 total)
 
 | Task | File | Type |
 |------|------|------|
 | AI Tagging | `/services/enrichment/src/tasks/ai_tagging.py` | LLM |
 | RSS Validation | `/services/enrichment/src/tasks/rss_validation.py` | LLM |
+| Geolocation LLM | `/services/enrichment/src/tasks/geolocation_llm.py` | LLM |
+| Cluster Validation | `/services/enrichment/src/tasks/cluster_validation.py` | LLM |
+| RSS Event Creator | `/services/enrichment/src/tasks/rss_event_creator.py` | LLM |
+| Telegram Event Matcher | `/services/enrichment/src/tasks/telegram_event_matcher.py` | LLM |
 | Embedding | `/services/enrichment/src/tasks/embedding.py` | CPU |
 | Translation | `/services/enrichment/src/tasks/translation.py` | CPU |
 | Entity Matching | `/services/enrichment/src/tasks/entity_matching.py` | CPU |
+| Geolocation | `/services/enrichment/src/tasks/geolocation.py` | CPU |
 | RSS Correlation | `/services/enrichment/src/tasks/rss_correlation.py` | CPU |
+| Cluster Detection | `/services/enrichment/src/tasks/cluster_detection.py` | CPU |
+| Cluster Archiver | `/services/enrichment/src/tasks/cluster_archiver.py` | CPU |
+| Cluster Tier Updater | `/services/enrichment/src/tasks/cluster_tier_updater.py` | CPU |
 | Engagement Polling | `/services/enrichment/src/tasks/engagement_polling.py` | Telegram |
 | Social Graph | `/services/enrichment/src/tasks/social_graph_extraction.py` | Telegram |
 | Comment Fetcher | `/services/enrichment/src/tasks/comment_fetcher.py` | Telegram |
@@ -2501,15 +2545,15 @@ MAX_OVERFLOW=10
 | Comment Backfill | `/services/enrichment/src/tasks/comment_backfill.py` | Telegram |
 | Comment On-Demand | `/services/enrichment/src/tasks/comment_ondemand.py` | Telegram |
 | Forward Discovery | `/services/enrichment/src/tasks/forward_discovery.py` | Telegram |
-| RSS Event Creator | `/services/enrichment/src/tasks/rss_event_creator.py` | LLM |
-| Telegram Event Matcher | `/services/enrichment/src/tasks/telegram_event_matcher.py` | LLM |
+| Discovery Metrics Collector | `/services/enrichment/src/tasks/discovery_metrics_collector.py` | Telegram |
+| Discovery Evaluator | `/services/enrichment/src/tasks/discovery_evaluator.py` | Telegram |
 | Event Status Updater | `/services/enrichment/src/tasks/event_status_updater.py` | CPU |
 | Decision Verifier | `/services/enrichment/src/tasks/decision_verifier.py` | CPU |
 | Decision Reprocessor | `/services/enrichment/src/tasks/decision_reprocessor.py` | CPU |
 | Channel Cleanup | `/services/enrichment/src/tasks/channel_cleanup.py` | CPU |
 | Quarantine Processor | `/services/enrichment/src/tasks/quarantine_processor.py` | CPU |
-| Discovery Evaluator | `/services/enrichment/src/tasks/discovery_evaluator.py` | CPU |
 | Wikidata Enrichment | `/services/enrichment/src/tasks/wikidata_enrichment.py` | CPU |
+| Wikidata OpenSanctions | `/services/enrichment/src/tasks/wikidata_opensanctions.py` | CPU |
 
 ## Known Issues
 
