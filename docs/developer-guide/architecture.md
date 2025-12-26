@@ -90,6 +90,9 @@ This separation is **fundamental** to the platform architecture:
 | **enrichment-event-detection** | osint-enrichment-event-detection | Creates events from RSS, matches Telegram messages | Ollama batch instance | 9099 |
 | **enrichment-decision** | osint-enrichment-decision | Verifies/reprocesses spam filter decisions | CPU-only worker | 9201 |
 | **enrichment-maintenance** | osint-enrichment-maintenance | Hourly tasks (channel cleanup, quarantine, discovery evaluation) | Cron-style worker | 9202 |
+| **enrichment-geolocation-llm** | osint-enrichment-geolocation-llm | LLM-based location extraction from messages | Ollama batch instance | 9099 |
+| **enrichment-cluster-detection** | osint-enrichment-cluster-detection | Event Detection V3: velocity-based clustering + archiver + tier updater | pgvector, CPU worker | 9211 |
+| **enrichment-cluster-validation** | osint-enrichment-cluster-validation | LLM-based cluster validation (factual/rumor/propaganda) | Ollama batch instance | 9212 |
 | **rss-ingestor** | osint-rss-ingestor | Fetches RSS feeds, generates embeddings for correlation | feedparser, sentence-transformers | - |
 | **opensanctions** | osint-opensanctions | Entity matching against sanctions databases | Yente API client | - |
 | **entity-ingestion** | osint-entity-ingestion | CSV import for curated entity knowledge graph | Pandas, SQLAlchemy | - |
@@ -493,7 +496,7 @@ osint-intelligence-platform/
 | **Redis** | 0.1-0.3 cores | 512MB | Low |
 | **MinIO** | 0.1-0.5 cores | 256MB | High (reads/writes) |
 | **Frontend** | 0.1-0.2 cores | 256MB | Low |
-| **Enrichment (6 workers)** | 1-3 cores | 1-2GB | Medium |
+| **Enrichment (12 workers)** | 1-3 cores | 1-2GB | Medium |
 
 **Total**: 8-16 cores, 12-24GB RAM, 100GB+ disk (+ media storage)
 

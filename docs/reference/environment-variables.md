@@ -415,7 +415,7 @@ Different enrichment workers have specialized LLM configurations:
 
 ### Cluster Detection
 
-Velocity-based event cluster detection.
+Velocity-based event cluster detection (Event Detection V3).
 
 | Variable | Default | Description | Required |
 |----------|---------|-------------|----------|
@@ -424,6 +424,15 @@ Velocity-based event cluster detection.
 | `CLUSTER_SIMILARITY_THRESHOLD` | `0.80` | Minimum embedding similarity for clustering | No |
 | `MIN_MESSAGES_FOR_CLUSTER` | `3` | Minimum messages to form a cluster | No |
 | `CLUSTER_RUMOR_TTL_HOURS` | `24` | Hours before archiving unconfirmed rumors | No |
+
+### Cluster Validation
+
+LLM-based cluster validation using claim analysis.
+
+| Variable | Default | Description | Required |
+|----------|---------|-------------|----------|
+| `VALIDATION_MODEL` | _(AI tagging model)_ | LLM model for cluster validation | No |
+| `LLM_TIMEOUT` | `180` | LLM request timeout in seconds | No |
 
 **Tier Progression (Automatic):**
 - **1 channel** → rumor (red)

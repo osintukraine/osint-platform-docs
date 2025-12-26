@@ -82,7 +82,7 @@ graph LR
 
 | Aspect | Details |
 |--------|---------|
-| **Function** | 26 task types across 8 worker pools |
+| **Function** | 32 task types across 12 worker pools |
 | **Tech** | Coordinator + Router pattern, Redis Streams, Ollama |
 | **Speed** | Background - can be slow (hours OK) |
 | **LLM Tasks** | Sequential execution prevents Ollama contention |

@@ -170,7 +170,19 @@ curl http://localhost:8001/metrics   # Listener
 curl http://localhost:8002/metrics   # Processor Worker 1
 curl http://localhost:8003/metrics   # Processor Worker 2
 curl http://localhost:8000/metrics   # API
-curl http://localhost:9095/metrics   # Enrichment service
+
+# Enrichment workers (12 total)
+curl http://localhost:9198/metrics   # Router
+curl http://localhost:9196/metrics   # AI Tagging
+curl http://localhost:9097/metrics   # RSS Validation
+curl http://localhost:9098/metrics   # Event Detection
+curl http://localhost:9099/metrics   # Geolocation LLM
+curl http://localhost:9199/metrics   # Fast Pool
+curl http://localhost:9200/metrics   # Telegram
+curl http://localhost:9201/metrics   # Decision
+curl http://localhost:9202/metrics   # Maintenance
+curl http://localhost:9211/metrics   # Cluster Detection
+curl http://localhost:9212/metrics   # Cluster Validation
 
 # Infrastructure exporters
 curl http://localhost:9187/metrics   # PostgreSQL Exporter

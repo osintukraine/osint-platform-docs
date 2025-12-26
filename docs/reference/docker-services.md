@@ -4,7 +4,7 @@ Complete reference for all Docker services in the OSINT Intelligence Platform.
 
 **Source**: `/osint-intelligence-platform/docker-compose.yml`
 
-**Last Updated**: 2025-12-09
+**Last Updated**: 2025-12-27
 
 ---
 
@@ -345,6 +345,44 @@ All enrichment workers use the `enrichment` profile and have similar patterns. T
 | **Ports** | `9202:9202` (Prometheus metrics) |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
 | **Environment** | `BATCH_SIZE`: 100<br>`TIME_BUDGET_SECONDS`: 120<br>`CYCLE_INTERVAL_SECONDS`: 300 |
+
+### enrichment-geolocation-llm
+
+| Field | Value |
+|-------|-------|
+| **Build** | `services/enrichment/Dockerfile` |
+| **Container Name** | `osint-enrichment-geolocation-llm` |
+| **Purpose** | LLM-based location extraction from message content |
+| **Ports** | `9099:9099` (Prometheus metrics) |
+| **Profile** | `enrichment-standard`, `enrichment-full` |
+| **Dependencies** | `postgres` (healthy), `ollama-batch` (healthy) |
+| **Environment** | `GEOLOCATION_MODEL`: qwen2.5:3b<br>`BATCH_SIZE`: 5<br>`TIME_BUDGET_SECONDS`: 120 |
+
+### enrichment-cluster-detection
+
+| Field | Value |
+|-------|-------|
+| **Build** | `services/enrichment/Dockerfile` |
+| **Container Name** | `osint-enrichment-cluster-detection` |
+| **Purpose** | Event Detection V3: velocity-based cluster detection + auxiliary tasks (archiver, tier updater) |
+| **Ports** | `9211:9211` (Prometheus metrics) |
+| **Profile** | `enrichment-standard`, `enrichment-full` |
+| **Dependencies** | `postgres` (healthy), `redis` (healthy) |
+| **Environment** | `CLUSTER_VELOCITY_THRESHOLD`: 2.0<br>`CLUSTER_TIME_WINDOW_HOURS`: 2<br>`CLUSTER_SIMILARITY_THRESHOLD`: 0.80<br>`BATCH_SIZE`: 50<br>`TIME_BUDGET_SECONDS`: 120 |
+| **Tasks** | `cluster_detection`, `cluster_archiver`, `cluster_tier_updater` |
+
+### enrichment-cluster-validation
+
+| Field | Value |
+|-------|-------|
+| **Build** | `services/enrichment/Dockerfile` |
+| **Container Name** | `osint-enrichment-cluster-validation` |
+| **Purpose** | LLM-based cluster validation using claim analysis (factual/rumor/propaganda) |
+| **Ports** | `9212:9212` (Prometheus metrics) |
+| **Profile** | `enrichment-standard`, `enrichment-full` |
+| **Dependencies** | `postgres` (healthy), `ollama-batch` (healthy) |
+| **Environment** | `VALIDATION_MODEL`: qwen2.5:3b<br>`CLUSTER_RUMOR_TTL_HOURS`: 24<br>`BATCH_SIZE`: 5<br>`TIME_BUDGET_SECONDS`: 120<br>`LLM_TIMEOUT`: 180 |
+| **Tasks** | `cluster_validation` |
 
 ---
 
@@ -689,7 +727,9 @@ Docker Compose profiles control which service groups are started:
 | Profile | Services | Use Case |
 |---------|----------|----------|
 | (none) | Core + Application | Production runtime (15 containers) |
-| `enrichment` | Background workers | Full enrichment pipeline (9 workers) |
+| `enrichment` | All enrichment workers | Full enrichment pipeline (12 workers) |
+| `enrichment-standard` | LLM workers | AI tagging, geolocation, cluster validation, event detection |
+| `enrichment-full` | All workers | Standard + advanced features |
 | `monitoring` | Prometheus stack | Metrics, logs, alerts (8 services) |
 | `opensanctions` | Entity matching | Sanctions data enrichment (4 services) |
 | `multi-account` | Russia/Ukraine listeners | Multi-account Telegram monitoring (2 services) |
