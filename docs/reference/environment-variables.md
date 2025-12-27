@@ -7,18 +7,18 @@ Complete reference for all environment variables used across the OSINT Intellige
 - [Core Infrastructure](#core-infrastructure)
 - [Database Configuration](#database-configuration)
 - [Redis Configuration](#redis-configuration)
-- [Authentication & Security](#authentication--security)
+- [Authentication & Security](#authentication-security)
 - [API Service](#api-service)
 - [Processor Service](#processor-service)
 - [Enrichment Service](#enrichment-service)
 - [Listener Service](#listener-service)
 - [Media Services](#media-services)
 - [Telegram Configuration](#telegram-configuration)
-- [LLM & AI Services](#llm--ai-services)
-- [Geolocation & Mapping](#geolocation--mapping)
-- [Event Detection & Clustering](#event-detection--clustering)
+- [LLM & AI Services](#llm-ai-services)
+- [Geolocation & Mapping](#geolocation-mapping)
+- [Event Detection & Clustering](#event-detection-clustering)
 - [OpenSanctions Integration](#opensanctions-integration)
-- [Metrics & Monitoring](#metrics--monitoring)
+- [Metrics & Monitoring](#metrics-monitoring)
 
 ---
 
@@ -760,6 +760,6 @@ WEBSOCKET_ALLOW_NO_ORIGIN=false
 
 ## See Also
 
-- [Architecture Documentation](~/code/osintukraine/osint-platform-docs/docs/architecture/)
-- [Deployment Guide](~/code/osintukraine/osint-platform-docs/docs/deployment/)
-- [API Reference](~/code/osintukraine/osint-platform-docs/docs/api/)
+- [Architecture Overview](../developer-guide/architecture.md)
+- [Installation Guide](../operator-guide/installation.md)
+- [API Endpoints Reference](api-endpoints.md)

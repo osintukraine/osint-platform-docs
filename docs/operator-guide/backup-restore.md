@@ -11,7 +11,7 @@ Complete procedures for protecting platform data, creating recoverable backups, 
 - [Overview](#overview)
 - [Quick Start](#quick-start)
 - [Automated Scripts](#automated-scripts)
-- [Production Preflight Check](#production-preflight-check)
+- [Production Readiness Check](#production-readiness-check)
 - [What Needs Backup](#what-needs-backup)
 - [Backup Strategies](#backup-strategies)
 - [PostgreSQL Database Backup](#postgresql-database-backup)

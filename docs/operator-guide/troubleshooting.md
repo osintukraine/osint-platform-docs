@@ -18,7 +18,7 @@ Comprehensive troubleshooting guide based on 3+ years of production operations. 
 - [Storage Issues](#storage-issues)
 - [LLM and AI Issues](#llm-and-ai-issues)
 - [Search Issues](#search-issues)
-- [Geolocation & Map Issues](#geolocation--map-issues)
+- [Geolocation & Map Issues](#geolocation-map-issues)
 - [Network and Connectivity Issues](#network-and-connectivity-issues)
 - [Getting Help](#getting-help)
 

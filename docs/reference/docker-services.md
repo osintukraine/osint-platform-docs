@@ -843,11 +843,9 @@ Healthcheck methods:
 
 ## Related Documentation
 
-- [Architecture Overview](/docs/ARCHITECTURE.md)
-- [Stack Manager Script](/scripts/stack-manager.sh)
-- [Deployment Guide](/docs/guides/deployment.md)
-- [Monitoring Setup](/docs/guides/monitoring.md)
-- [NocoDB Guide](/docs/guides/nocodb-setup.md)
+- [Architecture Overview](../developer-guide/architecture.md)
+- [Installation Guide](../operator-guide/installation.md)
+- [Monitoring Setup](../operator-guide/monitoring.md)
 
 ---
 

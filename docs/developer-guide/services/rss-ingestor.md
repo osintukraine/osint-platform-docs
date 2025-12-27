@@ -1076,12 +1076,11 @@ async def test_fetch_with_mock_server():
 
 ## Related Documentation
 
-- [Architecture Overview](/developer-guide/architecture/) - System design and data flow
-- [Enrichment Service](/developer-guide/services/enrichment/) - RSSCorrelationTask implementation
-- [API Service](/developer-guide/services/api/) - RSS correlation endpoints
-- [PostgreSQL Schema](/reference/database-schema/) - `rss_feeds`, `external_news`, `message_news_correlations`
-- [Semantic Search](/features/semantic-search/) - pgvector and embeddings
-- [NocoDB Admin Guide](/guides/nocodb-management/) - Managing RSS feeds via UI
+- [Architecture Overview](../architecture.md) - System design and data flow
+- [Enrichment Service](enrichment.md) - RSSCorrelationTask implementation
+- [API Service](api.md) - RSS correlation endpoints
+- [Database Schema](../../reference/database-schema.md) - `rss_feeds`, `external_news`, `message_news_correlations`
+- [Semantic Search](../../features/semantic-search.md) - pgvector and embeddings
 
 **External References**:
 

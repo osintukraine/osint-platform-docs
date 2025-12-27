@@ -177,6 +177,6 @@ Download filtered data as:
 
 ## Related Documentation
 
-- [API Reference](../reference/api-endpoints.md#map-api) - Map API endpoints
-- [Database Schema](../reference/database-tables.md#geolocation-tables) - Geolocation tables
-- [Environment Variables](../reference/environment-vars.md#event-detection-v3--geolocation) - Configuration
+- [API Endpoints](../reference/api-endpoints.md) - Map API endpoints
+- [Database Schema](../reference/database-schema.md) - Geolocation tables
+- [Environment Variables](../reference/environment-variables.md) - Configuration

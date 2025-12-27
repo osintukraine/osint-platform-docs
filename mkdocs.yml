@@ -110,6 +110,7 @@ nav:
       - Hetzner Storage: operator-guide/hetzner-storage.md
       - Telegram Setup: operator-guide/telegram-setup.md
       - Telegram Disaster Recovery: operator-guide/telegram-disaster-recovery.md
+      - External LLM Providers: operator-guide/external-llm.md
       - Monitoring & Metrics: operator-guide/monitoring.md
       - Backup & Restore: operator-guide/backup-restore.md
       - Performance Tuning: operator-guide/performance-tuning.md
@@ -140,6 +141,8 @@ nav:
       - Database Schema: developer-guide/database-schema.md
       - Database Migrations: developer-guide/database-migrations.md
       - LLM Integration: developer-guide/llm-integration.md
+      - Map API: developer-guide/map-api.md
+      - Rate Limiting: developer-guide/rate-limiting.md
       - Frontend API Patterns: developer-guide/frontend-api-patterns.md
       - Testing Guide: developer-guide/testing-guide.md
       - Adding Features: developer-guide/adding-features.md
