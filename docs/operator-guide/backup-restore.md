@@ -1960,9 +1960,9 @@ EOF
 
 | Script | Location | Documentation |
 |--------|----------|---------------|
-| `backup.sh` | `/scripts/backup.sh` | [Automated Scripts](#backupsh---full-platform-backup) |
-| `restore.sh` | `/scripts/restore.sh` | [Automated Scripts](#restoresh---full-platform-restore) |
-| `preflight-check.sh` | `/scripts/preflight-check.sh` | [Production Preflight Check](#preflight-checksh---production-readiness-verification) |
+| `backup.sh` | `/scripts/backup.sh` | [Automated Scripts](#backupsh-full-platform-backup) |
+| `restore.sh` | `/scripts/restore.sh` | [Automated Scripts](#restoresh-full-platform-restore) |
+| `preflight-check.sh` | `/scripts/preflight-check.sh` | [Production Preflight Check](#preflight-checksh-production-readiness-verification) |
 | `setup-hetzner-storage.sh` | `/scripts/setup-hetzner-storage.sh` | [Hetzner Storage Guide](hetzner-storage.md) |
 
 ### Related Guides
