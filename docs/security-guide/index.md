@@ -78,6 +78,17 @@ Production security best practices and deployment checklist.
 - Secrets management
 - Backup encryption
 - Security monitoring
+- **NEW**: Media storage security (MinIO pre-signed URLs)
+
+### [Security Changelog](security-changelog.md)
+Track security improvements and vulnerability fixes.
+
+- Latest: 2025-12-27 Comprehensive Security Hardening
+- Role-filtered OpenAPI documentation
+- ILIKE injection prevention
+- Dependency CVE fixes (httpx, aiohttp, fastapi)
+- Pre-signed URL support for media
+- Configuration hardening
 
 ## Who This Is For
 

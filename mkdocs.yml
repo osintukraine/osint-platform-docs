@@ -149,6 +149,7 @@ nav:
       - Authorization: security-guide/authorization.md
       - CrowdSec Integration: security-guide/crowdsec.md
       - Security Hardening: security-guide/hardening.md
+      - Security Changelog: security-guide/security-changelog.md
   - Tutorials:
       - tutorials/index.md
       - Add a Telegram Channel: tutorials/add-telegram-channel.md

@@ -593,6 +593,187 @@ gpg --decrypt /backups/osint-platform-2025-01-01.pgdump.gpg \
 0 2 * * * root /usr/local/bin/backup-encrypted.sh >> /var/log/osint-backup.log 2>&1
 ```
 
+## Media Storage Security (MinIO/S3)
+
+### Overview
+
+The platform stores archived media files (photos, videos, documents) in MinIO, an S3-compatible object storage. Proper security configuration prevents unauthorized access to sensitive media.
+
+### Pre-Signed URL Security
+
+Pre-signed URLs provide secure, time-limited access to media files without exposing MinIO directly.
+
+**Benefits:**
+
+- **Time-limited**: URLs expire after configured period (default 4 hours)
+- **Cryptographically signed**: Cannot be tampered with or guessed
+- **No public bucket**: MinIO doesn't need to be publicly accessible
+- **Audit trail**: Can track who requested access
+
+**Configuration:**
+
+Add to your `.env` file:
+
+```bash
+# Enable pre-signed URLs (RECOMMENDED for production)
+USE_PRESIGNED_URLS=true
+
+# URL expiry in hours (1-24, default 4)
+PRESIGNED_URL_EXPIRY_HOURS=4
+
+# Public URL base (browser-accessible, through Caddy proxy)
+MINIO_PUBLIC_URL=https://yourdomain.com
+```
+
+**How It Works:**
+
+1. Client requests media via API endpoint
+2. API generates pre-signed URL with expiry signature
+3. Client downloads directly from MinIO with signed URL
+4. URL expires after configured period
+
+**Example Pre-Signed URL:**
+
+```
+https://yourdomain.com/osint-media/media/ab/cd/abcd1234.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=...&X-Amz-Date=20250127T120000Z&X-Amz-Expires=14400&X-Amz-SignedHeaders=host&X-Amz-Signature=...
+```
+
+### MinIO Network Isolation
+
+**CRITICAL**: MinIO should never be directly exposed to the internet.
+
+**Architecture:**
+
+```
+Internet → Caddy (443) → /media/* → MinIO (internal:9000)
+                        ↓
+                    Rate limiting
+                    Pre-signed validation
+```
+
+**Docker Compose Configuration:**
+
+```yaml
+services:
+  minio:
+    # ❌ WRONG - exposes to internet
+    # ports:
+    #   - "9000:9000"
+
+    # ✅ CORRECT - internal only
+    expose:
+      - "9000"
+    networks:
+      - backend  # Internal network only
+```
+
+**Caddy Proxy Configuration:**
+
+```caddyfile
+# Media endpoint with rate limiting
+handle /media/* {
+    # Rate limit: 60 requests per minute per IP
+    rate_limit {
+        zone media_zone {
+            key {remote_host}
+            events 60
+            window 1m
+        }
+    }
+
+    # Proxy to internal MinIO
+    reverse_proxy minio:9000 {
+        header_up Host {upstream_hostport}
+    }
+}
+```
+
+### Bucket Access Control
+
+**Default Bucket Policy (Private):**
+
+```bash
+# Create bucket with private access
+docker-compose exec minio mc mb local/osint-media
+
+# Verify bucket is private (no public access)
+docker-compose exec minio mc policy get local/osint-media
+# Should output: none
+```
+
+**Never Use Public Buckets:**
+
+```bash
+# ❌ NEVER do this in production
+mc policy set public local/osint-media
+
+# ✅ CORRECT - keep private, use pre-signed URLs
+mc policy set none local/osint-media
+```
+
+### MinIO Credentials
+
+**Strong Credentials:**
+
+```bash
+# Generate strong MinIO credentials
+MINIO_ACCESS_KEY=$(openssl rand -hex 16)
+MINIO_SECRET_KEY=$(openssl rand -base64 48)
+
+# Add to .env
+echo "MINIO_ACCESS_KEY=$MINIO_ACCESS_KEY" >> .env
+echo "MINIO_SECRET_KEY=$MINIO_SECRET_KEY" >> .env
+```
+
+**Credential Rotation:**
+
+```bash
+# 1. Generate new credentials
+NEW_ACCESS_KEY=$(openssl rand -hex 16)
+NEW_SECRET_KEY=$(openssl rand -base64 48)
+
+# 2. Add new credentials to MinIO
+docker-compose exec minio mc admin user add local $NEW_ACCESS_KEY $NEW_SECRET_KEY
+
+# 3. Update services to use new credentials
+sed -i "s/MINIO_ACCESS_KEY=.*/MINIO_ACCESS_KEY=$NEW_ACCESS_KEY/" .env
+sed -i "s/MINIO_SECRET_KEY=.*/MINIO_SECRET_KEY=$NEW_SECRET_KEY/" .env
+
+# 4. Restart services
+docker-compose restart api processor-worker
+
+# 5. Remove old credentials from MinIO
+docker-compose exec minio mc admin user remove local $OLD_ACCESS_KEY
+```
+
+### RSS Feed Media URLs
+
+**Note**: RSS feeds require stable URLs that don't expire. For RSS feeds:
+
+- Pre-signed URLs are **not used** (RSS readers may cache feed URLs)
+- Media is accessed through the Caddy proxy
+- Rate limiting provides anti-leeching protection
+
+**RSS Media Configuration:**
+
+```bash
+# RSS uses the public URL directly (through Caddy)
+MINIO_PUBLIC_URL=https://yourdomain.com
+
+# Pre-signed URLs only affect API responses, not RSS
+USE_PRESIGNED_URLS=true
+```
+
+### Security Checklist for Media Storage
+
+- [ ] **MinIO not exposed to internet** - Internal Docker network only
+- [ ] **Pre-signed URLs enabled** - `USE_PRESIGNED_URLS=true`
+- [ ] **Bucket is private** - No public access policy
+- [ ] **Strong credentials** - Random 32+ character secrets
+- [ ] **Caddy proxy configured** - Rate limiting enabled
+- [ ] **HTTPS only** - All media accessed via HTTPS
+- [ ] **Credential rotation** - Rotate quarterly
+
 ## Monitoring and Auditing
 
 ### Security Event Logging
