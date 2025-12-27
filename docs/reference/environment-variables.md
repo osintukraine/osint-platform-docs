@@ -2,6 +2,22 @@
 
 Complete reference for all environment variables used across the OSINT Intelligence Platform.
 
+**Source File**: `.env.example`
+**Setup**: Copy `.env.example` to `.env` and customize for your deployment
+
+## Quick Start Checklist
+
+Before starting the platform:
+
+1. Copy `.env.example` to `.env`
+2. Change ALL passwords marked with `CHANGE_ME`
+3. Fill in Telegram API credentials
+4. Fill in DeepL API key (free tier available)
+5. Generate Kratos secrets (production only)
+6. Review and adjust settings for your environment
+
+---
+
 ## Table of Contents
 
 - [Core Infrastructure](#core-infrastructure)
@@ -755,6 +771,37 @@ WEBSOCKET_ALLOW_NO_ORIGIN=false
 - Verify `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are set
 - Check session file exists at `TELEGRAM_SESSION_PATH`
 - Confirm phone number format: `+1234567890` (no spaces)
+
+---
+
+## Security Checklist
+
+Before deploying:
+
+- [ ] Changed all `CHANGE_ME` placeholders
+- [ ] Used strong random passwords (min 32 characters)
+- [ ] Generated `JWT_SECRET_KEY` (if using JWT): `openssl rand -hex 32`
+- [ ] Generated `KRATOS_SECRET_COOKIE`: `openssl rand -base64 32`
+- [ ] Generated `KRATOS_SECRET_CIPHER` (MUST be 32 chars): `openssl rand -base64 24`
+- [ ] Configured production SMTP (not MailSlurper)
+- [ ] Verified `.env` is in `.gitignore`
+- [ ] Never shared `.env` file or credentials
+
+---
+
+## Production Checklist
+
+Before going live:
+
+- [ ] Set `ENVIRONMENT=production`
+- [ ] Set `DEBUG=false`
+- [ ] Set `API_RELOAD=false`
+- [ ] Set `MINIO_SECURE=true` (with HTTPS)
+- [ ] Configure `MINIO_PUBLIC_URL` to your domain
+- [ ] Configure `API_CORS_ORIGINS` to your domain(s)
+- [ ] Set strong unique passwords for all services
+- [ ] Enable HTTPS (Caddy handles automatically)
+- [ ] Configure Grafana SMTP for alerts (optional)
 
 ---
 

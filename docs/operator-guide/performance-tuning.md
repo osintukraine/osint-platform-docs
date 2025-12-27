@@ -383,7 +383,7 @@ watch -n 5 'docker-compose exec redis redis-cli XLEN telegram_messages'
 - [Scaling Guide](scaling.md) - When and how to scale
 - [Monitoring](monitoring.md) - Performance dashboards
 - [Docker Services Reference](../reference/docker-services.md) - Resource limits
-- [Environment Variables](../reference/environment-vars.md) - All tuning parameters
+- [Environment Variables](../reference/environment-variables.md) - All tuning parameters
 
 ---
 

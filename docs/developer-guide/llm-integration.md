@@ -440,4 +440,4 @@ print(result.raw_response)   # Full response for debugging
 
 - [Adding Features](adding-features.md) - Creating enrichment tasks
 - [Services: Processor](services/processor.md) - Processor architecture
-- [Environment Variables](../reference/environment-vars.md) - Ollama configuration
+- [Environment Variables](../reference/environment-variables.md) - Ollama configuration

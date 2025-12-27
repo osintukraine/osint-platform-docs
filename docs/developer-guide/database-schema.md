@@ -540,4 +540,4 @@ ORDER BY telegram_date DESC;
 
 - [Database Migrations](database-migrations.md) - Schema change workflow
 - [Shared Libraries](shared-libraries.md) - SQLAlchemy models
-- [Environment Variables](../reference/environment-vars.md) - PostgreSQL config
+- [Environment Variables](../reference/environment-variables.md) - PostgreSQL config

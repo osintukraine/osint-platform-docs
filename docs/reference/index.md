@@ -7,7 +7,7 @@ Complete technical reference for the OSINT Intelligence Platform.
 This reference documentation provides comprehensive details about:
 
 - **[API Endpoints](api-endpoints.md)** - All REST API endpoints with parameters and responses
-- **[Environment Variables](environment-vars.md)** - Complete configuration reference
+- **[Environment Variables](environment-variables.md)** - Complete configuration reference
 - **[Database Tables](database-tables.md)** - PostgreSQL schema documentation
 - **[Docker Services](docker-services.md)** - Container architecture
 

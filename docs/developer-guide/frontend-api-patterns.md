@@ -381,4 +381,4 @@ export const api = {
 
 - [Adding Features](adding-features.md) - Full-stack feature guide
 - [API Reference](../reference/api-endpoints.md) - All API endpoints
-- [Environment Variables](../reference/environment-vars.md) - Configuration
+- [Environment Variables](../reference/environment-variables.md) - Configuration
