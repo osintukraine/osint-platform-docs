@@ -1079,8 +1079,7 @@ async def test_fetch_with_mock_server():
 - [Architecture Overview](../architecture.md) - System design and data flow
 - [Enrichment Service](enrichment.md) - RSSCorrelationTask implementation
 - [API Service](api.md) - RSS correlation endpoints
-- [Database Schema](../../reference/database-schema.md) - `rss_feeds`, `external_news`, `message_news_correlations`
-- [Semantic Search](../../features/semantic-search.md) - pgvector and embeddings
+- [Database Tables](../../reference/database-tables.md) - `rss_feeds`, `external_news`, `message_news_correlations`
 
 **External References**:
 

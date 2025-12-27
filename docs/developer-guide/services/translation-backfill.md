@@ -654,7 +654,7 @@ WHERE is_backfilled = true;
 - [Enrichment Service](enrichment.md) - Successor to translation-backfill
 - [Processor Service](processor.md) - Real-time translation during ingestion
 - [Architecture Overview](../architecture.md) - System design
-- [Database Schema](../../reference/database-schema.md) - Translation fields
+- [Database Tables](../../reference/database-tables.md) - Translation fields
 
 ### External Resources
 

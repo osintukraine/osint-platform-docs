@@ -178,5 +178,5 @@ Download filtered data as:
 ## Related Documentation
 
 - [API Endpoints](../reference/api-endpoints.md) - Map API endpoints
-- [Database Schema](../reference/database-schema.md) - Geolocation tables
+- [Database Tables](../reference/database-tables.md) - Geolocation tables
 - [Environment Variables](../reference/environment-variables.md) - Configuration
