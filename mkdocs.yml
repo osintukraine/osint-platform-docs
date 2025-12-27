@@ -134,6 +134,7 @@ nav:
           - Analytics: developer-guide/services/analytics.md
           - Migration: developer-guide/services/migration.md
           - Translation Backfill: developer-guide/services/translation-backfill.md
+          - Media Sync: developer-guide/services/media-sync.md
       - Shared Libraries: developer-guide/shared-libraries.md
       - Media Storage Architecture: developer-guide/media-storage.md
       - Database Schema: developer-guide/database-schema.md
