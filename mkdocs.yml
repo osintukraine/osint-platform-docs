@@ -128,6 +128,7 @@ nav:
           - API: developer-guide/services/api.md
           - Frontend: developer-guide/services/frontend.md
           - Enrichment: developer-guide/services/enrichment.md
+          - Fact-Check: developer-guide/services/fact-check.md
           - RSS Ingestor: developer-guide/services/rss-ingestor.md
           - Notifier: developer-guide/services/notifier.md
           - OpenSanctions: developer-guide/services/opensanctions.md

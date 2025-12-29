@@ -91,6 +91,21 @@ graph LR
 
 ---
 
+### [Fact-Check Service](fact-check.md)
+
+**Classification quality assurance** - validates LLM classifications, surfaces discrepancies.
+
+| Aspect | Details |
+|--------|---------|
+| **Function** | Re-classifies sampled messages, compares with original |
+| **Tech** | Stratified sampling, Ollama, confidence-based actions |
+| **Actions** | Auto-reclassify, auto-hide off-topic, queue for review |
+| **Admin UI** | `/admin/fact-check` for human review |
+
+[:octicons-arrow-right-24: Full Documentation](fact-check.md)
+
+---
+
 ### [API Service](api.md)
 
 **REST API** - FastAPI backend for all data access.
