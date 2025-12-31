@@ -130,6 +130,57 @@ services:
 !!! danger "Critical: Same Buffer Path as Processor"
     The media-sync service MUST mount the same buffer path as the processor service.
 
+## Multi-Box Storage Support
+
+The media-sync worker supports multiple storage boxes using `MinioClientPool`:
+
+```python
+from storage import MinioClientPool
+
+# Initialize pool (credentials shared across all boxes)
+pool = MinioClientPool(
+    access_key=MINIO_ACCESS_KEY,
+    secret_key=MINIO_SECRET_KEY,
+    bucket_name=MINIO_BUCKET
+)
+
+# Get client for specific box (lazy-loaded, cached)
+async with session() as db:
+    client = await pool.get_client(db, storage_box_id)
+    client.fput_object(bucket, s3_key, local_path)
+```
+
+### How It Works
+
+1. **Job contains `storage_box_id`**: Each sync job specifies which box to upload to
+2. **Pool looks up endpoint**: Queries `storage_boxes.minio_endpoint` from database
+3. **Client is cached**: Subsequent uploads to same box reuse the client
+4. **Endpoint changes detected**: If config changes, client is recreated
+
+### Job Format (Multi-Box)
+
+```json
+{
+  "sha256": "abc123...",
+  "s3_key": "media/ab/c1/abc123.jpg",
+  "local_path": "/var/cache/osint-media-buffer/media/ab/c1/abc123.jpg",
+  "storage_box_id": "russia-1",   // Routes to minio-russia-1
+  "file_size": 12345,
+  "queued_at": "2024-01-15T12:00:00"
+}
+```
+
+### Usage Tracking
+
+After successful sync, the worker updates box usage:
+
+```sql
+UPDATE storage_boxes
+SET used_bytes = used_bytes + :file_size,
+    reserved_bytes = GREATEST(0, reserved_bytes - :file_size)
+WHERE id = :storage_box_id
+```
+
 ## Key Concepts
 
 ### Write-Through Cache Pattern
@@ -311,7 +362,8 @@ docker-compose exec redis redis-cli RPOPLPUSH media:sync:failed media:sync:pendi
 
 ## Related Documentation
 
-- [Media Storage Architecture](../media-storage.md) - Complete storage design
+- [Media Storage Architecture](../media-storage.md) - Complete storage design (includes multi-box)
+- [Multi-Storage Setup](../../operator-guide/multi-storage-setup.md) - Adding multiple storage boxes
 - [Processor Service](processor.md) - Upstream service that queues sync jobs
 - [API Service](api.md) - Media delivery and routing
-- [Hetzner Storage](../../operator-guide/hetzner-storage.md) - Storage box configuration
+- [Hetzner Storage](../../operator-guide/hetzner-storage.md) - Single-box storage configuration

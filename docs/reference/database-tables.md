@@ -155,10 +155,65 @@ Content-addressed media storage (SHA-256 deduplication).
 
 **Important Indexes**:
 - `idx_media_files_sha256` - Fast deduplication lookups
+- `idx_media_files_pending_sync` - Files awaiting sync (synced_at IS NULL)
+- `idx_media_files_routing` - Media routing (sha256, storage_box_id)
 
-**Foreign Keys**: None (referenced by `message_media`)
+**Foreign Keys**:
+- `storage_box_id` → `storage_boxes(id)` ON DELETE SET NULL
 
-**Related Tables**: `message_media`
+**Related Tables**: `message_media`, `storage_boxes`
+
+---
+
+### `storage_boxes`
+
+Multi-box Hetzner storage configuration.
+
+**Purpose**: Tracks multiple Hetzner Storage Boxes for horizontal scaling with dynamic routing, capacity management, and health monitoring.
+
+**Key Columns**:
+- `id` (VARCHAR(50) PRIMARY KEY): Human-readable box ID (e.g., "default", "russia-1")
+- `hetzner_host` (VARCHAR(255)): Storage box hostname (e.g., "uXXXXXX.your-storagebox.de")
+- `hetzner_user` (VARCHAR(50)): Storage box username
+- `hetzner_port` (INTEGER, default 23): SSH port (always 23 for Hetzner)
+- `mount_path` (VARCHAR(255)): Local SSHFS mount point (e.g., "/mnt/hetzner/russia-1")
+- `minio_endpoint` (VARCHAR(255)): Docker MinIO service name (e.g., "minio-russia-1")
+- `minio_port` (INTEGER, default 9000): MinIO port
+- `capacity_gb` (INTEGER): Total capacity in GB
+- `used_gb` (INTEGER, default 0): Legacy usage tracking
+- `used_bytes` (BIGINT, default 0): Precise byte-level usage
+- `reserved_bytes` (BIGINT, default 0): Reserved for in-flight uploads
+- `high_water_mark` (INTEGER, default 90): Stop writes at this usage percentage
+- `is_readonly` (BOOLEAN, default false): Accept no new writes
+- `priority` (INTEGER, default 100): Box selection priority (lower = higher priority)
+- `account_region` (VARCHAR(20)): Logical region ("russia", "ukraine", "eu")
+- `is_active` (BOOLEAN, default true): Accepting traffic
+- `is_full` (BOOLEAN, default false): Auto-set when above high_water_mark
+- `created_at` (TIMESTAMP): Creation timestamp
+- `last_health_check` (TIMESTAMP): Last health check timestamp
+
+**Important Indexes**:
+- `idx_storage_boxes_region` - Filter by account_region
+- `idx_storage_boxes_active` - Filter by is_active, is_full
+- `idx_storage_boxes_selection` - Box selection (is_active, is_full, is_readonly, priority, used_bytes)
+
+**Foreign Keys**: None (root table, referenced by `media_files`)
+
+**Related Tables**: `media_files`
+
+**Box Selection Algorithm**:
+The platform uses round-robin selection within a 5% tolerance band:
+
+1. Filter eligible boxes (active, not full, not readonly)
+2. Filter boxes below high_water_mark
+3. Find lowest usage percentage
+4. Select boxes within 5% of lowest
+5. Round-robin among selected boxes
+
+**Automatic Capacity Management**:
+- `used_bytes` is reconciled by storage_health task every 5 minutes
+- `is_full` auto-set when usage >= high_water_mark
+- `reserved_bytes` tracks in-flight uploads (released on sync completion)
 
 ---
 

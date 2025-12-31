@@ -2,6 +2,16 @@
 
 This guide covers setting up a Hetzner Storage Box for cost-effective media storage with a local SSD buffer for optimal performance.
 
+!!! tip "Need Multiple Storage Boxes?"
+    If you need to scale beyond a single storage box, see **[Multi-Storage Setup](./multi-storage-setup.md)** for:
+
+    - Adding multiple Hetzner Storage Boxes
+    - Automatic load balancing across boxes
+    - Region-based storage routing
+    - Zero-code expansion
+
+    Complete this single-box setup first, then expand using the multi-storage guide.
+
 ## Overview
 
 The OSINT Platform uses a **hybrid storage architecture**:
@@ -451,6 +461,7 @@ docker-compose logs media-sync | grep ERROR
 
 ## Related Documentation
 
+- [Multi-Storage Setup](./multi-storage-setup.md) - Adding multiple Hetzner Storage Boxes
 - [Backup & Restore](./backup-restore.md) - Full platform backup strategies
 - [Scaling](./scaling.md) - Scaling storage and processing
 - [Configuration](./configuration.md) - Environment variables reference

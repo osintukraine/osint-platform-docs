@@ -108,6 +108,7 @@ nav:
       - Stack Manager: operator-guide/stack-manager.md
       - Caddy Reverse Proxy: operator-guide/caddy.md
       - Hetzner Storage: operator-guide/hetzner-storage.md
+      - Multi-Storage Setup: operator-guide/multi-storage-setup.md
       - Telegram Setup: operator-guide/telegram-setup.md
       - Telegram Disaster Recovery: operator-guide/telegram-disaster-recovery.md
       - External LLM Providers: operator-guide/external-llm.md

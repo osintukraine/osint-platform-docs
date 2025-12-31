@@ -397,19 +397,204 @@ X-Cache-Status: hit|miss|populated
 | **Redis Cache** | 99%+ | After warm-up period |
 | **Combined** | 99.5%+ | Almost no DB queries |
 
-## Adding a New Storage Box
+## Multi-Box Architecture
 
-1. **Create database entry**:
-```sql
-INSERT INTO storage_boxes (id, hetzner_host, hetzner_user, hetzner_port, mount_path, capacity_gb, account_region)
-VALUES ('russia-2', 'uXXXXXX.your-storagebox.de', 'uXXXXXX', 23, '/mnt/storage/russia-2', 20000, 'russia');
+The platform supports multiple storage boxes with dynamic routing. Each box has:
+
+- **MinIO container**: S3 gateway (`minio-{box_id}`)
+- **SSHFS mount**: Hetzner connection (`/mnt/hetzner/{box_id}`)
+- **Caddy route**: Browser access (`/minio-{box_id}/*`)
+
+### Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    MULTI-BOX STORAGE FLOW                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  Processor                      BoxSelector                     MinioClientPool
+     │                               │                                  │
+     │  get_box_for_file(session,   │                                  │
+     │    file_size, region)         │                                  │
+     │─────────────────────────────>│                                  │
+     │                               │                                  │
+     │                    Filter eligible boxes                         │
+     │                    (active, not full, not readonly)             │
+     │                               │                                  │
+     │                    Find boxes within 5%                          │
+     │                    of lowest usage                              │
+     │                               │                                  │
+     │                    Round-robin selection                        │
+     │<─────────────────────────────│                                  │
+     │  StorageBox(id="russia-1")   │                                  │
+     │                               │                                  │
+     │  get_client(session, "russia-1")                                │
+     │────────────────────────────────────────────────────────────────>│
+     │                                                                  │
+     │                               Load endpoint from storage_boxes   │
+     │                               table, create/cache MinIO client  │
+     │<────────────────────────────────────────────────────────────────│
+     │  Minio(endpoint="minio-russia-1:9000")                          │
+     │                                                                  │
+     │  minio.fput_object("osint-media", s3_key, local_path)          │
+     │                                                                  │
 ```
 
-2. **Update Caddy configuration** to handle the new storage path
+### Key Components
 
-3. **Configure SSHFS mount** via systemd
+#### BoxSelector
 
-4. **Update storage box selection logic** (if using automatic routing)
+Located in `shared/python/storage/box_selector.py`:
+
+```python
+from storage import BoxSelector
+
+selector = BoxSelector()
+
+# Select box for a file (with capacity reservation)
+box = await selector.get_box_for_file(
+    session,
+    file_size_bytes=12345,
+    region="russia"  # Optional: filter by region
+)
+
+# Use box.id for media archival
+```
+
+**Selection Algorithm:**
+
+1. Query eligible boxes (active, not full, not readonly)
+2. Filter boxes below high water mark (default 90%)
+3. Find lowest usage percentage
+4. Select all boxes within 5% of lowest
+5. Round-robin among selected boxes
+
+#### MinioClientPool
+
+Located in `shared/python/storage/minio_pool.py`:
+
+```python
+from storage import MinioClientPool
+
+pool = MinioClientPool(
+    access_key="minioadmin",
+    secret_key="minioadmin",
+    bucket_name="osint-media"
+)
+
+# Get client for specific box (lazy-loaded, cached)
+client = await pool.get_client(session, "russia-1")
+client.fput_object("osint-media", s3_key, local_path)
+
+# Invalidate cache (after config change)
+pool.invalidate("russia-1")  # Specific box
+pool.invalidate()            # All boxes
+```
+
+**Features:**
+
+- Lazy client creation on first access
+- Endpoint caching from `storage_boxes` table
+- Automatic bucket creation if missing
+- Detects endpoint changes and recreates client
+
+### Storage Box Model
+
+Located in `shared/python/models/storage.py`:
+
+```python
+from models.storage import StorageBox
+
+# Key properties
+box.capacity_bytes      # Total capacity in bytes
+box.usage_percent       # Current usage percentage
+box.available_bytes     # Remaining space (excluding reserved)
+box.is_above_water_mark # Usage >= high_water_mark
+box.can_accept_writes   # Eligible for new uploads
+box.minio_url           # Full MinIO endpoint URL
+```
+
+### Adding a New Storage Box
+
+Use the admin script (recommended):
+
+```bash
+./scripts/storage-admin.sh add russia-2 \
+    uXXXXXX.your-storagebox.de \
+    uXXXXXX \
+    /mnt/hetzner/russia-2 \
+    10000 \
+    russia
+
+./scripts/storage-admin.sh regen
+```
+
+Or manually:
+
+```sql
+INSERT INTO storage_boxes (
+    id, hetzner_host, hetzner_user, hetzner_port, mount_path,
+    minio_endpoint, minio_port, capacity_gb, account_region
+)
+VALUES (
+    'russia-2', 'uXXXXXX.your-storagebox.de', 'uXXXXXX', 23,
+    '/mnt/hetzner/russia-2', 'minio-russia-2', 9000, 10000, 'russia'
+);
+```
+
+Then regenerate Caddy routes and Docker Compose:
+
+```bash
+python scripts/generate-caddy-storage-routes.py > infrastructure/caddy/storage-routes.snippet
+python scripts/generate-minio-services.py > docker-compose.storage.yml
+```
+
+### Configuration Generation
+
+Two scripts generate configuration from the `storage_boxes` table:
+
+**`generate-caddy-storage-routes.py`** - Creates Caddy reverse proxy routes:
+
+```caddyfile
+# Auto-generated for russia-1
+handle /minio-russia-1/* {
+    uri strip_prefix /minio-russia-1
+    reverse_proxy minio-russia-1:9000 {
+        header_up Host minio-russia-1:9000
+    }
+    header Cache-Control "public, max-age=31536000, immutable"
+}
+```
+
+**`generate-minio-services.py`** - Creates Docker Compose services:
+
+```yaml
+services:
+  minio-russia-1:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    volumes:
+      - /mnt/hetzner/russia-1:/data
+    profiles: ["multi-storage"]
+```
+
+### Storage Health Task
+
+Located in `services/enrichment/src/tasks/storage_health.py`:
+
+Runs every 5 minutes to:
+
+1. Verify SSHFS mounts are responsive
+2. Reconcile `used_bytes` with actual disk usage
+3. Set `is_full` when above high water mark
+4. Record `last_health_check` timestamp
+
+```python
+# Health check metrics exposed to Prometheus
+storage_boxes_checked_total
+storage_boxes_healthy_total
+storage_boxes_unhealthy_total
+```
 
 ## Extending the Architecture
 
@@ -446,6 +631,8 @@ async def warm_cache(db, redis, limit=10000):
 
 ## Related Documentation
 
-- [Operator Guide: Hetzner Storage](../operator-guide/hetzner-storage.md) - Setup and maintenance
+- [Operator Guide: Hetzner Storage](../operator-guide/hetzner-storage.md) - Single-box setup and maintenance
+- [Operator Guide: Multi-Storage Setup](../operator-guide/multi-storage-setup.md) - Adding multiple storage boxes
 - [Reference: API Endpoints](../reference/api-endpoints.md) - API endpoint reference (includes media endpoints)
+- [Media Sync Service](./services/media-sync.md) - Background sync worker details
 - [Architecture Overview](./architecture.md) - System architecture
