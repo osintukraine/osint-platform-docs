@@ -117,6 +117,7 @@ nav:
       - Performance Tuning: operator-guide/performance-tuning.md
       - Scaling: operator-guide/scaling.md
       - Upgrades: operator-guide/upgrades.md
+      - Media Repair Tool: operator-guide/media-repair.md
       - Troubleshooting: operator-guide/troubleshooting.md
       - Production Gotchas: operator-guide/production-gotchas.md
   - Developer Guide:
