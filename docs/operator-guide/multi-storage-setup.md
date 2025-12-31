@@ -173,6 +173,18 @@ This generates:
 - `infrastructure/caddy/storage-routes.snippet` - Caddy reverse proxy routes
 - `docker-compose.storage.yml` - MinIO container definitions
 
+!!! warning "Critical: Verify Docker Mount"
+    The generated `storage-routes.snippet` file **must** be mounted into the Caddy container.
+    Check your `docker-compose.yml` has this volume under the `caddy` service:
+
+    ```yaml
+    volumes:
+      - ./infrastructure/caddy/Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - ./infrastructure/caddy/storage-routes.snippet:/etc/caddy/storage-routes.snippet:ro  # ← Required!
+    ```
+
+    Without this mount, Caddy imports an empty/missing snippet and `/minio-{box-id}/*` routes won't work.
+
 ### Step 5: Setup SSHFS Mount
 
 Create mount point and systemd units:
@@ -390,6 +402,46 @@ docker-compose -f docker-compose.yml -f docker-compose.storage.yml ps minio-russ
 ```bash
 ls /mnt/hetzner/russia-2
 df -h /mnt/hetzner/russia-2
+```
+
+### Media returns 404 or blank images
+
+**Symptom**: `/minio-{box-id}/osint-media/...` returns 404, media thumbnails fail to load.
+
+**Cause**: Caddy snippet file not mounted or empty.
+
+**Fix**:
+
+1. Verify snippet exists and has content:
+```bash
+# On host
+cat infrastructure/caddy/storage-routes.snippet | head -20
+
+# Should show routes like:
+# handle /minio-default/* {
+#     uri strip_prefix /minio-default
+#     ...
+```
+
+2. If empty, regenerate:
+```bash
+source .env 2>/dev/null
+DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}" \
+    python3 scripts/generate-caddy-storage-routes.py > infrastructure/caddy/storage-routes.snippet
+```
+
+3. Verify mount in docker-compose.yml:
+```yaml
+caddy:
+  volumes:
+    - ./infrastructure/caddy/storage-routes.snippet:/etc/caddy/storage-routes.snippet:ro
+```
+
+4. Restart Caddy with mount:
+```bash
+docker-compose up -d caddy
+docker exec osint-caddy cat /etc/caddy/storage-routes.snippet  # Verify in container
+docker exec osint-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 ```
 
 ### MinIO connection refused
