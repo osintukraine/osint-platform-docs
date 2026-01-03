@@ -118,6 +118,7 @@ nav:
       - Scaling: operator-guide/scaling.md
       - Upgrades: operator-guide/upgrades.md
       - Media Repair Tool: operator-guide/media-repair.md
+      - Gazetteer Expansion: operator-guide/gazetteer-expansion.md
       - Troubleshooting: operator-guide/troubleshooting.md
       - Production Gotchas: operator-guide/production-gotchas.md
   - Developer Guide:
