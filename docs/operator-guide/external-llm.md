@@ -1,305 +1,116 @@
-# External LLM Endpoint Configuration
+# LLM Gateway and Providers
 
-This guide explains how to configure the platform to use an external Ollama-compatible LLM endpoint instead of the local Docker service.
+The platform's LLM work (message classification, fact-check, RSS validation, backlog re-classification) runs against one of three providers, chosen with `LLM_PROVIDER` in `.env`.
 
-## Overview
+| `LLM_PROVIDER` | Use it for |
+|---|---|
+| `openai` | An OpenAI-compatible **LLM gateway** in front of a GPU host (LiteLLM in front of vLLM is what production runs). Recommended when you have a GPU. |
+| `ollama` | Local or remote Ollama, CPU or small GPU. The default for fresh installs. |
+| `none` | No LLM. Messages are decided by the embedding filter and tier rules only. |
 
-By default, the platform runs Ollama locally in Docker. However, you can offload LLM processing to a dedicated external server for:
+Developer internals (client behaviour, lane rules, classification code paths) are in [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_GATEWAY.md). Variable defaults are in [`.env.example`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/.env.example).
 
-- **Better resource isolation**: LLM doesn't compete with database/API for CPU/RAM
-- **Larger models**: External server can have more RAM for bigger models (32b, 70b)
-- **Easier scaling**: Scale LLM infrastructure independently
-- **Cost optimization**: Use specialized LLM hosting (e.g., Contabo DeepSeek)
+## Gateway setup
 
-## Supported Providers
-
-Any Ollama-compatible endpoint works:
-
-| Provider | Description | Cost |
-|----------|-------------|------|
-| **Self-hosted VM** | Run Ollama on your own VPS | VPS cost only |
-| **Contabo DeepSeek** | 1-click DeepSeek-R1 image | €45-120/mo |
-| **Ollama Cloud** | Official Ollama hosting | Varies |
-
-## Configuration
-
-### Environment Variables
-
-Add these to your `.env` file:
+Add to `.env` (values come from whoever runs your gateway; never commit them):
 
 ```bash
-# Required: External endpoint URL
-OLLAMA_BASE_URL=https://your-llm-server:11434
-
-# Optional: API key for authenticated endpoints
-OLLAMA_API_KEY=your-api-key-here
-
-# Required: Enable external mode (adds retry logic)
-OLLAMA_EXTERNAL_MODE=true
-
-# Optional: Retry settings for network resilience
-OLLAMA_MAX_RETRIES=3        # Max retries on failure (default: 3)
-OLLAMA_RETRY_DELAY=1.0      # Base delay in seconds (default: 1.0)
-
-# Recommended: Increase timeout for network latency
-OLLAMA_TIMEOUT=60           # Seconds (default: 30)
-
-# Optional: Use a different model on external server
-OLLAMA_MODEL=deepseek-r1:14b
+LLM_PROVIDER=openai
+LLM_ENABLED=true
+LLM_GATEWAY_URL=<base URL of the gateway>
+LLM_GATEWAY_API_KEY=<key for the realtime lane>
+LLM_GATEWAY_MODEL=osint-realtime       # alias served by the gateway
+LLM_GATEWAY_TIMEOUT=120                # seconds per request
 ```
 
-### Local vs External Mode
-
-| Setting | Local (Default) | External |
-|---------|-----------------|----------|
-| `OLLAMA_BASE_URL` | `http://ollama:11434` | `https://your-server:11434` |
-| `OLLAMA_EXTERNAL_MODE` | `false` | `true` |
-| Retry on failure | No (fail fast) | Yes (exponential backoff) |
-| Authentication | None | Optional API key |
-
-## Setup Guide
-
-### Option 1: Self-Hosted VM
-
-1. **Provision a VM** with adequate resources:
-   - 8+ cores, 24+ GB RAM for 14b models
-   - 16+ cores, 48+ GB RAM for 32b models
-
-2. **Install Ollama**:
-   ```bash
-   curl -fsSL https://ollama.com/install.sh | sh
-   ```
-
-3. **Pull your model**:
-   ```bash
-   ollama pull deepseek-r1:14b
-   # or
-   ollama pull qwen2.5:3b
-   ```
-
-4. **Configure Ollama for external access**:
-   ```bash
-   # /etc/systemd/system/ollama.service.d/override.conf
-   [Service]
-   Environment="OLLAMA_HOST=0.0.0.0"
-   ```
-
-5. **Secure with HTTPS** (recommended):
-   - Use Caddy, nginx, or cloud load balancer
-   - Add API key authentication if exposed to internet
-
-6. **Update platform `.env`**:
-   ```bash
-   OLLAMA_BASE_URL=https://your-vm-ip:11434
-   OLLAMA_EXTERNAL_MODE=true
-   OLLAMA_TIMEOUT=60
-   ```
-
-### Option 2: Contabo Hosted DeepSeek
-
-1. **Order a VDS** from [Contabo](https://contabo.com/en/hosted-deepseek-ai-enterprise-cloud/):
-   - VDS M (€45/mo): DeepSeek-R1:14b
-   - VDS L (€64/mo): Larger models
-
-2. **Select the 1-click DeepSeek image** during setup
-
-3. **Get your server IP** after provisioning
-
-4. **Update platform `.env`**:
-   ```bash
-   OLLAMA_BASE_URL=http://your-contabo-ip:11434
-   OLLAMA_EXTERNAL_MODE=true
-   OLLAMA_MODEL=deepseek-r1:14b
-   OLLAMA_TIMEOUT=60
-   ```
-
-5. **Restart processor**:
-   ```bash
-   docker-compose restart processor-worker
-   ```
-
-## Health Check
-
-Verify external LLM connectivity:
+If the gateway's hostname does not resolve inside containers (for example a private-network name), pin it:
 
 ```bash
-# API endpoint
-curl http://localhost:8000/api/system/health/llm
+LLM_GATEWAY_HOST=<gateway hostname>
+LLM_GATEWAY_IP=<its address>
 ```
 
-Expected response:
-```json
-{
-  "endpoint": "https://your-llm-server:11434",
-  "external_mode": true,
-  "configured_model": "deepseek-r1:14b",
-  "auth_configured": false,
-  "status": "healthy",
-  "models_available": ["deepseek-r1:14b"],
-  "configured_model_available": true
-}
-```
+Compose turns these into `extra_hosts` for every service that calls the gateway. Keep the real URL, hostname and address in `.env` only.
 
-### Status Values
-
-| Status | Meaning | Action |
-|--------|---------|--------|
-| `healthy` | Connected, model available | None |
-| `auth_failed` | 401 response | Check `OLLAMA_API_KEY` |
-| `unreachable` | Connection failed | Check URL, firewall |
-| `timeout` | Request timed out | Increase `OLLAMA_TIMEOUT` |
-| `degraded` | Connected but unexpected response | Check server logs |
-
-## Retry Behavior
-
-When `OLLAMA_EXTERNAL_MODE=true`, the platform handles transient failures:
-
-1. **First attempt** fails → wait 1s
-2. **Second attempt** fails → wait 2s
-3. **Third attempt** fails → wait 4s
-4. **All retries exhausted** → fall back to rules (if `LLM_FALLBACK_TO_RULES=true`)
-
-Configure with:
-```bash
-OLLAMA_MAX_RETRIES=3      # Number of retries
-OLLAMA_RETRY_DELAY=1.0    # Base delay (exponential backoff)
-```
-
-## Model Recommendations
-
-### For OSINT Classification
-
-| Model | Size | RAM | Use Case |
-|-------|------|-----|----------|
-| `qwen2.5:3b` | 2 GB | 6 GB | Best for RU/UK content |
-| `deepseek-r1:7b` | 4.7 GB | 10 GB | Good reasoning |
-| `deepseek-r1:14b` | 9 GB | 20 GB | High quality |
-| `deepseek-r1:32b` | 20 GB | 40 GB | Best quality |
-
-### DeepSeek vs Qwen
-
-| Aspect | DeepSeek-R1 | Qwen 2.5 |
-|--------|-------------|----------|
-| Reasoning | Excellent (chain-of-thought) | Good |
-| RU/UK languages | Good | Excellent |
-| Speed | Slower (reasoning overhead) | Faster |
-| Context | 128K tokens | 32K tokens |
-
-**Recommendation**: Start with `qwen2.5:3b` for best RU/UK OSINT classification. Switch to DeepSeek for complex reasoning tasks.
-
-## Security Considerations
-
-### Network Security
-
-1. **Use HTTPS** for external endpoints
-2. **Firewall rules**: Only allow platform IP to access LLM port
-3. **VPN/Private network**: Best for production
-
-### Authentication
-
-If your endpoint requires auth:
-```bash
-OLLAMA_API_KEY=your-secret-key
-```
-
-The platform sends this as:
-```
-Authorization: Bearer your-secret-key
-```
-
-### Never Expose Ollama Directly
-
-Ollama doesn't have built-in authentication. Always:
-- Use a reverse proxy (Caddy, nginx) with auth
-- Or restrict access via firewall/VPN
-
-## Monitoring
-
-### Prometheus Metrics
-
-When using external LLM, monitor:
-
-```promql
-# Request latency (will be higher for external)
-histogram_quantile(0.95, rate(llm_request_duration_seconds_bucket[5m]))
-
-# Retry rate (should be low)
-rate(llm_external_retry_total[5m])
-
-# Error rate
-rate(llm_external_errors_total[5m])
-```
-
-### Grafana Dashboard
-
-Add panel for external LLM latency:
-- Warning: p95 > 5s
-- Critical: p95 > 15s
-
-## Troubleshooting
-
-### Connection Refused
-
-```
-status: unreachable
-error: Connection refused
-```
-
-**Fix**: Check that Ollama is listening on `0.0.0.0`:
-```bash
-# On LLM server
-curl http://localhost:11434/api/tags  # Should work
-curl http://YOUR_IP:11434/api/tags    # Should also work
-```
-
-### Authentication Failed
-
-```
-status: auth_failed
-error: Authentication failed - check OLLAMA_API_KEY
-```
-
-**Fix**: Verify API key matches server configuration.
-
-### Timeout
-
-```
-status: timeout
-error: Request timed out after 5 seconds
-```
-
-**Fix**: Increase timeout:
-```bash
-OLLAMA_TIMEOUT=120
-```
-
-### Model Not Found
-
-```
-configured_model_available: false
-```
-
-**Fix**: Pull the model on the external server:
-```bash
-ssh your-llm-server
-ollama pull qwen2.5:3b
-```
-
-## Rollback to Local
-
-If external LLM causes issues:
+Then add the `llm-gateway` profile:
 
 ```bash
-# Comment out external settings
-# OLLAMA_BASE_URL=...
-# OLLAMA_EXTERNAL_MODE=true
+# .env
+COMPOSE_PROFILES=enrichment-lite,monitoring,auth,llm-gateway
 
-# Restart
-docker-compose restart processor-worker
+docker compose up -d
 ```
 
-The platform will use local `http://ollama:11434` by default.
+The `llm-gateway` profile starts `backlog-worker`, `enrichment-fact-check` and `enrichment-rss-validation`. With it you do not need the local `ollama-batch` service.
 
----
+## Lanes
 
-*See also: [Configuration](configuration.md) | [Troubleshooting](troubleshooting.md) | [Performance Tuning](performance-tuning.md)*
+The gateway caps parallelism per API key and schedules by model alias, so each kind of work gets its own key and alias (a "lane"):
+
+| Lane | Used by | Alias variable | Key variable |
+|---|---|---|---|
+| realtime | `processor-worker` (live classification) | `LLM_GATEWAY_MODEL` (`osint-realtime`) | `LLM_GATEWAY_API_KEY` |
+| audit | `enrichment-fact-check` | `FACT_CHECK_MODEL` (`osint-audit`) | `LLM_GATEWAY_AUDIT_API_KEY` |
+| batch | `backlog-worker`, `enrichment-rss-validation` | `LLM_GATEWAY_BATCH_MODEL`, `RSS_VALIDATION_MODEL` (`osint-batch`) | `LLM_GATEWAY_BATCH_API_KEY` |
+
+The audit and batch keys fall back to `LLM_GATEWAY_API_KEY` when unset. The aliases above are the names production uses; they must exist on your gateway.
+
+Fact-check uses a reasoning ("thinking") alias, so keep `FACT_CHECK_NUM_PREDICT` at 4096 or higher: reasoning tokens count against the limit.
+
+## How the platform reacts to gateway errors
+
+| Response | Meaning | What the platform does |
+|---|---|---|
+| 429 | The lane is at its parallel or rate cap | Retries with backoff (1, 2, 4 s) |
+| 502, 503, 504, connection error | Backend reloading or down | Retries, then falls back (below) |
+| 401 | Key blocked | **Pauses that lane for 5 minutes**, sends nothing, then probes once |
+| 403 | Alias not allowed for this key | Same pause as 401 |
+
+**Fallback.** When the LLM is unavailable, the processor keeps archiving: the embedding filter's verdict replaces the classifier's, and topic and importance stay `pending` for the [backlog worker](backlog-reclassification.md) to fill in later. The backlog worker writes nothing while the LLM is unavailable.
+
+To save GPU time, the processor also skips the LLM for obvious spam: when a message's spam similarity is at or above the admin setting `llm_prefilter_spam_similarity` (0.80 in production), the embedding filter decides alone. See [Embedding models](model-provisioning.md).
+
+## Prompt versions
+
+The classifier prompt lives in the `llm_prompts` table. Production runs **v12**, which asks the model for structured JSON output. Never edit a prompt in place: add a version, then flip `is_active`.
+
+Activate v12 (migration 037 inserts it inactive) or roll back to v11:
+
+```sql
+-- activate v12
+UPDATE llm_prompts SET is_active = (version = 12)
+ WHERE task = 'message_classification' AND prompt_type = 'system';
+
+-- roll back to v11
+UPDATE llm_prompts SET is_active = (version = 11)
+ WHERE task = 'message_classification' AND prompt_type = 'system';
+```
+
+Run it with `docker compose exec postgres psql -U osint_user -d osint_platform`. Prompt history and design notes: [LLM_PROMPTS.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_PROMPTS.md).
+
+!!! warning
+    v12 is written for a large model behind the gateway. Do not activate it with a small Ollama model.
+
+## Using Ollama instead (no GPU)
+
+```bash
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://ollama:11434     # or a remote Ollama
+OLLAMA_MODEL=<model>
+```
+
+The local `ollama` service also serves **search-query embeddings** (`all-minilm`), so it stays in the stack even with `LLM_PROVIDER=openai`. `ollama-batch` (profiles `enrichment-standard`, `enrichment-full`) is the CPU-era batch endpoint and is not used with the gateway.
+
+For a remote Ollama set `OLLAMA_BASE_URL`, `OLLAMA_API_KEY` and `OLLAMA_EXTERNAL_MODE=true` (adds retries). Fact-check has its own `FACT_CHECK_OLLAMA_HOST`, `FACT_CHECK_OLLAMA_API_KEY` and `FACT_CHECK_OLLAMA_EXTERNAL_MODE`. For model sizing by hardware, run `./scripts/bootstrap-hardware.sh show`.
+
+## Checking it works
+
+```bash
+# Provider and lane settings (secrets filtered out)
+grep -E '^(LLM_PROVIDER|LLM_GATEWAY_(URL|MODEL|BATCH_MODEL)|FACT_CHECK_MODEL|RSS_VALIDATION_MODEL)=' .env
+
+# Gateway errors and lane pauses
+docker compose logs --since 15m processor-worker backlog-worker enrichment-fact-check | grep -iE 'paused|401|403|429|timeout'
+```
+
+If a lane is paused or the gateway is unreachable, see [Troubleshooting](troubleshooting.md#llm-gateway-problems).
