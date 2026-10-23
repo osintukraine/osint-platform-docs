@@ -44,7 +44,8 @@ Plan for the following storage allocation:
 | Docker images | ~20GB |
 | PostgreSQL database | 500MB per 100K messages |
 | MinIO media storage | 12-20TB over 3 years (with spam filter) |
-| Ollama models | 10-15GB (6 models) |
+| Embedding models (`./data/models`) | under 1GB |
+| Ollama models (if `LLM_PROVIDER=ollama`) | 10-15GB |
 | Logs | 1-2GB/week |
 | Metrics | 5GB/month (30-day retention) |
 | OS and system | 20-30GB |
@@ -256,36 +257,29 @@ python3 scripts/telegram_auth.py --account ukraine
 python3 scripts/telegram_auth.py --status
 ```
 
-### Step 6: Initialize Ollama Models
+### Step 6: Provision Models
 
-Download required LLM models before starting services (prevents delays during first message processing).
+Embedding models are fetched once on the host and mounted read-only; services never download them at runtime (`HF_HUB_OFFLINE=1`). The spam filter will not start without them.
 
 ```bash
-# Create Ollama data directory
-mkdir -p data/ollama
-
-# Download models (takes 10-20 minutes, ~10GB total)
-docker run --rm \
-  -v ./data/ollama:/root/.ollama \
-  ollama/ollama pull all-minilm
-
-docker run --rm \
-  -v ./data/ollama:/root/.ollama \
-  ollama/ollama pull qwen2.5:3b
-
-docker run --rm \
-  -v ./data/ollama:/root/.ollama \
-  ollama/ollama pull llama3.2:3b
-
-docker run --rm \
-  -v ./data/ollama:/root/.ollama \
-  ollama/ollama pull granite3-dense:2b
-
-# Verify models
-docker run --rm \
-  -v ./data/ollama:/root/.ollama \
-  ollama/ollama list
+./scripts/fetch-models.sh       # fills ./data/models from the pinned list in infrastructure/models/models.txt
+ls data/models
 ```
+
+See [Embedding Models](model-provisioning.md) for details.
+
+The local Ollama service is still needed for search-query embeddings (`all-minilm`):
+
+```bash
+mkdir -p data/ollama
+docker run --rm -v ./data/ollama:/root/.ollama ollama/ollama pull all-minilm
+```
+
+Choose your LLM provider in `.env` (`LLM_PROVIDER`):
+
+- `openai`: an OpenAI-compatible GPU gateway. Nothing to pull; see [LLM Gateway](external-llm.md).
+- `ollama`: also pull the classifier model, for example `docker run --rm -v ./data/ollama:/root/.ollama ollama/ollama pull <model>` (`./scripts/bootstrap-hardware.sh show` suggests a size for your hardware).
+- `none`: embedding filter and tier rules only.
 
 ### Step 7: Start Infrastructure Services
 
@@ -293,10 +287,10 @@ Start core infrastructure first to ensure databases are ready.
 
 ```bash
 # Start PostgreSQL, Redis, MinIO
-docker-compose up -d postgres redis minio minio-init
+docker compose up -d postgres redis minio minio-init
 
 # Wait for health checks (30-60 seconds)
-watch docker-compose ps
+watch docker compose ps
 # Wait until postgres, redis, minio show "healthy"
 # Press Ctrl+C when all are healthy
 ```
@@ -305,11 +299,11 @@ watch docker-compose ps
 
 ```bash
 # Check PostgreSQL
-docker-compose exec postgres psql -U osint_user -d osint_platform -c "\dt"
+docker compose exec postgres psql -U osint_user -d osint_platform -c "\dt"
 # Should show list of tables (messages, channels, etc.)
 
 # Check Redis
-docker-compose exec redis redis-cli ping
+docker compose exec redis redis-cli ping
 # Should return: PONG
 
 # Check MinIO
@@ -323,10 +317,10 @@ Start all application services (listener, processor, API, frontend).
 
 ```bash
 # Start all services
-docker-compose up -d
+docker compose up -d
 
 # Monitor startup (wait 2-3 minutes)
-docker-compose logs -f
+docker compose logs -f
 # Press Ctrl+C when you see "Application startup complete" from API service
 ```
 
@@ -334,37 +328,31 @@ docker-compose logs -f
 
 ```bash
 # Essential services only (no monitoring)
-docker-compose up -d
+docker compose up -d
 
 # With monitoring (Prometheus, Grafana)
-docker-compose --profile monitoring up -d
+docker compose --profile monitoring up -d
 
 # With enrichment workers
-docker-compose --profile enrichment up -d
+docker compose --profile enrichment up -d
 
 # With OpenSanctions entity matching
-docker-compose --profile opensanctions up -d
+docker compose --profile opensanctions up -d
 
 # All profiles (full production stack)
-docker-compose --profile monitoring --profile enrichment --profile opensanctions up -d
+docker compose --profile monitoring --profile enrichment-standard --profile opensanctions up -d
 ```
 
-### Step 9: Initialize Ollama Models in Containers
+### Step 9: Check the LLM Provider
 
-The ollama-init container automatically pulls models defined in database configuration.
+With `LLM_PROVIDER=ollama`, the `ollama-init` container pulls the models configured in the database:
 
 ```bash
-# Check ollama-init logs
-docker-compose logs ollama-init
-
-# Should show:
-# "Successfully pulled model: qwen2.5:3b"
-# "Successfully pulled model: all-minilm"
-# etc.
-
-# Verify models are loaded in Ollama
-docker-compose exec ollama ollama list
+docker compose logs ollama-init
+docker compose exec ollama ollama list
 ```
+
+With `LLM_PROVIDER=openai`, add the `llm-gateway` profile (`COMPOSE_PROFILES=...,llm-gateway`) and check the processor log for gateway errors (401, 403, timeouts); see [LLM Gateway](external-llm.md) and [Troubleshooting](troubleshooting.md#llm-gateway-problems).
 
 ## Post-Installation Verification
 
@@ -372,7 +360,7 @@ docker-compose exec ollama ollama list
 
 ```bash
 # All services should show "Up" and "healthy"
-docker-compose ps
+docker compose ps
 
 # Expected output (example):
 # NAME                  STATUS
@@ -389,7 +377,7 @@ docker-compose ps
 
 ```bash
 # Connect to database
-docker-compose exec postgres psql -U osint_user -d osint_platform
+docker compose exec postgres psql -U osint_user -d osint_platform
 
 # Check schema
 \dt
@@ -431,7 +419,7 @@ docker-compose exec postgres psql -U osint_user -d osint_platform
 
 ```bash
 # Check listener logs
-docker-compose logs listener | tail -50
+docker compose logs listener | tail -50
 
 # Should show:
 # "Successfully connected to Telegram"
@@ -443,11 +431,11 @@ docker-compose logs listener | tail -50
 
 ```bash
 # Check Redis queue
-docker-compose exec redis redis-cli XLEN telegram_messages
+docker compose exec redis redis-cli XLEN telegram_messages
 # Should return: 0 (no messages yet)
 
 # Check processor logs
-docker-compose logs processor-worker | tail -50
+docker compose logs processor-worker | tail -50
 
 # Should show:
 # "Waiting for messages..."
@@ -462,7 +450,7 @@ docker-compose logs processor-worker | tail -50
 
 ```bash
 # Check for default storage box
-docker-compose exec postgres psql -U osint_user -d osint_platform -c \
+docker compose exec postgres psql -U osint_user -d osint_platform -c \
   "SELECT id, name, is_default FROM storage_boxes WHERE is_default = true;"
 ```
 
@@ -475,7 +463,7 @@ If no rows returned, migration 017 may not have run. Fix with:
 ./scripts/migrate.sh
 
 # Or manually add default storage box
-docker-compose exec postgres psql -U osint_user -d osint_platform -c \
+docker compose exec postgres psql -U osint_user -d osint_platform -c \
   "INSERT INTO storage_boxes (name, box_type, is_default, is_active, created_at)
    VALUES ('local', 'local', true, true, NOW())
    ON CONFLICT DO NOTHING;"
@@ -502,10 +490,10 @@ Channels are managed through Telegram folders (not through web UI).
 
 ```bash
 # Check listener logs
-docker-compose logs listener | grep "Discovered channel"
+docker compose logs listener | grep "Discovered channel"
 
 # Check database
-docker-compose exec postgres psql -U osint_user -d osint_platform \
+docker compose exec postgres psql -U osint_user -d osint_platform \
   -c "SELECT id, name, username, folder_name FROM channels;"
 ```
 
@@ -522,10 +510,10 @@ Once a channel posts a message:
 
 ```bash
 # Watch all services in real-time
-docker-compose logs -f listener processor-worker api
+docker compose logs -f listener processor-worker api
 
 # Check message count
-docker-compose exec postgres psql -U osint_user -d osint_platform \
+docker compose exec postgres psql -U osint_user -d osint_platform \
   -c "SELECT COUNT(*) FROM messages;"
 ```
 
@@ -554,7 +542,7 @@ curl -X POST http://localhost:9090/-/reload
 **Check logs:**
 
 ```bash
-docker-compose logs service_name
+docker compose logs service_name
 
 # Common issues:
 # - Missing environment variables
@@ -567,11 +555,11 @@ docker-compose logs service_name
 
 ```bash
 # Restart specific service
-docker-compose restart service_name
+docker compose restart service_name
 
 # Full restart
-docker-compose down
-docker-compose up -d
+docker compose down
+docker compose up -d
 
 # Check Docker daemon
 sudo systemctl status docker
@@ -582,15 +570,15 @@ sudo systemctl restart docker
 
 ```bash
 # Check PostgreSQL logs
-docker-compose logs postgres
+docker compose logs postgres
 
 # Reset database (WARNING: deletes all data)
-docker-compose down
+docker compose down
 docker volume rm osint-intelligence-platform_postgres_data
-docker-compose up -d postgres
+docker compose up -d postgres
 
 # Wait for init.sql to run
-docker-compose logs postgres | grep "database system is ready"
+docker compose logs postgres | grep "database system is ready"
 ```
 
 ### Telegram Session Issues
@@ -603,20 +591,20 @@ python3 scripts/telegram_auth.py
 ls -lh telegram_sessions/
 
 # Check listener can connect
-docker-compose logs listener | grep -i telegram
+docker compose logs listener | grep -i telegram
 ```
 
 ### Ollama Model Download Failures
 
 ```bash
 # Check Ollama logs
-docker-compose logs ollama ollama-init
+docker compose logs ollama ollama-init
 
 # Manually download model
-docker-compose exec ollama ollama pull qwen2.5:3b
+docker compose exec ollama ollama pull <your OLLAMA_MODEL>
 
 # Check available models
-docker-compose exec ollama ollama list
+docker compose exec ollama ollama list
 ```
 
 ### Out of Memory

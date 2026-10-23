@@ -228,9 +228,7 @@ REDIS_URL=redis://redis:6379/0
 REDIS_PASSWORD=generate_strong_password_here
 
 # === API Configuration ===
-API_HOST=0.0.0.0
 API_PORT=8000
-API_WORKERS=4
 NEXT_PUBLIC_API_URL=https://your-domain.com
 
 # === MinIO (Media Storage) ===
@@ -240,10 +238,11 @@ MINIO_BUCKET=telegram-media
 MINIO_ENDPOINT=minio:9000
 MINIO_SECURE=false
 
-# === Enrichment Services ===
+# === LLM and Models ===
+# Pick one provider (see "LLM Gateway and Providers" in the Operator Guide):
+LLM_PROVIDER=ollama            # or openai (GPU gateway: set LLM_GATEWAY_URL and keys) or none
 OLLAMA_BASE_URL=http://ollama:11434
-EMBEDDING_MODEL=all-MiniLM-L6-v2
-IMPORTANCE_MODEL=qwen2.5:3b
+EMBEDDING_SPAM_MODEL=/models/paraphrase-multilingual-MiniLM-L12-v2   # fetched in Step 3b
 
 # === Notifications ===
 NTFY_ENABLED=true
@@ -256,7 +255,7 @@ SENTRY_DSN=
 # === Security ===
 SECRET_KEY=generate_another_strong_random_key_here
 ALLOWED_HOSTS=your-domain.com,api.your-domain.com
-CORS_ORIGINS=https://your-domain.com
+API_CORS_ORIGINS=https://your-domain.com
 
 # === Production Flags ===
 DEBUG=false
@@ -298,6 +297,20 @@ Replace the placeholder values:
    - Your domain name
    - Generated passwords from above
    - Your server IP if not using a domain
+
+---
+
+## Step 3b: Fetch Embedding Models
+
+Embedding models are provisioned on the host and mounted read-only at `/models`; services never download them. Run this once, and again after upgrades that change `infrastructure/models/models.txt`:
+
+```bash
+cd /opt/osint
+./scripts/fetch-models.sh
+ls data/models
+```
+
+See [Embedding Models](../operator-guide/model-provisioning.md). If you use an LLM gateway instead of Ollama, read [LLM Gateway and Providers](../operator-guide/external-llm.md) now and add `llm-gateway` to `COMPOSE_PROFILES`.
 
 ---
 
@@ -684,21 +697,25 @@ Before considering your deployment complete, verify:
 
 ## Updating to Latest Version
 
-To update the platform after initial deployment:
+Use the deploy script. It pulls, applies pending database migrations, restarts services and runs a health check:
 
 ```bash
 cd /opt/osint
 
-# Pull latest changes
-git pull origin master
-
-# Restart services
-docker compose down
-docker compose up -d
-
-# Check logs
-docker compose logs -f api | head -20
+./scripts/deploy.sh --dry-run    # preview
+./scripts/deploy.sh              # pull, migrate, restart
+./scripts/deploy.sh --build      # same, and rebuild images first
+./scripts/deploy.sh --quick      # pull and restart, skip migrations
 ```
+
+Two steps are not part of the script:
+
+```bash
+./scripts/fetch-models.sh        # when infrastructure/models/models.txt changed
+./scripts/migrate.sh --status    # check migration state at any time
+```
+
+`./scripts/migrate.sh --dry-run` previews pending migrations and `./scripts/migrate.sh` applies them. See [Upgrades](../operator-guide/upgrades.md).
 
 ---
 

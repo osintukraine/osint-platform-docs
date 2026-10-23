@@ -53,9 +53,9 @@ This folder-based approach takes **30 seconds** instead of 10 minutes of SSH/con
 !!! note "12-Character Folder Limit"
     Telegram limits folder names to 12 characters. Use `-UA` and `-RU` suffixes, not full country names.
 
-### Self-Hosted AI (Zero LLM Costs)
+### Self-Hosted AI
 
-Six local LLM models (Qwen, Llama, Gemma, Phi, Granite) run on your hardware via Ollama. **No API costs, no rate limits, no privacy concerns.** Switch models at runtime via database configuration - no code deployments needed.
+The platform talks to an LLM you run yourself: a local Ollama model on modest hardware, or an OpenAI-compatible gateway in front of your own GPU host. No data goes to third-party AI services. See [LLM Gateway and Providers](../operator-guide/external-llm.md).
 
 ### Cost-Effective Architecture
 
@@ -157,7 +157,7 @@ Telegram → Listener → Redis → Processor → PostgreSQL/MinIO
 
 The platform is organized into containerized service layers:
 
-- **Core Infrastructure**: PostgreSQL 16 + pgvector, Redis 7, MinIO, Ollama
+- **Core Infrastructure**: PostgreSQL 16 + pgvector, Redis 7, MinIO, Ollama (search embeddings)
 - **Application Layer**: Listener, Processor, Enrichment workers, API, Frontend
 - **Monitoring Stack**: Prometheus, Grafana, AlertManager, ntfy, Exporters
 - **Authentication** (optional): Ory Kratos, Ory Oathkeeper
@@ -213,7 +213,7 @@ Use the spam filter and content-addressed storage to significantly reduce storag
 - **PostgreSQL 16**: pgvector extension for semantic search
 - **Redis 7**: Streams for message queuing
 - **MinIO**: S3-compatible object storage
-- **Ollama**: Local LLM inference (Qwen, Llama, Gemma, Phi, Granite)
+- **LLM**: self-hosted gateway (vLLM behind LiteLLM) or local Ollama; local Ollama also serves search embeddings
 
 ### Frontend
 

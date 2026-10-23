@@ -76,8 +76,8 @@ An **entity** is a named thing extracted from messages: person, organization, lo
 - **Low**: Background information (propaganda, opinions, routine updates)
 
 **Classification Methods**:
-1. **LLM Classification** (primary): 6 models available (Qwen, Llama, Gemma, Phi, Granite)
-2. **Rule-Based** (fallback): Keyword patterns, channel credibility, metadata signals
+1. **LLM Classification** (primary): a large model behind an LLM gateway in production, or a local Ollama model; see [LLM Gateway](../operator-guide/external-llm.md)
+2. **Embedding filter and tier rules** (fallback): used when the LLM is unavailable; topic and importance stay `pending` until the backlog worker fills them in
 
 **Usage**:
 - Filter searches: `GET /api/messages?importance_level=high`
@@ -86,18 +86,15 @@ An **entity** is a named thing extracted from messages: person, organization, lo
 
 ### Spam Filtering
 
-**Spam filtering** removes promotional content, scams, and forwarding chains before archiving. Saves 80-90% on storage and translation costs.
+**Spam filtering** keeps promotional content, scams and filler out of the archive. It is layered:
 
-**Spam Categories**:
-- **Promotional**: Crypto, forex, betting advertisements
-- **Forwarding**: Chain messages ("forward to 10 friends")
-- **Formatting**: Excessive emoji, caps lock abuse
-- **URL spam**: Shortened URLs, suspicious domains
-- **Gambling**: Casino, sports betting
+1. **Embedding filter** (fast, CPU): a multilingual sentence-embedding model compares each message with known spam and off-topic examples. Very obvious spam is decided here without calling the LLM.
+2. **LLM classification**: decides spam, Ukraine relevance, topic, importance and whether to archive. A war report is never spam just because it carries an ad or a donation footer.
+3. **Re-checks**: the backlog worker re-judges messages flagged as spam, and the fact-check service audits a sample of LLM verdicts.
 
-**Accuracy**: >95% on production data (battle-tested since 2022)
+**Spam types**: crypto, gambling, scam, adult, advertising (including fundraising posts), filler.
 
-**Configuration**: Database-managed patterns in `spam_patterns` table
+**Configuration**: examples live in the database; thresholds are admin settings. See [Embedding Models](../operator-guide/model-provisioning.md) and [Backlog Re-classification](../operator-guide/backlog-reclassification.md).
 
 ### Archive Modes
 
@@ -302,7 +299,7 @@ graph LR
 - `importance_rules`: Importance classification modifiers
 - `entity_patterns`: Entity extraction patterns
 - `message_routing_rules`: Channel archive mode configuration
-- `model_configuration`: LLM model selection and priority
+- `llm_prompts`: classifier prompt versions (one active at a time)
 
 **Example - Add Spam Pattern**:
 ```sql
@@ -310,33 +307,19 @@ INSERT INTO spam_patterns (category, pattern, pattern_type, weight)
 VALUES ('promotional', '🎰', 'emoji', 2);
 ```
 
-**Example - Switch LLM Model**:
+**Example - see the active classifier prompt**:
 ```sql
-UPDATE model_configuration
-SET priority = 1
-WHERE task = 'importance_classification' AND model_id = 'phi3.5:3.8b';
+SELECT version, name FROM llm_prompts
+WHERE task = 'message_classification' AND prompt_type = 'system' AND is_active;
 ```
 
-### Multi-Model AI
+Runtime knobs (thresholds, switches) are admin settings; see [Configuration](../operator-guide/configuration.md#three-tier-configuration).
 
-**6 LLM models** available for importance classification:
+### AI Models
 
-| Model | Quality | Speed | Context | Use Case |
-|-------|---------|-------|---------|----------|
-| qwen2.5:3b | 87% | 750ms | 32k | Default (best RU/UK support) |
-| phi3.5:3.8b | 90% | 1200ms | 4k | Best quality |
-| llama3.2:3b | 85% | 800ms | 4k | General purpose |
-| granite3.0:2b | 78% | 500ms | 4k | High-throughput |
-| gemma2:2b | 75% | 400ms | 8k | Fastest |
+Classification uses an LLM through one of three providers (`openai` gateway, `ollama`, or none). Production runs a large model on a GPU gateway with a structured-output prompt (v12). Embedding models for the spam filter are provisioned on the host. Details: [LLM Gateway and Providers](../operator-guide/external-llm.md).
 
-**Switch at runtime** via database (no code deploy):
-```sql
-SELECT * FROM model_configuration
-WHERE task = 'importance_classification'
-ORDER BY priority;
-```
-
-**Fallback Strategy**: If LLM fails, fall back to rule-based classification
+**Fallback Strategy**: if the LLM is unavailable, the embedding filter decides and the message is classified later.
 
 ## Next Steps
 

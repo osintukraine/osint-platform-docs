@@ -6,7 +6,10 @@ Optimize OSINT Intelligence Platform performance for your hardware and workload.
 
 ## Ollama Optimization
 
-Ollama (self-hosted LLM) is typically the most impactful component to tune.
+!!! note "GPU gateway"
+    These sections apply to the local-Ollama (CPU) setup, `LLM_PROVIDER=ollama`. With an LLM gateway (`LLM_PROVIDER=openai`), classification runs on the GPU host: tune lane keys, aliases and concurrency instead (`backlog_concurrency`, `FACT_CHECK_*`), see [LLM Gateway](external-llm.md). The embedding spam filter and the pre-filter threshold reduce LLM load on either setup, see [Embedding Models](model-provisioning.md).
+
+Ollama (self-hosted LLM) is typically the most impactful component to tune on CPU hardware.
 
 ### CPU Allocation
 
@@ -336,7 +339,7 @@ Before deploying to production:
 
 - [ ] Set `DEVELOPMENT_MODE=false`
 - [ ] Allocate 4-6 CPU cores to Ollama
-- [ ] Set `OLLAMA_MODEL=qwen2.5:3b` (production model)
+- [ ] Choose a model that fits your hardware (`./scripts/bootstrap-hardware.sh show`) when using Ollama
 - [ ] Configure `POSTGRES_POOL_SIZE` for worker count
 - [ ] Set Redis memory limit (`--maxmemory 1gb`)
 - [ ] Configure log rotation
@@ -351,7 +354,7 @@ Before deploying to production:
 
 ```bash
 # Test Ollama response time
-time docker-compose exec ollama ollama run qwen2.5:3b "Classify: Russian troops near Kharkiv"
+time docker-compose exec ollama ollama run <your OLLAMA_MODEL> "Classify: Russian troops near Kharkiv"
 
 # Expected: <3 seconds for classification
 ```
