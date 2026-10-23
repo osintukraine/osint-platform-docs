@@ -355,7 +355,7 @@ Get Telegram event clusters within a bounding box as GeoJSON.
 | rumor | 1 channel | Red |
 | unconfirmed | 2-3 channels, same affiliation | Yellow |
 | confirmed | 3+ channels, cross-affiliation | Orange |
-| verified | Human verified | Green |
+| verified | 2+ independent RSS sources (automatic) or human verification | Green |
 
 **Examples:**
 
@@ -1130,7 +1130,7 @@ WHERE ST_Contains(
 - `rumor` - Single channel report
 - `unconfirmed` - 2-3 channels, same affiliation
 - `confirmed` - 3+ channels, cross-affiliation
-- `verified` - Human verified
+- `verified` - 2+ independent RSS sources (automatic) or human verification
 
 **Example:**
 

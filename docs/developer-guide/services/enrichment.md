@@ -1053,7 +1053,7 @@ Tiers auto-upgrade via database triggers:
 | `rumor` | 1 | No |
 | `unconfirmed` | 2-3 | No |
 | `confirmed` | 3+ | Yes |
-| `verified` | Any | Human verified |
+| `verified` | Any | 2+ independent RSS sources (automatic) or human verification |
 
 #### Configuration
 
