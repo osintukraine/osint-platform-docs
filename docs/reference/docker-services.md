@@ -2,9 +2,9 @@
 
 Complete reference for all Docker services in the OSINT Intelligence Platform.
 
-**Source**: `/osint-intelligence-platform/docker-compose.yml`
+**Source**: [`docker-compose.yml`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docker-compose.yml) in the platform repo
 
-**Last Updated**: 2025-12-27
+**Last Updated**: 2026-10-23
 
 ---
 
@@ -14,11 +14,11 @@ The platform's containers are organized into functional categories:
 
 | Category | Purpose |
 |----------|---------|
-| **Core Infrastructure** | Database, cache, storage, LLM |
+| **Core Infrastructure** | Database, cache, storage |
+| **LLM Layer** | Local Ollama, LLM gateway workers, backlog re-classification |
 | **Application Services** | Data ingestion, processing, enrichment, API, frontend |
 | **Monitoring Stack** | Metrics, logs, alerts, dashboards |
 | **Infrastructure Exporters** | PostgreSQL and Redis metrics |
-| **Container Management** | Resource monitoring and updates |
 | **Notification System** | Push notifications |
 | **Authentication** (optional) | Identity management and access control |
 
@@ -80,7 +80,9 @@ The platform's containers are organized into functional categories:
 
 ---
 
-## LLM Layer (Self-Hosted AI)
+## LLM Layer
+
+Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is not a compose service: see [LLM Gateway](../operator-guide/external-llm.md). The services below are the local Ollama option plus the gateway workers.
 
 ### ollama
 
@@ -88,48 +90,38 @@ The platform's containers are organized into functional categories:
 |-------|-------|
 | **Image** | `ollama/ollama:latest` |
 | **Container Name** | `osint-ollama` |
-| **Purpose** | Realtime LLM inference for processor and API (classification, semantic search) |
-| **Ports** | `11434:11434` |
-| **Profile** | (none - essential) |
-| **Dependencies** | None |
-| **Volumes** | `./data/ollama:/root/.ollama` (bind mount) |
-| **Environment** | `OLLAMA_NUM_PARALLEL`: 1<br>`OLLAMA_MAX_LOADED_MODELS`: 2<br>`OLLAMA_CPU_THREADS`: 6<br>`OLLAMA_KEEP_ALIVE`: 5m |
-| **Resources** | CPU Limit: 6.0 cores<br>Memory Limit: 8G |
-| **Healthcheck** | `ollama list` every 30s |
+| **Purpose** | Local LLM (when `LLM_PROVIDER=ollama`) and search-query embeddings (`all-minilm`), which are needed even with the gateway |
+| **Ports** | `11434` (`OLLAMA_PORT`) |
+| **Profile** | (none) |
+| **Volumes** | `./data/ollama:/root/.ollama` |
 
 ### ollama-init
 
 | Field | Value |
 |-------|-------|
-| **Build** | `infrastructure/ollama/Dockerfile.init` |
 | **Container Name** | `osint-ollama-init` |
-| **Purpose** | Pulls and initializes models from database configuration |
-| **Dependencies** | `ollama` (healthy), `postgres` (healthy) |
-| **Lifecycle** | Restarts on failure (max 3 times) |
+| **Purpose** | Pulls the models configured for `ollama` |
+| **Profile** | (none) |
 
-### ollama-batch
-
-| Field | Value |
-|-------|-------|
-| **Image** | `ollama/ollama:latest` |
-| **Container Name** | `osint-ollama-batch` |
-| **Purpose** | Batch LLM processing for enrichment tasks (non-blocking) |
-| **Ports** | `11435:11434` |
-| **Profile** | `enrichment` |
-| **Dependencies** | None |
-| **Volumes** | `./data/ollama:/root/.ollama` (shared models) |
-| **Environment** | `OLLAMA_NUM_PARALLEL`: 1<br>`OLLAMA_MAX_LOADED_MODELS`: 2<br>`OLLAMA_CPU_THREADS`: 4<br>`OLLAMA_KEEP_ALIVE`: 30m |
-| **Resources** | CPU Limit: 4.0 cores<br>Memory Limit: 6G |
-
-### ollama-batch-init
+### ollama-batch and ollama-batch-init
 
 | Field | Value |
 |-------|-------|
-| **Build** | `infrastructure/ollama/Dockerfile.init` |
-| **Container Name** | `osint-ollama-batch-init` |
-| **Purpose** | Initializes models for batch Ollama instance |
-| **Profile** | `enrichment` |
-| **Dependencies** | `ollama-batch` (healthy), `postgres` (healthy) |
+| **Container Names** | `osint-ollama-batch`, `osint-ollama-batch-init` |
+| **Purpose** | CPU-era second Ollama for batch enrichment (AI tagging, RSS validation) |
+| **Ports** | `11435` (`OLLAMA_BATCH_PORT`) |
+| **Profiles** | `enrichment-standard`, `enrichment-full`, `enrichment` |
+| **Notes** | Not used in production: with the gateway, batch work runs through the `llm-gateway` services |
+
+### backlog-worker
+
+| Field | Value |
+|-------|-------|
+| **Build** | `services/processor/Dockerfile` (command `python -m src.backlog_worker`) |
+| **Purpose** | Re-classifies `pending` and spam-flagged messages on the gateway batch lane. See [Backlog Re-classification](../operator-guide/backlog-reclassification.md) |
+| **Profile** | `llm-gateway` |
+| **Key settings** | `LLM_GATEWAY_BATCH_API_KEY`, `LLM_GATEWAY_BATCH_MODEL`, `BACKLOG_RECLASSIFY_ENABLED`, `BACKLOG_CONCURRENCY` |
+| **Healthcheck** | `curl http://localhost:8004/metrics` |
 
 ---
 
@@ -178,14 +170,30 @@ The platform's containers are organized into functional categories:
 | Field | Value |
 |-------|-------|
 | **Build** | `services/processor/Dockerfile` |
-| **Container Name** | Multiple (replicas) |
-| **Purpose** | Real-time message processing: spam filter, entity extraction, LLM classification, media archival |
+| **Purpose** | Real-time message processing: embedding spam filter, entity extraction, LLM classification (realtime lane), translation, persistence. Media is downloaded inline unless the [media lane](../operator-guide/media-lanes.md) is on |
 | **Profile** | (none - essential) |
-| **Dependencies** | `postgres` (healthy), `redis` (healthy), `ollama` (healthy) |
-| **Volumes** | `./services/processor:/app/services/processor`<br>`./shared/python:/app/shared/python`<br>`./telegram_sessions:/app/sessions`<br>`./config:/config:ro`<br>`./data/huggingface:/app/.cache/huggingface` |
-| **Environment** | `LLM_ENABLED`: true<br>`TRANSLATION_ENABLED`: true<br>`PROCESSOR_BATCH_SIZE`: 10<br>`PROCESSOR_WORKERS`: 4 |
-| **Replicas** | 2 (configurable via `PROCESSOR_REPLICAS`) |
-| **Healthcheck** | `curl http://localhost:8002/metrics` every 30s |
+| **Replicas** | 2 (`PROCESSOR_WORKER_REPLICAS`) |
+| **Volumes** | `./data/models:/models:ro` (see [Embedding Models](../operator-guide/model-provisioning.md)), media buffer |
+| **Environment** | `LLM_PROVIDER`, `LLM_GATEWAY_*`, `EMBEDDING_SPAM_MODEL`, `HF_HUB_OFFLINE=1` |
+| **Healthcheck** | `curl http://localhost:8002/metrics` |
+
+### media-worker
+
+| Field | Value |
+|-------|-------|
+| **Build** | `services/processor/Dockerfile` (command `python -m src.media_worker`) |
+| **Purpose** | Downloads media for messages with `media_status` `pending`; idles unless the `media_lane_enabled` admin setting is on. See [Media Lanes](../operator-guide/media-lanes.md) |
+| **Profile** | (none - core) |
+| **Replicas** | 1 (`MEDIA_WORKER_REPLICAS`) |
+| **Healthcheck** | `curl http://localhost:8003/metrics` |
+
+### media-sync
+
+| Field | Value |
+|-------|-------|
+| **Build** | `services/media-sync/Dockerfile` |
+| **Purpose** | Moves archived media from the local buffer to long-term storage (`MEDIA_SYNC_MODE`, default `filesystem`). See [Media Sync](../developer-guide/services/media-sync.md) |
+| **Profile** | (none - core) |
 
 ### api
 
@@ -232,7 +240,7 @@ The platform's containers are organized into functional categories:
 | **Build** | `services/analytics/Dockerfile` |
 | **Container Name** | `osint-analytics` |
 | **Purpose** | Social graph data collection - engagement polling, comment scraping, view tracking |
-| **Profile** | `enrichment` |
+| **Profiles** | `enrichment-lite`, `enrichment-standard`, `enrichment-full` |
 | **Dependencies** | `postgres` (healthy), `listener` (healthy) |
 | **Volumes** | `./telegram_sessions:/app/sessions`<br>`./shared/python:/shared/python:ro`<br>`./data/logs/analytics:/var/log/analytics` |
 | **Environment** | `TELEGRAM_SESSION_PATH`: /app/sessions (uses analytics.session) |
@@ -245,7 +253,7 @@ The platform's containers are organized into functional categories:
 | **Container Name** | `osint-nocodb` |
 | **Purpose** | Airtable-like database UI for database management |
 | **Ports** | `8080:8080` |
-| **Profile** | `dev` |
+| **Profile** | `tools` |
 | **Dependencies** | `postgres` (healthy) |
 | **Volumes** | `nocodb_data:/usr/app/data` |
 | **Environment** | `NC_ADMIN_EMAIL`: admin@osint.local<br>`NC_DISABLE_TELE`: true |
@@ -255,7 +263,7 @@ The platform's containers are organized into functional categories:
 
 ## Enrichment Workers
 
-All enrichment workers use the `enrichment` profile and have similar patterns. They process messages in batches with time budgets.
+Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` and `enrichment-full` profiles (see Profiles below) and process messages in batches with time budgets. The LLM-based workers other than fact-check and RSS validation (AI tagging, event detection, geolocation, cluster validation) still default to the Ollama endpoint `OLLAMA_BATCH_URL` and small CPU-era models; production runs the `enrichment-lite` set plus the `llm-gateway` workers.
 
 ### enrichment-ai-tagging
 
@@ -296,10 +304,22 @@ All enrichment workers use the `enrichment` profile and have similar patterns. T
 |-------|-------|
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-rss-validation` |
-| **Purpose** | LLM-based article validation for RSS correlation |
-| **Ports** | `9197:9197` (Prometheus metrics) |
-| **Dependencies** | `postgres` (healthy), `ollama-batch` (healthy) |
-| **Environment** | `RSS_VALIDATION_MODEL`: granite3-dense:2b<br>`BATCH_SIZE`: 2<br>`TIME_BUDGET_SECONDS`: 60 |
+| **Purpose** | LLM validation of RSS correlations (confirms, contradicts, context, alternative) on the batch lane |
+| **Ports** | `9197` (Prometheus metrics) |
+| **Profiles** | `enrichment-standard`, `enrichment-full`, `llm-gateway` |
+| **Environment** | `RSS_VALIDATION_MODEL`, `LLM_GATEWAY_BATCH_API_KEY`, `RSS_VALIDATION_TIME_BUDGET_SECONDS`, `RSS_VALIDATION_BATCH_SIZE`, `RSS_VALIDATION_CYCLE_INTERVAL_SECONDS` |
+| **Notes** | Only recent posts inside the correlation window are queued; the similarity floor is the admin setting `validation_min_similarity` |
+
+### enrichment-fact-check
+
+| Field | Value |
+|-------|-------|
+| **Build** | `services/enrichment/Dockerfile` |
+| **Container Name** | `osint-enrichment-fact-check` |
+| **Purpose** | Audits a sample of recent LLM-classified messages on the audit lane and auto-reclassifies on high confidence. See [Fact-Check](../developer-guide/services/fact-check.md) |
+| **Ports** | `9203` (Prometheus metrics) |
+| **Profiles** | `enrichment-standard`, `enrichment-full`, `llm-gateway` |
+| **Environment** | `FACT_CHECK_MODEL`, `LLM_GATEWAY_AUDIT_API_KEY`, `FACT_CHECK_NUM_PREDICT`, `FACT_CHECK_LOOKBACK_DAYS`, `FACT_CHECK_AUTO_ACTION_THRESHOLD`, `FACT_CHECK_TIME_BUDGET_SECONDS`, `FACT_CHECK_CYCLE_INTERVAL_SECONDS` |
 
 ### enrichment-fast-pool
 
@@ -525,17 +545,24 @@ All monitoring services use the `monitoring` profile.
 | **Privileged** | Yes (required for container inspection) |
 | **Command** | 10s housekeeping, docker-only, minimal metrics |
 
-### dozzle
+### loki
 
 | Field | Value |
 |-------|-------|
-| **Image** | `amir20/dozzle:latest` |
-| **Container Name** | `osint-dozzle` |
-| **Purpose** | Real-time Docker log viewer (web UI) |
-| **Ports** | `9999:8080` |
+| **Image** | `grafana/loki:3.3.2` |
+| **Container Name** | `osint-loki` |
+| **Purpose** | Log storage and querying (used from Grafana) |
+| **Ports** | `3100` (`LOKI_PORT`) |
 | **Profile** | `monitoring` |
-| **Volumes** | `/var/run/docker.sock:/var/run/docker.sock:ro` |
-| **Environment** | `DOZZLE_FILTER`: name=osint<br>`DOZZLE_TAILSIZE`: 300 |
+
+### promtail
+
+| Field | Value |
+|-------|-------|
+| **Image** | `grafana/promtail:3.3.2` |
+| **Container Name** | `osint-promtail` |
+| **Purpose** | Ships container logs to Loki |
+| **Profile** | `monitoring` |
 
 ### node-exporter
 
@@ -583,21 +610,6 @@ All monitoring services use the `monitoring` profile.
 
 ---
 
-## Container Management
-
-### watchtower
-
-| Field | Value |
-|-------|-------|
-| **Image** | `containrrr/watchtower:latest` |
-| **Container Name** | `osint-watchtower` |
-| **Purpose** | Automatic container updates (checks daily) |
-| **Profile** | `utilities` |
-| **Volumes** | `/var/run/docker.sock:/var/run/docker.sock` |
-| **Environment** | `WATCHTOWER_CLEANUP`: true<br>`WATCHTOWER_POLL_INTERVAL`: 86400<br>`DOCKER_API_VERSION`: 1.44 |
-
----
-
 ## Authentication & Access Control
 
 All authentication services use the `auth` profile.
@@ -640,16 +652,6 @@ All authentication services use the `auth` profile.
 | **Volumes** | `./infrastructure/oathkeeper:/etc/config/oathkeeper:ro` |
 | **Healthcheck** | `wget http://localhost:4456/health/ready` every 30s |
 
-### mailslurper
-
-| Field | Value |
-|-------|-------|
-| **Image** | `oryd/mailslurper:latest-smtps` |
-| **Container Name** | `osint-mailslurper` |
-| **Purpose** | Email testing for development (catches outbound SMTP) |
-| **Ports** | `4436:4436` (Web UI)<br>`4437:4437` (SMTP)<br>`1025:1025` (SMTP alt) |
-| **Profile** | `dev` |
-
 ### caddy
 
 | Field | Value |
@@ -664,20 +666,7 @@ All authentication services use the `auth` profile.
 
 ---
 
-## Dashboard & Documentation
-
-### dashy
-
-| Field | Value |
-|-------|-------|
-| **Image** | `lissy93/dashy:latest` |
-| **Container Name** | `osint-dashy` |
-| **Purpose** | Platform landing page and service dashboard |
-| **Ports** | `4000:8080` |
-| **Profile** | `dev` |
-| **Volumes** | `./infrastructure/dashy/conf.yml:/app/user-data/conf.yml` |
-| **Environment** | `NODE_ENV`: production |
-| **Healthcheck** | Node healthcheck service every 90s |
+## Documentation (tools profile)
 
 ### mkdocs
 
@@ -687,7 +676,7 @@ All authentication services use the `auth` profile.
 | **Container Name** | `osint-mkdocs` |
 | **Purpose** | Documentation site with Material theme |
 | **Ports** | `8001:8000` |
-| **Profile** | `dev` |
+| **Profile** | `tools` |
 | **Volumes** | `.:/docs:ro` (entire project) |
 | **Command** | `serve --dev-addr=0.0.0.0:8000` |
 | **Healthcheck** | `wget http://127.0.0.1:8000` every 60s |
@@ -722,122 +711,79 @@ All authentication services use the `auth` profile.
 
 ## Profiles
 
-Docker Compose profiles control which service groups are started:
+Profiles select which service groups start. Set them persistently with `COMPOSE_PROFILES` in `.env` (production uses `enrichment-lite,monitoring,auth,llm-gateway`). Services without a profile (postgres, redis, minio, ollama, listener, processor-worker, media-worker, media-sync, api, frontend, rss-ingestor) always start.
 
-| Profile | Services | Use Case |
-|---------|----------|----------|
-| (none) | Core + Application | Production runtime (15 containers) |
-| `enrichment` | All enrichment workers | Full enrichment pipeline (12 workers) |
-| `enrichment-standard` | LLM workers | AI tagging, geolocation, cluster validation, event detection |
-| `enrichment-full` | All workers | Standard + advanced features |
-| `monitoring` | Prometheus stack | Metrics, logs, alerts (8 services) |
-| `opensanctions` | Entity matching | Sanctions data enrichment (4 services) |
-| `multi-account` | Russia/Ukraine listeners | Multi-account Telegram monitoring (2 services) |
-| `auth` | Kratos + Oathkeeper | Authentication and access control (4 services) |
-| `dev` | NocoDB, Dashy, MkDocs, Mailslurper | Development tools (4 services) |
-| `utilities` | Watchtower | Container updates (1 service) |
+| Profile | Adds |
+|---------|------|
+| `enrichment-lite` | router, fast-pool, telegram, decision, maintenance, cluster-detection, analytics |
+| `enrichment-standard` | Lite plus AI tagging, event detection, fact-check, geolocation-llm, cluster-validation, RSS validation, ollama-batch, opensanctions, entity-ingestion |
+| `enrichment-full` | Same service set as standard |
+| `enrichment` | Legacy name, same set as standard |
+| `llm-gateway` | backlog-worker, enrichment-fact-check, enrichment-rss-validation. See [LLM Gateway](../operator-guide/external-llm.md) |
+| `monitoring` | prometheus, grafana, alertmanager, loki, promtail, exporters, cadvisor, notifier, ntfy |
+| `notifications` | notifier and ntfy without the rest of monitoring |
+| `auth` | kratos, kratos-migrate, kratos-init, oathkeeper, crowdsec, caddy |
+| `cloudflare` | crowdsec-cloudflare-bouncer |
+| `opensanctions` | yente-index, yente, opensanctions, entity-ingestion |
+| `multi-account` | listener-russia, listener-ukraine, shadow-sync |
+| `dr` | shadow-sync (disaster recovery) |
+| `backfill` | processor-worker-backfill |
+| `tools` | nocodb, mkdocs |
 
-**Start with profile:**
+**Start with profiles:**
 ```bash
-docker-compose --profile monitoring --profile enrichment up -d
+docker compose --profile monitoring --profile llm-gateway up -d
 ```
 
-**Check active profiles:**
+**Check what is running:**
 ```bash
-docker-compose ps --all
+docker compose ps
 ```
 
 ---
 
 ## Port Reference
 
-Quick reference for commonly accessed services:
+Host ports from `docker-compose.yml` (most are overridable in `.env`):
 
-| Service | Port | URL |
-|---------|------|-----|
-| Frontend | 3000 | http://localhost:3000 |
-| API | 8000 | http://localhost:8000 |
-| API Docs | 8000 | http://localhost:8000/docs |
-| Dashy Dashboard | 4000 | http://localhost:4000 |
-| NocoDB | 8080 | http://localhost:8080 |
-| Grafana | 3001 | http://localhost:3001 |
-| Prometheus | 9090 | http://localhost:9090 |
-| ntfy | 8090 | http://localhost:8090 |
-| MinIO Console | 9001 | http://localhost:9001 |
-| Dozzle Logs | 9999 | http://localhost:9999 |
-| AlertManager | 9093 | http://localhost:9093 |
-| MkDocs | 8001 | http://localhost:8001 |
-
----
-
-## Resource Limits
-
-Services with explicit resource constraints:
-
-| Service | CPU Limit | Memory Limit | Notes |
-|---------|-----------|--------------|-------|
-| ollama | 6.0 cores | 8G | Realtime LLM (was 2.0 - bottleneck!) |
-| ollama-batch | 4.0 cores | 6G | Background LLM processing |
-
-Host system: AMD Ryzen 9 7940HS (8 cores / 16 threads, 54GB RAM)
+| Service | Port | Notes |
+|---------|------|-------|
+| Frontend | 3000 | |
+| API | 8000 (metrics 8003) | Docs at `/docs` |
+| PostgreSQL | 5432 | |
+| Redis | 6379 | |
+| MinIO / console | 9000 / 9001 | |
+| Ollama / ollama-batch | 11434 / 11435 | |
+| Prometheus | 9090 | |
+| Grafana | 3000 (`GRAFANA_PORT`) | Same default as the frontend: change one if they share a host |
+| Alertmanager | 9093 | |
+| Loki | 3100 | |
+| ntfy | 127.0.0.1:8090 | Bound to localhost |
+| NocoDB | 8080 | `tools` profile |
+| MkDocs | 8001 (`MKDOCS_PORT`) | `tools` profile |
+| Listener metrics | 8001 | |
+| Enrichment workers | 9099, 9196 to 9203, 9210 to 9212 | One metrics port per worker |
 
 ---
 
-## Dependencies Graph
+## Dependencies
 
-Critical path (must be healthy):
-
-```
-postgres → listener → redis → processor → minio → api → frontend
-         ↘ ollama ↗
-```
-
-Enrichment dependency:
-```
-postgres + redis + ollama-batch → enrichment workers
-```
-
-Monitoring dependency:
-```
-prometheus → grafana
-           ↘ alertmanager → notifier → ntfy
-```
+- `listener` publishes to Redis; `processor-worker` consumes it and writes to PostgreSQL and MinIO; `api` and `frontend` read from them.
+- `processor-worker`, `backlog-worker`, `enrichment-fact-check` and `enrichment-rss-validation` call the LLM provider (gateway or Ollama).
+- `media-worker` and `backlog-worker` use `messages` rows in PostgreSQL as their queue.
+- Monitoring: `prometheus` feeds `grafana` and `alertmanager` (then `notifier`, `ntfy`); `promtail` feeds `loki`, also shown in `grafana`.
 
 ---
 
 ## Environment Variables
 
-Key environment variables (see `.env.example` for complete list):
-
-| Variable | Default | Services | Purpose |
-|----------|---------|----------|---------|
-| `POSTGRES_USER` | postgres | All | Database username |
-| `POSTGRES_PASSWORD` | postgres | All | Database password |
-| `POSTGRES_DB` | osint_platform | All | Database name |
-| `TELEGRAM_API_ID` | (required) | listener, processor, analytics | Telegram API credentials |
-| `TELEGRAM_API_HASH` | (required) | listener, processor, analytics | Telegram API credentials |
-| `DEEPL_API_KEY` | (required) | processor, enrichment-fast-pool | Translation (free tier) |
-| `OLLAMA_MODEL` | qwen2.5:3b | processor, api | Default LLM model |
-| `AI_TAGGING_MODEL` | qwen2.5:1.5b | enrichment-ai-tagging | Tagging model (3x faster) |
-| `RSS_VALIDATION_MODEL` | granite3-dense:2b | enrichment-rss-validation | Validation model (100% accuracy) |
-| `PROCESSOR_REPLICAS` | 2 | processor-worker | Number of processor instances |
-| `AUTH_PROVIDER` | none | api, frontend | Authentication method (none/kratos) |
-| `LOG_LEVEL` | INFO | All | Logging verbosity |
+[`.env.example`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/.env.example) is the canonical reference. [Environment Variables](environment-variables.md) gives an overview of the groups.
 
 ---
 
 ## Healthcheck Summary
 
-All services with healthchecks use:
-- **Interval**: 30s (60s for non-critical)
-- **Timeout**: 10s
-- **Retries**: 3
-- **Start Period**: 10-60s (300s for yente)
-
-Healthcheck methods:
-- HTTP endpoints: `curl`, `wget`
-- Database: `pg_isready`, `redis-cli ping`
-- Process: Python process checks (slim images without `pgrep`)
+Most services use a 30 s interval, 10 s timeout and 3 retries. Methods: HTTP (`curl`, `wget`) against a metrics or health endpoint, `pg_isready`, `redis-cli ping`, or a Python process check in slim images.
 
 ---
 
@@ -846,7 +792,4 @@ Healthcheck methods:
 - [Architecture Overview](../developer-guide/architecture.md)
 - [Installation Guide](../operator-guide/installation.md)
 - [Monitoring Setup](../operator-guide/monitoring.md)
-
----
-
-**File Path**: `~/code/osintukraine/osint-platform-docs/docs/reference/docker-services.md`
+- [LLM Gateway](../operator-guide/external-llm.md)

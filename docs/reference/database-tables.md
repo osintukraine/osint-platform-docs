@@ -4,7 +4,7 @@ Complete reference documentation for all database tables in the OSINT Intelligen
 
 **Source**: `/infrastructure/postgres/init.sql`
 **Database**: PostgreSQL 16+ with pgvector, pg_trgm, btree_gin extensions
-**Last Updated**: 2025-12-09
+**Last Updated**: 2026-10-23
 
 ---
 
@@ -74,7 +74,7 @@ All Telegram messages after spam filtering.
 - `media_type` (VARCHAR): photo, video, document, etc.
 - `is_spam` (BOOLEAN): LLM spam classification
 - `spam_type` (VARCHAR): financial, promotional, off_topic, forwarding
-- `osint_topic` (VARCHAR): combat, equipment, casualties, diplomatic, etc. (12 categories)
+- `osint_topic` (VARCHAR): combat, equipment, casualties, diplomatic, etc.; `pending` until classified (e.g. archived while the LLM was unavailable)
 - `importance_level` (VARCHAR): high, medium, low
 - `content_embedding` (vector(384)): Semantic search embedding
 - `search_vector` (TSVECTOR): Full-text search (auto-generated)
@@ -85,8 +85,14 @@ All Telegram messages after spam filtering.
 - `comments_count` (INTEGER): Number of comments
 - `views` (INTEGER): View count from Telegram
 - `forwards` (INTEGER): Forward count
+- `media_status` (VARCHAR): media lane state: NULL, pending, downloading, archived, failed, unavailable, expired (migration 036)
+- `media_attempts`, `media_next_attempt_at`, `media_claimed_at`: media-worker retry and claim bookkeeping
+- `album_message_ids` (BIGINT[]): Telegram ids of all items of an album
+- `is_hidden`, `hidden_reason`, `hidden_at`, `hidden_by`: hide state used by fact-check and the spam re-check (`off_topic`); present in production databases, missing from `init.sql` on fresh installs at the time of writing
 
 **Important Indexes**:
+- `idx_messages_topic_pending` (partial, `WHERE osint_topic = 'pending'`) - backlog worker (migration 038)
+- `idx_messages_media_queue` (partial, `media_status IN ('pending','downloading')`) - media-worker claims (migration 036)
 - `idx_messages_content_embedding` (HNSW) - Vector similarity search (m=16, ef_construction=64)
 - `idx_messages_search_vector` (GIN) - Full-text search
 - `idx_messages_telegram_date` - Date-based queries
@@ -100,6 +106,25 @@ All Telegram messages after spam filtering.
 - `channel_id` → `channels(id)` ON DELETE CASCADE
 
 **Related Tables**: `message_media`, `message_tags`, `message_entities`, `message_quarantine`, `event_messages`
+
+---
+
+### `message_reclassifications`
+
+LLM verdicts for backlog messages.
+
+**Purpose**: The `backlog-worker` stores its full verdict for each message it re-judges (messages with topic `pending`, and spam-flagged messages in the spam re-check pass), so spam, relevance and archive decisions can be reviewed. Only topic and importance (and the spam outcomes described in [Backlog Re-classification](../operator-guide/backlog-reclassification.md)) are applied to `messages`. Migration 038. Developer details: [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_GATEWAY.md).
+
+**Key Columns**:
+- `message_id` (BIGINT PRIMARY KEY): `messages.id`. No foreign key on purpose: adding one locks `messages`
+- `prompt_id` (INTEGER): `llm_prompts` row used
+- `model` (VARCHAR): Model or gateway alias
+- `is_spam` (BOOLEAN), `spam_type` (VARCHAR)
+- `is_ukraine_relevant` (BOOLEAN)
+- `should_archive` (BOOLEAN)
+- `topic` (VARCHAR), `importance` (VARCHAR), `confidence` (REAL)
+- `analysis` (TEXT), `reasoning` (TEXT): The model's audit text
+- `classified_at` (TIMESTAMPTZ)
 
 ---
 
@@ -1186,7 +1211,7 @@ Runtime platform configuration (NocoDB-editable).
 
 Multi-model LLM architecture configuration.
 
-**Purpose**: Maps tasks to LLM models with fallback priorities (NocoDB-editable).
+**Purpose**: Maps tasks to LLM models with fallback priorities (NocoDB-editable). Used by AI tagging, validation and semantic search; the processor classifier reads it once per process, and the gateway path takes its model from `LLM_GATEWAY_MODEL`. Event detection, fact-check and geolocation do not read it.
 
 **Key Columns**:
 - `id` (SERIAL PRIMARY KEY)
@@ -1202,7 +1227,7 @@ Multi-model LLM architecture configuration.
 
 **Default Models**:
 - embedding: all-minilm (priority 1)
-- message_classification: qwen2.5:3b (priority 1), llama3.2:3b (priority 2)
+- message_classification: seeded with Ollama models; with `LLM_PROVIDER=openai` the alias comes from `LLM_GATEWAY_MODEL`
 
 ---
 
@@ -1232,7 +1257,7 @@ LLM prompts (NocoDB runtime-editable).
 - UNIQUE (task, version)
 
 **Current Active Prompts**:
-- message_classification v6 (chain-of-thought with <analysis> tags)
+- message_classification v12 (structured JSON output with a leading `analysis` field; migration 037, rollback by flipping `is_active`, see [LLM Gateway](../operator-guide/external-llm.md#prompt-versions))
 - event_extract, event_match, event_summarize
 
 ---
@@ -1605,7 +1630,7 @@ Channels organized via Telegram native folders. Rules editable in `folder_rules`
 
 `model_configuration` table defines primary/fallback models per task with priority ranking.
 
-**Example**: message_classification uses qwen2.5:3b (priority 1) with llama3.2:3b fallback (priority 2)
+**Note**: this applies to the Ollama path only. With the LLM gateway, lanes and aliases are set in `.env` (see [LLM Gateway](../operator-guide/external-llm.md)).
 
 ---
 
@@ -1695,7 +1720,7 @@ WHERE clauses optimize storage and query performance:
 
 This documentation reflects the schema as of:
 
-- **Message Classification**: v6 (chain-of-thought with <analysis> tags)
+- **Message Classification**: v12 (structured output; see `llm_prompts`)
 - **Events**: v2 (tiered validation with RSS sources)
 - **Entities**: Unified curated + OpenSanctions
 - **Social Graph**: Full implementation with materialized views
