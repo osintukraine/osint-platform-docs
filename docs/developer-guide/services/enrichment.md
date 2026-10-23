@@ -40,8 +40,8 @@ graph LR
 !!! success "Production Stats"
     - **32 Task Types** across 11 workers (6 queue-based + 5 pipeline/dedicated)
     - **Background Processing**: Enriches ~50,000 messages/day
-    - **LLM Tasks**: Dedicated workers prevent Ollama contention (50% faster)
-    - **Cost**: €0/month (self-hosted Ollama CPU inference)
+    - **LLM Tasks**: Dedicated workers keep slow LLM tasks from blocking each other
+    - **LLM backends**: fact-check and RSS validation run on the LLM gateway (`llm-gateway` profile); AI tagging, event detection, geolocation and cluster validation default to the CPU-era Ollama endpoint (`OLLAMA_BATCH_URL`) and its small models, and are not part of the production profile set (`enrichment-lite`). See [LLM Gateway and Providers](../../operator-guide/external-llm.md) and [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_GATEWAY.md).
 
 ## Architecture
 
@@ -471,27 +471,30 @@ METRICS_PORT=9096
 **Configuration**:
 
 ```bash
-OLLAMA_HOST=http://ollama-batch:11434
-RSS_VALIDATION_MODEL=qwen2.5:3b
-TIME_BUDGET_SECONDS=60
-BATCH_SIZE=5  # Smaller batches (processes multiple articles per message)
-CYCLE_INTERVAL_SECONDS=30
-MIN_SIMILARITY=0.5
-METRICS_PORT=9097
+LLM_PROVIDER=openai                  # gateway; with ollama the worker uses OLLAMA_BATCH_URL
+LLM_GATEWAY_URL=...
+LLM_GATEWAY_BATCH_API_KEY=...        # batch lane key (falls back to LLM_GATEWAY_API_KEY)
+RSS_VALIDATION_MODEL=osint-batch     # gateway alias (compose default granite3-dense:2b is for Ollama)
+RSS_VALIDATION_TIME_BUDGET_SECONDS=60
+RSS_VALIDATION_BATCH_SIZE=2
+RSS_VALIDATION_CYCLE_INTERVAL_SECONDS=30
 ```
+
+The similarity floor is the admin setting `validation_min_similarity` (default 0.5); it is no longer pinned in compose. The worker starts with `enrichment-standard`, `enrichment-full` or `llm-gateway`.
 
 **Validation Flow**:
 
-1. Fetch message + correlated RSS articles (similarity ≥ 0.5)
-2. Call LLM to classify relationship: `confirms`, `contradicts`, `provides_context`
-3. Store validation result with confidence score
-4. Update correlation quality metrics
+1. The router queues only messages inside the correlation window (`correlation_time_window_hours`), newest first
+2. Fetch message + correlated RSS articles (similarity at or above `validation_min_similarity`)
+3. Call the LLM to classify the relationship: `confirms`, `contradicts`, `provides_context`, `alternative`
+4. Store validation result with confidence score
+5. Update correlation quality metrics
 
 **Why Separate from AI Tagging?**
 - Different batch sizes (5 vs 10)
 - Different time budgets (60s vs 120s)
 - Independent scaling
-- Prevents blocking each other for Ollama access
+- Prevents blocking each other for LLM access
 
 ### 3. Fast Pool Worker
 

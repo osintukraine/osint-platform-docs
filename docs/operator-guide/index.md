@@ -15,7 +15,10 @@ This guide covers everything needed to deploy and operate the platform in produc
 - [Monitoring & Metrics](monitoring.md) - Monitor health, performance, and metrics
 - [Scaling](scaling.md) - Scale workers and services as demand grows
 - [Performance Tuning](performance-tuning.md) - Optimize Ollama, PostgreSQL, Redis
-- [External LLM](external-llm.md) - Use external Ollama endpoints (Contabo, dedicated VMs)
+- [LLM Gateway](external-llm.md) - GPU gateway, lanes, prompt versions, Ollama alternative
+- [Backlog Re-classification](backlog-reclassification.md) - Fill in pending topics and re-check spam with the LLM
+- [Media Lanes](media-lanes.md) - Background media download and Telegram embeds
+- [Embedding Models](model-provisioning.md) - Provision models with `fetch-models.sh`
 - [Upgrades](upgrades.md) - Safely upgrade the platform and handle schema changes
 - [Backup & Restore](backup-restore.md) - Backup strategies and disaster recovery
 - [Troubleshooting](troubleshooting.md) - Common issues and solutions
@@ -37,7 +40,7 @@ This guide covers everything needed to deploy and operate the platform in produc
 
 - System administration experience (Linux, Docker, networking)
 - Basic security knowledge (API keys, secrets management)
-- Command line proficiency (bash, docker-compose, PostgreSQL)
+- Command line proficiency (bash, docker compose, PostgreSQL)
 - Time commitment: 2-4 hours for initial setup, 1-2 hours/week for maintenance
 
 ## Architecture Overview
@@ -46,7 +49,7 @@ The platform consists of containerized services organized into functional layers
 
 ```
 ┌─────────────────────────────────────────┐
-│  MONITORING (Grafana, Prometheus, ntfy) │
+│  MONITORING (Grafana, Prometheus, Loki) │
 └─────────────────────────────────────────┘
              ↑ metrics
 ┌─────────────────────────────────────────┐
@@ -54,56 +57,19 @@ The platform consists of containerized services organized into functional layers
 └─────────────────────────────────────────┘
              ↓ ↑
 ┌─────────────────────────────────────────┐
-│  DATA (PostgreSQL, Redis, MinIO, Ollama)│
+│  DATA (PostgreSQL, Redis, MinIO)        │
+└─────────────────────────────────────────┘
+             ↓ ↑
+┌─────────────────────────────────────────┐
+│  LLM (GPU gateway, or local Ollama)     │
 └─────────────────────────────────────────┘
 ```
 
-### Core Services
+The service list, profiles and ports are maintained in one place: [Docker Services](../reference/docker-services.md). In short:
 
-| Service | Purpose | Port |
-|---------|---------|------|
-| **listener** | Monitors Telegram channels in real-time | 9091 |
-| **processor-worker** | Spam filtering, routing, entity extraction (2 replicas) | 9092 |
-| **enrichment-ai-tagging** | LLM-based tag generation | 9196 |
-| **enrichment-rss-validation** | RSS article validation | 9197 |
-| **enrichment-router** | Priority-based message routing | 9198 |
-| **enrichment-fast-pool** | CPU-bound tasks (embeddings, translation) | 9199 |
-| **enrichment-telegram** | Telegram API tasks (polling, comments) | 9200 |
-| **enrichment-decision** | Decision verification | 9201 |
-| **enrichment-maintenance** | Hourly maintenance tasks | 9202 |
-| **api** | REST API endpoints (FastAPI) | 8000 |
-| **frontend** | Next.js web UI | 3000 |
-| **notifier** | Alert distribution (ntfy, Discord) | 9094 |
-| **rss-ingestor** | RSS feed ingestion | - |
-| **opensanctions** | Entity enrichment (optional) | - |
-| **entity-ingestion** | CSV entity imports (optional) | - |
-
-### Infrastructure Services (8 containers)
-
-| Service | Purpose | Port |
-|---------|---------|------|
-| **postgres** | PostgreSQL 16 + pgvector | 5432 |
-| **redis** | Message queue and caching | 6379 |
-| **minio** | S3-compatible media storage | 9000/9001 |
-| **ollama** | Self-hosted LLM runtime (realtime) | 11434 |
-| **ollama-batch** | Self-hosted LLM runtime (background) | 11435 |
-| **yente** | OpenSanctions API (optional) | 8000 |
-| **yente-index** | ElasticSearch for entity matching (optional) | 9200 |
-| **nocodb** | Database admin UI | 8080 |
-
-### Monitoring Services (8 containers)
-
-| Service | Purpose | Port |
-|---------|---------|------|
-| **prometheus** | Metrics collection | 9090 |
-| **grafana** | Visualization dashboards | 3001 |
-| **alertmanager** | Alert routing | 9093 |
-| **postgres-exporter** | Database metrics | 9187 |
-| **redis-exporter** | Queue metrics | 9121 |
-| **cadvisor** | Container resource metrics | 8081 |
-| **node-exporter** | Host system metrics | 9100 |
-| **ntfy** | Notification delivery | 8090 |
-| **dozzle** | Real-time log viewer | 9999 |
+- **Always on**: postgres, redis, minio, ollama (search embeddings), listener, processor-worker, media-worker, media-sync, api, frontend, rss-ingestor.
+- **Profiles** add enrichment workers (`enrichment-lite`, `-standard`, `-full`), the LLM gateway workers (`llm-gateway`), monitoring, authentication, OpenSanctions and tools.
+- Configuration layers (`.env` and admin settings) are explained in [Configuration](configuration.md#three-tier-configuration).
 
 ## Resource Requirements
 
@@ -131,7 +97,7 @@ The platform consists of containerized services organized into functional layers
 - **Media**: 12-20TB per 3 years (with effective spam filtering)
 - **Logs**: ~1-2GB/week (with rotation)
 - **Metrics**: ~5GB/month (30-day retention)
-- **Ollama models**: ~10-15GB (6 models)
+- **Models**: embedding models in `./data/models` (see [Embedding Models](model-provisioning.md)); Ollama models, if used, ~10-15GB
 
 ## Cost Structure
 
@@ -142,7 +108,7 @@ The platform consists of containerized services organized into functional layers
 | VPS (16GB RAM, 8 cores) | €40-80 |
 | Storage (2TB SSD) | €20-40 |
 | Network (unlimited) | Included |
-| LLM (Ollama) | €0 |
+| LLM (local Ollama; a GPU gateway is separate hardware) | €0 on the VM |
 | Translation (DeepL Free) | €0 |
 | **Total** | **€60-120/month** |
 
@@ -169,7 +135,7 @@ The platform is designed for self-hosting. Cloud costs would be:
 1. Check Grafana dashboards for anomalies
 2. Review ntfy notifications for critical alerts
 3. Monitor disk space usage: `df -h`
-4. Check service health: `docker-compose ps`
+4. Check service health: `docker compose ps`
 
 ### Weekly Tasks (30-60 minutes)
 
@@ -202,19 +168,19 @@ The platform is designed for self-hosting. Cloud costs would be:
 
 ```bash
 # Check all services are running
-docker-compose ps
+docker compose ps
 
 # Check disk space
 df -h
 
 # Check recent errors
-docker-compose logs --tail=50 | grep -i error
+docker compose logs --tail=50 | grep -i error
 
 # Check API health
 curl http://localhost:8000/health
 
 # Check message processing (last hour)
-docker-compose exec postgres psql -U osint_user -d osint_platform \
+docker compose exec postgres psql -U osint_user -d osint_platform \
   -c "SELECT COUNT(*) FROM messages WHERE created_at > NOW() - INTERVAL '1 hour';"
 ```
 
@@ -222,23 +188,23 @@ docker-compose exec postgres psql -U osint_user -d osint_platform \
 
 ```bash
 # View logs for specific service
-docker-compose logs -f --tail=100 listener
+docker compose logs -f --tail=100 listener
 
 # Restart a service
-docker-compose restart processor-worker
+docker compose restart processor-worker
 
 # Scale processor workers
-docker-compose up -d --scale processor-worker=4
+docker compose up -d --scale processor-worker=4
 
 # Access database
-docker-compose exec postgres psql -U osint_user -d osint_platform
+docker compose exec postgres psql -U osint_user -d osint_platform
 
 # Check Redis queue depth
-docker-compose exec redis redis-cli XLEN telegram_messages
+docker compose exec redis redis-cli XLEN telegram_messages
 
 # Update and restart all services
 git pull origin master
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 ## Support Resources
@@ -319,13 +285,13 @@ This guide is maintained in the `osint-platform-docs` repository. To suggest imp
 
     [:octicons-arrow-right-24: Performance Guide](performance-tuning.md)
 
--   :material-cloud-outline:{ .lg .middle } __External LLM__
+-   :material-cloud-outline:{ .lg .middle } __LLM Gateway__
 
     ---
 
-    Use external Ollama endpoints (Contabo, dedicated VMs)
+    GPU gateway lanes, keys and prompt versions, or local Ollama
 
-    [:octicons-arrow-right-24: External LLM Guide](external-llm.md)
+    [:octicons-arrow-right-24: LLM Gateway Guide](external-llm.md)
 
 -   :material-update:{ .lg .middle } __Upgrades__
 

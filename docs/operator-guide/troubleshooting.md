@@ -16,7 +16,7 @@ Comprehensive troubleshooting guide based on 3+ years of production operations. 
 - [Message Processing Issues](#message-processing-issues)
 - [Performance Issues](#performance-issues)
 - [Storage Issues](#storage-issues)
-- [LLM and AI Issues](#llm-and-ai-issues)
+- [LLM and AI Issues](#llm-and-ai-issues) (including [LLM gateway problems](#llm-gateway-problems))
 - [Search Issues](#search-issues)
 - [Geolocation & Map Issues](#geolocation-map-issues)
 - [Network and Connectivity Issues](#network-and-connectivity-issues)
@@ -74,32 +74,32 @@ Comprehensive troubleshooting guide based on 3+ years of production operations. 
 
 ```bash
 # Check all services
-docker-compose ps
+docker compose ps
 
 # Expected: All services "Up" with "(healthy)" where applicable
 # Unhealthy or "Exit 1" indicates a problem
 
 # Check specific service
-docker-compose ps listener
-docker-compose ps processor-worker
-docker-compose ps postgres
+docker compose ps listener
+docker compose ps processor-worker
+docker compose ps postgres
 ```
 
 ### View Recent Logs
 
 ```bash
 # Last 50 lines of all services
-docker-compose logs --tail=50
+docker compose logs --tail=50
 
 # Last 100 lines of specific service
-docker-compose logs --tail=100 processor-worker
+docker compose logs --tail=100 processor-worker
 
 # Follow logs in real-time
-docker-compose logs -f processor-worker
+docker compose logs -f processor-worker
 
 # Search logs for errors
-docker-compose logs processor-worker | grep -i error
-docker-compose logs processor-worker | grep -i exception
+docker compose logs processor-worker | grep -i error
+docker compose logs processor-worker | grep -i exception
 ```
 
 ### Check Resource Usage
@@ -113,7 +113,7 @@ df -h
 docker system df
 
 # Database size
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT pg_size_pretty(pg_database_size('osint_platform'));
 "
 
@@ -130,7 +130,7 @@ docker-compose exec postgres psql -U postgres -d osint_platform -c "
 **Symptoms:**
 
 ```bash
-docker-compose ps
+docker compose ps
 # Shows: osint-listener    Exit 1
 ```
 
@@ -138,7 +138,7 @@ docker-compose ps
 
 ```bash
 # Check exit logs
-docker-compose logs --tail=50 listener
+docker compose logs --tail=50 listener
 
 # Common errors:
 # - "Configuration error: ..."
@@ -167,16 +167,16 @@ diff .env .env.example
 
 ```bash
 # Check PostgreSQL is running
-docker-compose ps postgres
+docker compose ps postgres
 # Should show: Up (healthy)
 
 # If not healthy, check postgres logs
-docker-compose logs postgres
+docker compose logs postgres
 
 # Wait for PostgreSQL to be ready
-docker-compose up -d postgres
+docker compose up -d postgres
 sleep 30  # Wait 30 seconds
-docker-compose up -d listener
+docker compose up -d listener
 ```
 
 **C. Permission errors:**
@@ -195,7 +195,7 @@ chmod 644 telegram_sessions/*.session*
 
 ```bash
 # Validate docker-compose.yml
-docker-compose config
+docker compose config
 
 # Should output formatted YAML with no errors
 # If errors, check line numbers in error message
@@ -206,7 +206,7 @@ docker-compose config
 **Symptoms:**
 
 ```bash
-docker-compose ps
+docker compose ps
 # Shows service "Restarting" continuously
 ```
 
@@ -214,7 +214,7 @@ docker-compose ps
 
 ```bash
 # Watch logs during restart
-docker-compose logs -f processor-worker
+docker compose logs -f processor-worker
 
 # Look for repeating error patterns
 # Common: Out of memory, database connection pool exhausted
@@ -226,7 +226,7 @@ docker-compose logs -f processor-worker
 
 ```bash
 # Check for OOM in logs
-docker-compose logs processor-worker | grep -i "killed"
+docker compose logs processor-worker | grep -i "killed"
 
 # Check memory usage
 docker stats processor-worker
@@ -244,19 +244,19 @@ services:
 
 ```bash
 # Check active connections
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT count(*) FROM pg_stat_activity;
 "
 
 # If near max_connections (100), check for connection leaks
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT application_name, state, count(*)
   FROM pg_stat_activity
   GROUP BY application_name, state;
 "
 
 # Fix: Restart service to release connections
-docker-compose restart processor-worker
+docker compose restart processor-worker
 ```
 
 ### Issue: Healthcheck Failing
@@ -264,7 +264,7 @@ docker-compose restart processor-worker
 **Symptoms:**
 
 ```bash
-docker-compose ps postgres
+docker compose ps postgres
 # Shows: Up (unhealthy)
 ```
 
@@ -272,7 +272,7 @@ docker-compose ps postgres
 
 ```bash
 # Check healthcheck command manually
-docker-compose exec postgres pg_isready -U postgres -d osint_platform
+docker compose exec postgres pg_isready -U postgres -d osint_platform
 
 # Should output: osint_platform:5432 - accepting connections
 # If not, database is not ready
@@ -283,13 +283,13 @@ docker-compose exec postgres pg_isready -U postgres -d osint_platform
 ```bash
 # Wait longer (database may be recovering)
 sleep 60
-docker-compose ps postgres
+docker compose ps postgres
 
 # If still unhealthy, restart service
-docker-compose restart postgres
+docker compose restart postgres
 
 # Check logs for initialization errors
-docker-compose logs postgres | grep -i error
+docker compose logs postgres | grep -i error
 ```
 
 ---
@@ -310,15 +310,15 @@ docker-compose logs postgres | grep -i error
 
 ```bash
 # Check PostgreSQL is running
-docker-compose ps postgres
+docker compose ps postgres
 # Should show: Up (healthy)
 
 # Check network connectivity
-docker-compose exec processor ping postgres
+docker compose exec processor ping postgres
 # Should respond (Ctrl+C to stop)
 
 # Check PostgreSQL is listening
-docker-compose exec postgres netstat -tlnp | grep 5432
+docker compose exec postgres netstat -tlnp | grep 5432
 # Should show: LISTEN on port 5432
 ```
 
@@ -327,9 +327,9 @@ docker-compose exec postgres netstat -tlnp | grep 5432
 **A. PostgreSQL not started:**
 
 ```bash
-docker-compose up -d postgres
+docker compose up -d postgres
 sleep 30  # Wait for PostgreSQL to be ready
-docker-compose restart processor-worker
+docker compose restart processor-worker
 ```
 
 **B. Network misconfiguration:**
@@ -342,8 +342,8 @@ docker network inspect osint-intelligence-platform_backend
 # Ensure postgres and processor-worker are both listed
 
 # If not, recreate network
-docker-compose down
-docker-compose up -d
+docker compose down
+docker compose up -d
 ```
 
 **C. Firewall blocking connection:**
@@ -372,17 +372,17 @@ sudo ufw disable
 
 ```bash
 # Count active connections
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT count(*) FROM pg_stat_activity;
 "
 
 # Check max_connections setting
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SHOW max_connections;
 "
 
 # Identify connection leakers
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT application_name, state, count(*)
   FROM pg_stat_activity
   GROUP BY application_name, state
@@ -399,7 +399,7 @@ docker-compose exec postgres psql -U postgres -d osint_platform -c "
 max_connections = 200  # Increase from 100
 
 # Restart PostgreSQL
-docker-compose restart postgres
+docker compose restart postgres
 ```
 
 **B. Fix connection leaks (permanent fix):**
@@ -425,7 +425,7 @@ with get_db_session() as session:
 
 ```bash
 # Kill connections idle for >10 minutes
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT pg_terminate_backend(pid)
   FROM pg_stat_activity
   WHERE state = 'idle'
@@ -446,7 +446,7 @@ docker-compose exec postgres psql -U postgres -d osint_platform -c "
 
 ```bash
 # Find slow queries (>100ms)
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT calls, mean_exec_time, query
   FROM pg_stat_statements
   ORDER BY mean_exec_time DESC
@@ -454,14 +454,14 @@ docker-compose exec postgres psql -U postgres -d osint_platform -c "
 "
 
 # Check for missing indexes
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT schemaname, tablename, indexname
   FROM pg_indexes
   WHERE tablename = 'messages';
 "
 
 # Check table bloat (needs VACUUM)
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT schemaname, tablename,
     pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS size
   FROM pg_tables
@@ -495,11 +495,11 @@ CREATE INDEX CONCURRENTLY idx_messages_spam ON messages(spam, date DESC);
 
 ```bash
 # Analyze and vacuum (can run online, safe for production)
-docker-compose exec postgres psql -U postgres -d osint_platform -c "VACUUM ANALYZE messages;"
+docker compose exec postgres psql -U postgres -d osint_platform -c "VACUUM ANALYZE messages;"
 
 # For heavily bloated tables, use VACUUM FULL (requires table lock, downtime!)
 # Only run during maintenance window
-docker-compose exec postgres psql -U postgres -d osint_platform -c "VACUUM FULL messages;"
+docker compose exec postgres psql -U postgres -d osint_platform -c "VACUUM FULL messages;"
 ```
 
 **C. Tune PostgreSQL configuration:**
@@ -517,7 +517,7 @@ work_mem = 16MB  # Increase from 4MB
 effective_cache_size = 2GB
 
 # Restart PostgreSQL
-docker-compose restart postgres
+docker compose restart postgres
 ```
 
 ---
@@ -537,10 +537,10 @@ docker-compose restart postgres
 
 ```bash
 # Check listener logs for flood wait errors
-docker-compose logs listener | grep -i floodwait
+docker compose logs listener | grep -i floodwait
 
 # Count occurrences
-docker-compose logs listener | grep -c FloodWaitError
+docker compose logs listener | grep -c FloodWaitError
 
 # If frequent (>10/hour), Telegram API is rate limiting
 ```
@@ -563,7 +563,7 @@ POLL_INTERVAL_SECONDS = 60  # Increase from 30
 MAX_CONCURRENT_CHANNELS = 5  # Reduce from 10
 
 # Restart listener
-docker-compose restart listener
+docker compose restart listener
 ```
 
 **C. Multi-account strategy (if persistent):**
@@ -610,10 +610,10 @@ ls -la telegram_sessions/listener.session
 
 ```bash
 # Stop listener
-docker-compose stop listener
+docker compose stop listener
 
 # Run interactive auth
-docker-compose run --rm listener python -m services.listener.src.auth
+docker compose run --rm listener python -m services.listener.src.auth
 
 # Follow prompts:
 # - Enter phone number (with country code: +1234567890)
@@ -625,10 +625,10 @@ ls -la telegram_sessions/listener.session
 # Should be >1KB
 
 # Start listener
-docker-compose up -d listener
+docker compose up -d listener
 
 # Verify authentication
-docker-compose logs -f listener | grep "Logged in as"
+docker compose logs -f listener | grep "Logged in as"
 ```
 
 **B. Restore from backup:**
@@ -638,7 +638,7 @@ docker-compose logs -f listener | grep "Logged in as"
 tar -xzf backups/sessions/sessions_latest.tar.gz -C telegram_sessions/
 chmod 600 telegram_sessions/*.session*
 
-docker-compose restart listener
+docker compose restart listener
 ```
 
 ### Issue: Channel Access Denied
@@ -685,7 +685,7 @@ client(JoinChannelRequest('https://t.me/+INVITE_CODE'))
 # config/channels.yml (or database)
 
 # Mark channel as inactive
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   UPDATE channels SET active = false WHERE telegram_id = 1234567890;
 "
 ```
@@ -705,19 +705,19 @@ docker-compose exec postgres psql -U postgres -d osint_platform -c "
 
 ```bash
 # 1. Check listener is receiving messages
-docker-compose logs listener | grep "New message"
+docker compose logs listener | grep "New message"
 # Should show recent messages
 
 # 2. Check Redis queue has messages
-docker-compose exec redis redis-cli XLEN telegram_messages
+docker compose exec redis redis-cli XLEN telegram_messages
 # Should show count > 0
 
 # 3. Check processor is consuming from queue
-docker-compose logs processor-worker | grep "Processing message"
+docker compose logs processor-worker | grep "Processing message"
 # Should show recent processing
 
 # 4. Check database for recent messages
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT COUNT(*) FROM messages WHERE date > NOW() - INTERVAL '1 hour';
 "
 # Should match messages received by listener
@@ -729,7 +729,7 @@ docker-compose exec postgres psql -U postgres -d osint_platform -c "
 
 ```bash
 # Check listener logs for errors
-docker-compose logs listener | grep -i error
+docker compose logs listener | grep -i error
 
 # Common issues:
 # - Redis connection failed
@@ -737,11 +737,11 @@ docker-compose logs listener | grep -i error
 # - Spam filter blocking all messages
 
 # Verify Redis connectivity
-docker-compose exec listener ping redis
+docker compose exec listener ping redis
 # Should respond
 
 # Check spam filter rate
-docker-compose logs listener | grep "spam detected"
+docker compose logs listener | grep "spam detected"
 # If >95%, spam filter may be misconfigured
 ```
 
@@ -749,11 +749,11 @@ docker-compose logs listener | grep "spam detected"
 
 ```bash
 # Check processor is running
-docker-compose ps processor-worker
+docker compose ps processor-worker
 # Should show: Up
 
 # Check processor logs for errors
-docker-compose logs processor-worker | grep -i error
+docker compose logs processor-worker | grep -i error
 
 # Common errors:
 # - Database connection failed
@@ -761,21 +761,21 @@ docker-compose logs processor-worker | grep -i error
 # - MinIO media upload failed
 
 # Restart processor
-docker-compose restart processor-worker
+docker compose restart processor-worker
 ```
 
 **C. Queue backlog:**
 
 ```bash
 # Check queue depth
-docker-compose exec redis redis-cli XLEN telegram_messages
+docker compose exec redis redis-cli XLEN telegram_messages
 
 # If >10,000, processor can't keep up
 # Scale up processor workers
-docker-compose up -d --scale processor-worker=4
+docker compose up -d --scale processor-worker=4
 
 # Monitor queue drain
-watch 'docker-compose exec redis redis-cli XLEN telegram_messages'
+watch 'docker compose exec redis redis-cli XLEN telegram_messages'
 ```
 
 ### Issue: High Message Skip Rate (>90%)
@@ -789,10 +789,10 @@ watch 'docker-compose exec redis redis-cli XLEN telegram_messages'
 
 ```bash
 # Check classification metrics
-docker-compose exec processor-worker curl -s http://localhost:8002/metrics | grep osint_messages_skipped
+docker compose exec processor-worker curl -s http://localhost:8002/metrics | grep osint_messages_skipped
 
 # Check importance level distribution
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT
     importance_level,
     COUNT(*) as count
@@ -823,7 +823,7 @@ grep MONITORING_OSINT_THRESHOLD .env
 MONITORING_OSINT_THRESHOLD=50  # Lower from 70
 
 # Restart processor
-docker-compose restart processor-worker
+docker compose restart processor-worker
 ```
 
 **B. Rule patterns too strict:**
@@ -845,22 +845,18 @@ rules:
 **C. LLM scoring too conservative:**
 
 ```bash
-# Check LLM prompt version
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
-  SELECT id, version, active FROM llm_prompts ORDER BY created_at DESC LIMIT 5;
+# Check LLM prompt versions (the active one has is_active = true)
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
+  SELECT id, version, is_active FROM llm_prompts
+   WHERE task = 'message_classification' AND prompt_type = 'system' ORDER BY version DESC LIMIT 5;
 "
 
-# If using older prompt version, may be more conservative
-# See docs/architecture/LLM_PROMPTS.md for prompt evolution
-
-# Activate newer prompt version (if available)
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
-  UPDATE llm_prompts SET active = false WHERE version = 'v2';
-  UPDATE llm_prompts SET active = true WHERE version = 'v6';
-"
+# An older prompt may be more conservative. To switch versions (activate / roll back),
+# see "Prompt versions" in LLM Gateway and Providers (operator-guide/external-llm.md).
+# Prompt history: docs/architecture/LLM_PROMPTS.md in the platform repo.
 
 # Restart processor to reload prompts
-docker-compose restart processor-worker
+docker compose restart processor-worker
 ```
 
 ---
@@ -880,7 +876,7 @@ docker stats
 
 ```bash
 # Identify which process is consuming CPU
-docker-compose exec processor-worker top
+docker compose exec processor-worker top
 
 # Check for CPU-intensive tasks:
 # - LLM inference (Ollama)
@@ -897,21 +893,21 @@ docker-compose exec processor-worker top
 
 ```bash
 # Check LLM response time
-docker-compose logs processor-worker | grep "LLM inference took"
+docker compose logs processor-worker | grep "LLM inference took"
 
 # If >15s per message, LLM is bottleneck
 # Options:
 # 1. Use faster model
-# 2. Reduce LLM calls (increase rule coverage)
+# 2. Reduce LLM calls (embedding pre-filter threshold)
 # 3. Scale horizontally (dedicated Ollama instance)
 
 # Option 1: Switch to faster model
-docker-compose exec ollama ollama pull qwen2.5:1.5b  # Faster, less accurate
+docker compose exec ollama ollama pull <smaller model>  # Faster, less accurate
 # Update .env:
-OLLAMA_MODEL=qwen2.5:1.5b
+OLLAMA_MODEL=<smaller model>
 
-# Option 2: Increase rule coverage (skip LLM for obvious cases)
-# See config/osint_rules.yml
+# Option 2: Skip the LLM for obvious spam (admin setting llm_prefilter_spam_similarity)
+# Option 4: Move to the LLM gateway (see LLM Gateway and Providers)
 
 # Option 3: Dedicated Ollama (see docker-compose.yml ollama-batch service)
 ```
@@ -920,11 +916,11 @@ OLLAMA_MODEL=qwen2.5:1.5b
 
 ```bash
 # Check how many processor workers are running
-docker-compose ps | grep processor-worker
+docker compose ps | grep processor-worker
 
 # If >4 on single CPU, workers compete for CPU
 # Scale down:
-docker-compose up -d --scale processor-worker=2
+docker compose up -d --scale processor-worker=2
 
 # Monitor CPU usage
 docker stats
@@ -937,7 +933,7 @@ docker stats
 # See "Slow Query Performance" section above
 
 # Check cache hit ratio
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT sum(blks_hit)::float / (sum(blks_hit) + sum(blks_read)) AS cache_hit_ratio
   FROM pg_stat_database;
 "
@@ -946,7 +942,7 @@ docker-compose exec postgres psql -U postgres -d osint_platform -c "
 # Edit infrastructure/postgres/postgresql.conf:
 shared_buffers = 512MB
 
-docker-compose restart postgres
+docker compose restart postgres
 ```
 
 ### Issue: High Memory Usage / OOM Kills
@@ -957,7 +953,7 @@ docker-compose restart postgres
 docker stats
 # Shows: Container using >90% of memory limit
 
-docker-compose logs processor-worker | grep -i killed
+docker compose logs processor-worker | grep -i killed
 # Shows: "Killed" (OOM killer)
 ```
 
@@ -965,13 +961,13 @@ docker-compose logs processor-worker | grep -i killed
 
 ```bash
 # Check container memory limits
-docker-compose config | grep -A 5 "processor-worker" | grep memory
+docker compose config | grep -A 5 "processor-worker" | grep memory
 
 # Check actual memory usage
 docker stats --no-stream processor-worker
 
 # Identify memory-intensive processes
-docker-compose exec processor-worker ps aux --sort=-%mem | head -10
+docker compose exec processor-worker ps aux --sort=-%mem | head -10
 ```
 
 **Solutions:**
@@ -990,7 +986,7 @@ services:
           memory: 2G
 
 # Restart service
-docker-compose up -d processor-worker
+docker compose up -d processor-worker
 ```
 
 **B. Fix memory leaks:**
@@ -1045,7 +1041,7 @@ while True:
 df -h
 # Shows: /dev/sda1  95%  (or 100%)
 
-docker-compose logs postgres
+docker compose logs postgres
 # Shows: "FATAL: could not write to file ... No space left on device"
 ```
 
@@ -1062,7 +1058,7 @@ docker system df
 du -sh /* | sort -h | tail -10
 
 # Check database size
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT pg_size_pretty(pg_database_size('osint_platform'));
 "
 
@@ -1140,7 +1136,7 @@ VACUUM FULL messages;
 
 ```bash
 # Check MinIO is running
-docker-compose ps minio
+docker compose ps minio
 # Should show: Up (healthy)
 
 # Check MinIO health
@@ -1158,9 +1154,9 @@ curl http://localhost:9000/minio/health/live
 **A. MinIO not started:**
 
 ```bash
-docker-compose up -d minio
+docker compose up -d minio
 sleep 10  # Wait for MinIO to be ready
-docker-compose restart processor-worker
+docker compose restart processor-worker
 ```
 
 **B. Bucket not created:**
@@ -1186,14 +1182,52 @@ MINIO_ROOT_USER=minioadmin
 MINIO_ROOT_PASSWORD=minioadmin
 
 # Update processor .env if different
-docker-compose restart processor-worker
+docker compose restart processor-worker
 ```
 
 ---
 
 ## LLM and AI Issues
 
+### LLM gateway problems
+
+Applies when `LLM_PROVIDER=openai`. Setup and background: [LLM Gateway and Providers](external-llm.md).
+
+**Gateway unreachable (timeouts, connection errors, name not resolved).**
+
+```bash
+docker compose logs --since 15m processor-worker | grep -iE 'gateway|connect|resolve|timeout'
+```
+
+- Check `LLM_GATEWAY_URL` in `.env` (do not paste it into tickets or chats).
+- If the gateway's hostname resolves on the host but not in containers (for example a private-network name), set `LLM_GATEWAY_HOST` and `LLM_GATEWAY_IP`. Compose pins them with `extra_hosts` for the processor, backlog worker, fact-check and RSS validation. Recreate the services afterwards: `docker compose up -d --force-recreate processor-worker backlog-worker enrichment-fact-check enrichment-rss-validation`.
+- While the gateway is down, messages are still archived by the embedding filter; topic and importance stay `pending` until the [backlog worker](backlog-reclassification.md) runs.
+
+**A lane is paused (401 or 403 in the logs).**
+
+A 401 means the lane's key is blocked; a 403 means the key is not allowed to use that model alias. The platform stops sending requests on that lane for 5 minutes, then probes once.
+
+```bash
+docker compose logs --since 30m processor-worker backlog-worker enrichment-fact-check enrichment-rss-validation | grep -iE 'paused|401|403'
+```
+
+Check the lane's key and alias in `.env` (`LLM_GATEWAY_API_KEY` and `LLM_GATEWAY_MODEL` for realtime, `LLM_GATEWAY_AUDIT_API_KEY` and `FACT_CHECK_MODEL` for audit, `LLM_GATEWAY_BATCH_API_KEY`, `LLM_GATEWAY_BATCH_MODEL` and `RSS_VALIDATION_MODEL` for batch), fix the key or alias on the gateway, then recreate the service that reads it.
+
+**429 responses.** The lane is at its parallel or rate cap. Calls are retried with backoff. If it persists, lower `backlog_concurrency` (admin settings) or the fact-check pacing (`FACT_CHECK_TIME_BUDGET_SECONDS`, `FACT_CHECK_CYCLE_INTERVAL_SECONDS`).
+
+**Fact-check returns empty or truncated answers.** The audit alias is a reasoning model; keep `FACT_CHECK_NUM_PREDICT` at 4096 or higher.
+
+**Messages stuck or processing stalls.** The processor cancels any single message that runs longer than `PROCESSOR_MESSAGE_TIMEOUT_S` (default 600 seconds) and logs where it was waiting, then continues with the next message. Look for the timeout line:
+
+```bash
+docker compose logs --since 1h processor-worker | grep -i 'timed out after'
+```
+
+Repeated timeouts at the same place usually mean a slow Telegram media download (enable the [media lane](media-lanes.md)) or a hung LLM call (check the gateway as above).
+
 ### Issue: Ollama Service Not Responding
+
+Applies when `LLM_PROVIDER=ollama`, and to the local `ollama` service that serves search-query embeddings. For a gateway, see "LLM gateway problems" above.
 
 **Symptoms:**
 
@@ -1207,7 +1241,7 @@ docker-compose restart processor-worker
 
 ```bash
 # Check Ollama is running
-docker-compose ps ollama
+docker compose ps ollama
 # Should show: Up
 
 # Check Ollama API
@@ -1215,7 +1249,7 @@ curl http://localhost:11434/api/tags
 # Should return: {"models": [...]}
 
 # Check Ollama logs
-docker-compose logs ollama | tail -50
+docker compose logs ollama | tail -50
 ```
 
 **Solutions:**
@@ -1223,23 +1257,23 @@ docker-compose logs ollama | tail -50
 **A. Ollama not started:**
 
 ```bash
-docker-compose up -d ollama
+docker compose up -d ollama
 sleep 30  # Wait for Ollama to load models
-docker-compose restart processor-worker
+docker compose restart processor-worker
 ```
 
 **B. Model not loaded:**
 
 ```bash
 # List available models
-docker-compose exec ollama ollama list
+docker compose exec ollama ollama list
 
-# If empty or missing qwen2.5:3b, pull model
-docker-compose exec ollama ollama pull qwen2.5:3b
+# If empty or missing your OLLAMA_MODEL, pull it
+docker compose exec ollama ollama pull <your OLLAMA_MODEL>
 
 # Verify model loaded
-docker-compose exec ollama ollama list
-# Should show: qwen2.5:3b
+docker compose exec ollama ollama list
+# Should show: your OLLAMA_MODEL
 ```
 
 **C. Ollama overloaded:**
@@ -1255,15 +1289,15 @@ docker stats ollama
 # 3. Increase timeout in processor config
 
 # Option 1: Use faster model
-docker-compose exec ollama ollama pull qwen2.5:1.5b
+docker compose exec ollama ollama pull qwen2.5:1.5b
 # Update .env:
-OLLAMA_MODEL=qwen2.5:1.5b
+OLLAMA_MODEL=<smaller model>
 
 # Option 3: Increase timeout
 # Edit services/processor/src/llm_classifier.py:
 LLM_TIMEOUT_SECONDS = 60  # Increase from 30
 
-docker-compose restart processor-worker
+docker compose restart processor-worker
 ```
 
 ### Issue: Low LLM Success Rate (<90%)
@@ -1277,7 +1311,7 @@ docker-compose restart processor-worker
 
 ```bash
 # Check LLM error rate
-docker-compose logs processor-worker | grep "LLM error" | tail -20
+docker compose logs processor-worker | grep "LLM error" | tail -20
 
 # Common errors:
 # - "Model not found"
@@ -1308,21 +1342,17 @@ def truncate_for_llm(text: str, max_chars: int = 2000) -> str:
 # Error: "Failed to parse LLM response as JSON"
 
 # LLM may not be following prompt format
-# Check prompt version active:
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
-  SELECT id, version, active FROM llm_prompts WHERE active = true;
+# Check which prompt version is active:
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
+  SELECT id, version, is_active FROM llm_prompts
+   WHERE task = 'message_classification' AND is_active = true;
 "
 
-# Verify prompt includes JSON schema instructions
-# See docs/architecture/LLM_PROMPTS.md for prompt design
+# Prompt v12 expects a large model with structured output; with a small Ollama model use an
+# older version. Switching: see "Prompt versions" in LLM Gateway and Providers.
+# Prompt design: docs/architecture/LLM_PROMPTS.md in the platform repo.
 
-# If using old prompt (v2-v4), activate v6:
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
-  UPDATE llm_prompts SET active = false;
-  UPDATE llm_prompts SET active = true WHERE version = 'v6';
-"
-
-docker-compose restart processor-worker
+docker compose restart processor-worker
 ```
 
 ---
@@ -1340,13 +1370,13 @@ docker-compose restart processor-worker
 
 ```bash
 # Test search directly via PostgreSQL
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT COUNT(*) FROM messages WHERE search_vector @@ websearch_to_tsquery('english', 'Bakhmut');
 "
 
 # If 0, search_vector may not be populated
 # Check if search_vector column exists
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT column_name FROM information_schema.columns
   WHERE table_name = 'messages' AND column_name = 'search_vector';
 "
@@ -1398,7 +1428,7 @@ SELECT * FROM messages WHERE to_tsvector('ukrainian', content) @@ websearch_to_t
 
 ```bash
 # Check if pgvector extension is installed
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U postgres -d osint_platform -c "
   SELECT * FROM pg_extension WHERE extname = 'vector';
 "
 
@@ -1411,7 +1441,7 @@ docker-compose exec postgres psql -U postgres -d osint_platform -c "
 
 ```sql
 -- Connect as superuser
-docker-compose exec postgres psql -U postgres -d osint_platform
+docker compose exec postgres psql -U postgres -d osint_platform
 
 -- Create extension
 CREATE EXTENSION vector;
@@ -1425,10 +1455,10 @@ SELECT * FROM pg_extension WHERE extname = 'vector';
 ```bash
 # Embeddings may not be generated yet
 # Check enrichment service logs
-docker-compose logs enrichment | grep "embedding"
+docker compose logs enrichment | grep "embedding"
 
 # Manually trigger embedding generation for recent messages
-docker-compose exec enrichment python -c "
+docker compose exec enrichment python -c "
 from tasks.embedding import EmbeddingTask
 task = EmbeddingTask()
 task.run()
@@ -1484,13 +1514,13 @@ VALUES ('MissingCity', 'Місто', 48.123, 37.456, 'UA');
 curl "https://nominatim.openstreetmap.org/search?q=Bakhmut&format=json"
 
 # Check enrichment logs for rate limit errors
-docker-compose logs enrichment | grep -i nominatim
+docker compose logs enrichment | grep -i nominatim
 ```
 
 3. **Verify Cyrillic encoding:**
 ```bash
 # Check for encoding issues in logs
-docker-compose logs enrichment | grep -i "encoding\|unicode"
+docker compose logs enrichment | grep -i "encoding\|unicode"
 ```
 
 ---
@@ -1523,10 +1553,10 @@ WHERE telegram_date >= NOW() - INTERVAL '24 hours';
 1. **Verify embedding generation:**
 ```bash
 # Check embedding task is running
-docker-compose logs enrichment | grep -i embedding
+docker compose logs enrichment | grep -i embedding
 
 # Check embedding queue
-docker-compose exec redis redis-cli XLEN enrich:fast
+docker compose exec redis redis-cli XLEN enrich:fast
 ```
 
 2. **Adjust detection sensitivity:**
@@ -1537,7 +1567,7 @@ CLUSTER_SIMILARITY_THRESHOLD=0.75  # default 0.80
 MIN_MESSAGES_FOR_CLUSTER=2  # default 3
 
 # Restart enrichment
-docker-compose restart enrichment
+docker compose restart enrichment
 ```
 
 ---
@@ -1567,7 +1597,7 @@ ORDER BY avg_similarity;
 ```bash
 # In .env
 CLUSTER_SIMILARITY_THRESHOLD=0.85  # stricter matching
-docker-compose restart enrichment
+docker compose restart enrichment
 ```
 
 2. **Archive false positives:**
@@ -1593,7 +1623,7 @@ WHERE id = 123;
 time curl "http://localhost:8000/api/map/messages?south=48&west=35&north=50&east=40"
 
 # Check Redis cache hit rate
-docker-compose exec redis redis-cli INFO stats | grep keyspace
+docker compose exec redis redis-cli INFO stats | grep keyspace
 ```
 
 **Solutions:**
@@ -1631,12 +1661,12 @@ ANALYZE message_locations;
 
 ```bash
 # Check Redis pub/sub
-docker-compose exec redis redis-cli PUBSUB CHANNELS
+docker compose exec redis redis-cli PUBSUB CHANNELS
 
 # Should show: map:new_location
 
 # Check if geolocation task is publishing
-docker-compose logs enrichment | grep "map:new_location"
+docker compose logs enrichment | grep "map:new_location"
 ```
 
 **Solutions:**
@@ -1644,7 +1674,7 @@ docker-compose logs enrichment | grep "map:new_location"
 1. **Verify Redis pub/sub:**
 ```bash
 # Subscribe to channel (should see messages)
-docker-compose exec redis redis-cli SUBSCRIBE map:new_location
+docker compose exec redis redis-cli SUBSCRIBE map:new_location
 ```
 
 2. **Check proxy WebSocket support:**
@@ -1678,10 +1708,10 @@ ws.onmessage = (e) => console.log(JSON.parse(e.data));
 
 ```bash
 # Check if services are running
-docker-compose ps
+docker compose ps
 
 # Check if ports are mapped correctly
-docker-compose ps | grep "0.0.0.0"
+docker compose ps | grep "0.0.0.0"
 # Should show port mappings like: 0.0.0.0:3001->3000/tcp
 
 # Check if something else is using the port
@@ -1689,7 +1719,7 @@ sudo lsof -i :3001
 sudo lsof -i :8000
 
 # Test connectivity from inside container
-docker-compose exec api curl -s http://localhost:8000/health
+docker compose exec api curl -s http://localhost:8000/health
 ```
 
 **Solutions:**
@@ -1704,7 +1734,7 @@ services:
     ports:
       - "3002:3000"  # Change from 3001 to 3002
 
-docker-compose up -d grafana
+docker compose up -d grafana
 ```
 
 **B. Firewall blocking access:**
@@ -1726,9 +1756,9 @@ sudo ufw disable
 
 ```bash
 # Recreate Docker networks
-docker-compose down
+docker compose down
 docker network prune
-docker-compose up -d
+docker compose up -d
 ```
 
 ---
@@ -1744,10 +1774,10 @@ docker-compose up -d
 git log -1 --oneline
 
 # 2. Service status
-docker-compose ps > status.txt
+docker compose ps > status.txt
 
 # 3. Recent logs (all services)
-docker-compose logs --tail=100 > logs.txt
+docker compose logs --tail=100 > logs.txt
 
 # 4. System resources
 docker stats --no-stream > resources.txt
@@ -1759,7 +1789,7 @@ cp .env .env.sanitized
 # Replace with placeholders: POSTGRES_PASSWORD=<redacted>
 
 # 6. Error messages
-docker-compose logs | grep -i error > errors.txt
+docker compose logs | grep -i error > errors.txt
 ```
 
 ### Where to Get Help
@@ -1776,16 +1806,16 @@ docker-compose logs | grep -i error > errors.txt
 **Environment:**
 - OS: Ubuntu 22.04 / macOS 13 / Windows 11
 - Docker version: (output of `docker --version`)
-- Docker Compose version: (output of `docker-compose --version`)
+- Docker Compose version: (output of `docker compose --version`)
 - Platform version: (output of `git log -1 --oneline`)
 
 **Issue Description:**
 Clear description of the problem.
 
 **Steps to Reproduce:**
-1. Start services: `docker-compose up -d`
+1. Start services: `docker compose up -d`
 2. Wait 2 minutes
-3. Check logs: `docker-compose logs processor-worker`
+3. Check logs: `docker compose logs processor-worker`
 4. See error: "..."
 
 **Expected Behavior:**

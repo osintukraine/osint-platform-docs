@@ -88,7 +88,10 @@ docker-compose --profile enrichment up -d --scale enrichment-fast-pool=2
 
 ### Scale Ollama (LLM)
 
-Ollama is the most common bottleneck. Two instances exist:
+!!! note "GPU gateway"
+    With `LLM_PROVIDER=openai` the LLM runs on the gateway's GPU host, not in this stack. Its capacity is set by the per-lane parallel caps on the gateway; match `backlog_concurrency` to the batch lane cap. See [LLM Gateway](external-llm.md). The local `ollama` then only serves search embeddings, and `ollama-batch` is not used.
+
+On a CPU-only Ollama setup it is the most common bottleneck. Two instances exist:
 - `ollama` - Realtime inference (processor, API)
 - `ollama-batch` - Background inference (enrichment)
 
@@ -120,7 +123,7 @@ docker-compose up -d ollama ollama-batch
 **Switch to faster model** (trades quality for speed):
 ```bash
 # In .env
-OLLAMA_MODEL=gemma2:2b  # Faster than qwen2.5:3b
+OLLAMA_MODEL=gemma2:2b  # A smaller model is faster
 ```
 
 ---

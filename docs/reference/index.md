@@ -7,7 +7,7 @@ Complete technical reference for the OSINT Intelligence Platform.
 This reference documentation provides comprehensive details about:
 
 - **[API Endpoints](api-endpoints.md)** - All REST API endpoints with parameters and responses
-- **[Environment Variables](environment-variables.md)** - Complete configuration reference
+- **[Environment Variables](environment-variables.md)** - Overview of configuration groups (the canonical list is `.env.example`)
 - **[Database Tables](database-tables.md)** - PostgreSQL schema documentation
 - **[Docker Services](docker-services.md)** - Container architecture
 
@@ -207,7 +207,7 @@ Configuration precedence (highest to lowest):
 
 - **PostgreSQL**: ~100GB for 1M messages
 - **MinIO**: ~300GB for media archive
-- **Ollama**: ~20GB for models (qwen2.5:3b, granite3-dense:2b)
+- **Ollama**: ~20GB for models if used (none needed for classification with an LLM gateway; the small `all-minilm` serves search)
 - **Monitoring**: ~50GB for metrics (30 days retention)
 
 ## Version Information

@@ -11,7 +11,7 @@ Before any upgrade:
 - [ ] **Backup database**: `./scripts/backup.sh` or manual pg_dump
 - [ ] **Backup Telegram session**: `cp -r data/sessions data/sessions.backup`
 - [ ] **Backup .env**: `cp .env .env.backup`
-- [ ] **Note current versions**: `docker-compose ps` and `git log -1 --oneline`
+- [ ] **Note current versions**: `docker compose ps` and `git log -1 --oneline`
 - [ ] **Read CHANGELOG.md** for breaking changes
 - [ ] **Schedule maintenance window** (10-30 minutes typical)
 - [ ] **Notify users** if applicable
@@ -20,55 +20,34 @@ Before any upgrade:
 
 ## Upgrade Types
 
-### Minor Updates (Routine)
+### Routine Updates
 
-Code changes without schema modifications.
-
-```bash
-# 1. Pull latest code
-git fetch origin
-git pull origin master
-
-# 2. Rebuild and restart
-docker-compose build
-docker-compose up -d
-
-# 3. Verify health
-docker-compose ps
-curl http://localhost:8000/health
-```
-
-**Downtime**: ~2-5 minutes (container restart)
-
-### Major Updates (Schema Changes)
-
-Updates that modify `init.sql` require database recreation.
+Production updates use the deploy script, which pulls the code, applies pending SQL migrations, restarts services and runs a health check.
 
 ```bash
-# 1. Backup database FIRST
-docker-compose exec postgres pg_dump -U osint_user osint_platform > backup-$(date +%Y%m%d).sql
-
-# 2. Pull latest code
-git fetch origin
-git pull origin master
-
-# 3. Stop all services
-docker-compose down
-
-# 4. Remove database volume (DESTRUCTIVE)
-docker volume rm osint-intelligence-platform_postgres_data
-
-# 5. Rebuild and start
-docker-compose build
-docker-compose up -d
-
-# 6. Verify database recreated
-docker-compose exec postgres psql -U osint_user -d osint_platform \
-  -c "\dt" | head -20
+./scripts/deploy.sh --dry-run    # preview
+./scripts/deploy.sh              # pull, migrate, restart
+./scripts/deploy.sh --build      # also rebuild images first
+./scripts/deploy.sh --quick      # pull and restart, skip migrations
 ```
 
-**Downtime**: 5-15 minutes
-**Data**: Lost unless migrated (see Data Migration section)
+After an update that changes `infrastructure/models/models.txt`, run `./scripts/fetch-models.sh` (see [Embedding Models](model-provisioning.md)); `deploy.sh` does not do it.
+
+**Downtime**: a few minutes (container restart).
+
+### Schema Changes
+
+Schema changes ship as numbered SQL migrations in `infrastructure/postgres/migrations/`. They are applied in place and keep your data; **do not delete the database volume to upgrade**.
+
+```bash
+./scripts/migrate.sh --status    # applied and pending migrations
+./scripts/migrate.sh --dry-run   # preview pending migrations
+./scripts/migrate.sh             # apply them
+```
+
+Take a backup first (`./scripts/backup.sh`). Some migrations create indexes `CONCURRENTLY` and can take a while on a large `messages` table; they do not block writes. Recent migration files document their rollback SQL in the header.
+
+If a database was created from `init.sql` and has never had migrations tracked, `./scripts/migrate.sh --baseline` marks all existing migration files as applied without running them.
 
 ### Configuration Updates
 
@@ -79,7 +58,7 @@ Changes to `.env` or Docker Compose without code changes.
 nano .env
 
 # 2. Restart affected services
-docker-compose up -d --force-recreate
+docker compose up -d --force-recreate
 ```
 
 **Downtime**: <1 minute (graceful restart)
@@ -88,52 +67,15 @@ docker-compose up -d --force-recreate
 
 ## Database Schema Workflow
 
-The platform uses `init.sql` as the source of truth. **No Alembic migrations.**
+`infrastructure/postgres/init.sql` creates the schema on a fresh install; migrations in `infrastructure/postgres/migrations/` carry existing installs forward. See [Database Migrations](../developer-guide/database-migrations.md) for how they are written.
 
-### Why No Migrations?
-
-1. **Simplicity**: Single file defines complete schema
-2. **Self-hosted**: Full control over deployment
-3. **Clean state**: Testing always starts fresh
-4. **Predictable**: No migration ordering issues
-
-### Testing Schema Changes
-
-Before applying schema changes to production:
+Check what is applied:
 
 ```bash
-# 1. Create test environment
-docker-compose -f docker-compose.yml -f docker-compose.test.yml up -d postgres-test
-
-# 2. Apply new schema
-docker-compose exec postgres-test psql -U osint_user -d osint_test \
-  -f /infrastructure/postgres/init.sql
-
-# 3. Verify tables created
-docker-compose exec postgres-test psql -U osint_user -d osint_test \
-  -c "\dt"
-
-# 4. Test ORM compatibility (optional)
-pytest tests/integration/test_database.py
-
-# 5. Cleanup
-docker-compose -f docker-compose.yml -f docker-compose.test.yml down postgres-test
+./scripts/migrate.sh --status
 ```
 
-### Schema Version Tracking
-
-Check current schema by looking at table structure:
-
-```sql
--- Check if new columns exist
-\d+ messages
-
--- Check for new tables
-\dt
-
--- Check for new indexes
-\di
-```
+Recent migrations that matter to operators: 034 to 035 (runtime and RSS admin settings), 036 (media lane columns), 037 (classifier prompt v12, inserted inactive), 038 (`message_reclassifications` and the pending-topic index).
 
 ---
 
@@ -147,20 +89,20 @@ For additive changes (new columns, tables):
 
 ```bash
 # 1. Export relevant tables
-docker-compose exec postgres pg_dump -U osint_user \
+docker compose exec postgres pg_dump -U osint_user \
   --data-only --table=messages --table=channels \
   osint_platform > data-export.sql
 
 # 2. Recreate database with new schema
-docker-compose down
+docker compose down
 docker volume rm osint-intelligence-platform_postgres_data
-docker-compose up -d postgres
+docker compose up -d postgres
 
 # 3. Wait for schema creation
 sleep 10
 
 # 4. Import data (may need transformation)
-docker-compose exec -T postgres psql -U osint_user -d osint_platform < data-export.sql
+docker compose exec -T postgres psql -U osint_user -d osint_platform < data-export.sql
 ```
 
 ### Strategy 2: Parallel Database
@@ -188,9 +130,9 @@ docker run -d --name postgres-new \
 # - Spot check data integrity
 
 # 5. Switch over
-docker-compose down
+docker compose down
 # Point to new database in docker-compose.yml
-docker-compose up -d
+docker compose up -d
 ```
 
 ### Strategy 3: Manual SQL Migration
@@ -218,31 +160,31 @@ For zero-downtime updates of stateless services:
 
 ```bash
 # Scale down gracefully (drain queue)
-docker-compose exec redis redis-cli XLEN telegram_messages
+docker compose exec redis redis-cli XLEN telegram_messages
 # Wait until queue is small (<100)
 
 # Update one worker at a time
-docker-compose up -d --no-deps --build processor-worker-1
+docker compose up -d --no-deps --build processor-worker-1
 sleep 30  # Verify healthy
-docker-compose up -d --no-deps --build processor-worker-2
+docker compose up -d --no-deps --build processor-worker-2
 ```
 
 ### API
 
 ```bash
 # API is stateless, quick restart
-docker-compose up -d --no-deps --build api
+docker compose up -d --no-deps --build api
 ```
 
 ### Listener
 
 ```bash
 # Listener maintains Telegram session - restart carefully
-docker-compose stop listener
-docker-compose up -d --build listener
+docker compose stop listener
+docker compose up -d --build listener
 
 # Verify reconnected
-docker-compose logs --tail=50 listener | grep "connected"
+docker compose logs --tail=50 listener | grep "connected"
 ```
 
 ---
@@ -259,27 +201,27 @@ git log --oneline -10
 git checkout <commit-hash>
 
 # 3. Rebuild and restart
-docker-compose build
-docker-compose up -d
+docker compose build
+docker compose up -d
 ```
 
 ### Full Rollback (With Data)
 
 ```bash
 # 1. Stop services
-docker-compose down
+docker compose down
 
 # 2. Restore database from backup
 docker volume rm osint-intelligence-platform_postgres_data
-docker-compose up -d postgres
-docker-compose exec -T postgres psql -U osint_user -d osint_platform < backup.sql
+docker compose up -d postgres
+docker compose exec -T postgres psql -U osint_user -d osint_platform < backup.sql
 
 # 3. Revert code
 git checkout <previous-commit>
 
 # 4. Restart
-docker-compose build
-docker-compose up -d
+docker compose build
+docker compose up -d
 ```
 
 ### Emergency Procedures
@@ -288,15 +230,15 @@ If upgrade causes critical failure:
 
 ```bash
 # 1. Immediate: Stop broken services
-docker-compose stop
+docker compose stop
 
 # 2. Restore from backup
 git checkout <last-known-good>
-docker-compose build
-docker-compose up -d
+docker compose build
+docker compose up -d
 
 # 3. Investigate logs
-docker-compose logs --tail=200 > incident-$(date +%Y%m%d).log
+docker compose logs --tail=200 > incident-$(date +%Y%m%d).log
 
 # 4. Post-mortem: Document what went wrong
 ```
@@ -353,23 +295,23 @@ After any upgrade:
 
 ```bash
 # 1. All services running
-docker-compose ps
+docker compose ps
 
 # 2. API responding
 curl http://localhost:8000/health
 
 # 3. Messages processing
-docker-compose exec redis redis-cli XLEN telegram_messages
+docker compose exec redis redis-cli XLEN telegram_messages
 # Should not be growing
 
 # 4. No errors in logs
-docker-compose logs --tail=100 | grep -i error
+docker compose logs --tail=100 | grep -i error
 
 # 5. Grafana dashboards loading
 # Open http://localhost:3001 and verify data
 
 # 6. Recent messages in database
-docker-compose exec postgres psql -U osint_user -d osint_platform \
+docker compose exec postgres psql -U osint_user -d osint_platform \
   -c "SELECT COUNT(*) FROM messages WHERE created_at > NOW() - INTERVAL '1 hour';"
 ```
 
@@ -381,7 +323,7 @@ docker-compose exec postgres psql -U osint_user -d osint_platform \
 
 ```bash
 # Optimize database
-docker-compose exec postgres psql -U osint_user -d osint_platform \
+docker compose exec postgres psql -U osint_user -d osint_platform \
   -c "VACUUM ANALYZE;"
 ```
 
@@ -389,10 +331,10 @@ docker-compose exec postgres psql -U osint_user -d osint_platform \
 
 ```bash
 # Check for image updates
-docker-compose pull
+docker compose pull
 
 # Review logs for warnings
-docker-compose logs --since 720h | grep -i "warning\|deprecated"
+docker compose logs --since 720h | grep -i "warning\|deprecated"
 ```
 
 ### Quarterly

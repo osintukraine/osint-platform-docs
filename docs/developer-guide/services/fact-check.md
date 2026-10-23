@@ -38,7 +38,7 @@ graph LR
     - **Sampling**: 50 messages per cycle across all topics
     - **Accuracy Target**: 95%+ classification match rate
     - **Review Queue**: Surfaces misclassifications for human review
-    - **Cost**: €0/month (uses local Ollama)
+    - **Lane**: runs on the LLM gateway's *audit* lane (reasoning alias); with `LLM_PROVIDER=ollama` it uses the configured Ollama endpoint
 
 ## Architecture
 
@@ -52,7 +52,7 @@ graph TD
 
     subgraph "Data Flow"
         T -->|Sample| DB[(PostgreSQL)]
-        T -->|Classify| LLM[Ollama]
+        T -->|Classify| LLM[LLM]
         T -->|Store| FC[classification_fact_checks]
         T -->|Audit| AL[admin_audit_log]
     end
@@ -86,7 +86,7 @@ Re-classifies messages from scratch using the `message_classification` prompt, t
 ```mermaid
 sequenceDiagram
     participant FC as Fact-Check
-    participant LLM as Ollama
+    participant LLM as LLM
     participant DB as PostgreSQL
 
     FC->>DB: Sample message (with original classification)
@@ -108,7 +108,7 @@ Passes original classification to LLM for validation using `fact_check_validate`
 ```mermaid
 sequenceDiagram
     participant FC as Fact-Check
-    participant LLM as Ollama
+    participant LLM as LLM
     participant DB as PostgreSQL
 
     FC->>DB: Sample message + original classification
@@ -220,55 +220,44 @@ INSERT INTO admin_audit_log (
 
 ### Environment Variables
 
+Defaults are in `docker-compose.yml` (service `enrichment-fact-check`); the gateway variables are in [`.env.example`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/.env.example). Operator view: [LLM Gateway and Providers](../../operator-guide/external-llm.md).
+
 ```bash
-# Ollama Configuration
-OLLAMA_HOST=http://ollama:11434      # Local Ollama (default)
-OLLAMA_API_KEY=                       # Optional API key for external
-OLLAMA_EXTERNAL_MODE=false            # Enable retry logic for external
-OLLAMA_TIMEOUT=300                    # 5 min timeout for CPU inference
-OLLAMA_MAX_RETRIES=3                  # Retries for external endpoints
-OLLAMA_RETRY_DELAY=1.0                # Base retry delay (exponential)
+# Provider and lane
+LLM_PROVIDER=openai                   # or ollama
+LLM_GATEWAY_URL=...
+LLM_GATEWAY_AUDIT_API_KEY=...         # audit lane key (falls back to LLM_GATEWAY_API_KEY)
+FACT_CHECK_MODEL=osint-audit          # gateway alias (a reasoning model)
+FACT_CHECK_NUM_PREDICT=4096           # reasoning tokens count: keep >= 4096 (compose default 500 suits Ollama)
 
 # Classifier Mode
 FACT_CHECK_CLASSIFIER_MODE=unified    # "unified" or "modular"
 
-# Model Configuration
-FACT_CHECK_MODEL=qwen2.5:3b           # LLM model to use
-
-# Sampling Configuration
+# Sampling
+FACT_CHECK_LOOKBACK_DAYS=7            # only recent LLM-classified messages (not 'pending')
 FACT_CHECK_SAMPLE_SIZE=50             # Messages per cycle
-FACT_CHECK_PER_TOPIC=5                # Max per topic
+FACT_CHECK_PER_TOPIC=3                # Max per topic
 
 # Action Thresholds
 FACT_CHECK_AUTO_ACTION_THRESHOLD=0.85 # Auto-action confidence
 FACT_CHECK_HUMAN_REVIEW_THRESHOLD=0.60 # Queue review confidence
 
-# Worker Configuration
-TIME_BUDGET_SECONDS=300               # Max processing time per cycle
-BATCH_SIZE=10                         # Messages per batch
-CYCLE_INTERVAL_SECONDS=300            # Wait between cycles (5 min)
-METRICS_PORT=9197                     # Prometheus metrics port
+# Pacing (a thinking audit costs about as much as two batch streams)
+FACT_CHECK_TIME_BUDGET_SECONDS=600    # Max processing time per cycle
+FACT_CHECK_BATCH_SIZE=10              # Messages per batch
+FACT_CHECK_CYCLE_INTERVAL_SECONDS=300 # Wait between cycles
+
+# Ollama option (LLM_PROVIDER=ollama)
+FACT_CHECK_OLLAMA_HOST=http://ollama:11434
+FACT_CHECK_OLLAMA_API_KEY=
+FACT_CHECK_OLLAMA_EXTERNAL_MODE=false
 ```
 
-### Docker Compose
+### Compose profiles
 
-```yaml
-enrichment-fact-check:
-  image: osint-platform-enrichment:latest
-  command: python -m src.workers.fact_check_worker
-  environment:
-    OLLAMA_HOST: http://ollama:11434
-    OLLAMA_TIMEOUT: 300
-    FACT_CHECK_MODEL: qwen2.5:3b
-    FACT_CHECK_CLASSIFIER_MODE: unified
-    FACT_CHECK_SAMPLE_SIZE: 50
-    FACT_CHECK_PER_TOPIC: 5
-    TIME_BUDGET_SECONDS: 300
-    CYCLE_INTERVAL_SECONDS: 300
-  depends_on:
-    - ollama
-    - postgres
-```
+The service starts with the `enrichment-standard`, `enrichment-full` or `llm-gateway` profile. It sends the same user prompt and JSON schema as the processor and injects the same military slang glossary. Gateway status handling (429 backoff, 401/403 lane pause) is described in [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_GATEWAY.md).
+
+---
 
 ## Database Schema
 
@@ -463,17 +452,13 @@ WHERE classification_match = FALSE
 GROUP BY 1;
 ```
 
-### LLM Timeout Errors
+### LLM Timeout or Empty Answers
 
-**Symptom**: `ReadTimeout` errors in logs
+**Symptom**: `ReadTimeout` errors, or answers cut off with no JSON
 
-**Cause**: CPU-based LLM inference taking too long
+**Cause**: the gateway lane is busy or paused, or `FACT_CHECK_NUM_PREDICT` is too low for a reasoning alias (reasoning tokens count toward the limit)
 
-**Solution**: Increase timeout:
-
-```yaml
-OLLAMA_TIMEOUT: 300  # 5 minutes for CPU inference
-```
+**Solution**: keep `FACT_CHECK_NUM_PREDICT` at 4096 or higher, check the lane (see [Troubleshooting](../../operator-guide/troubleshooting.md#llm-gateway-problems)), and lengthen `FACT_CHECK_CYCLE_INTERVAL_SECONDS` if the audit competes with other lanes. With Ollama on CPU, raise `OLLAMA_TIMEOUT`.
 
 ### Pending Review Queue Growing
 
@@ -510,7 +495,7 @@ graph TD
 **Key Integration Points**:
 
 1. **Same Prompt**: Unified mode uses identical `message_classification` prompt
-2. **Same Model**: Uses same qwen2.5:3b model by default
+2. **Same Schema**: Uses the processor's JSON schema and slang glossary; the model alias differs (`FACT_CHECK_MODEL`, the audit lane)
 3. **Feedback Loop**: Auto-reclassifications update the original classification
 
 ## See Also

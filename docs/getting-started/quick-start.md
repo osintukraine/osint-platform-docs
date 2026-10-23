@@ -61,11 +61,13 @@ JWT_SECRET_KEY=random_256_bit_key_here
 
 For production deployments, also configure:
 
-- `OLLAMA_MODEL=qwen2.5:3b` (recommended for Russian/Ukrainian content)
-- `LLM_ENABLED=true` (enables AI importance classification)
+- `LLM_PROVIDER` (`ollama` for a local model, `openai` for a GPU gateway, `none` for no LLM) and, for Ollama, `OLLAMA_MODEL`; see [LLM Gateway and Providers](../operator-guide/external-llm.md)
+- `LLM_ENABLED=true` (enables AI classification)
 - `TRANSLATION_ENABLED=true` (auto-translate messages)
 
 See the `.env.example` file for complete configuration options.
+
+Before starting the stack, fetch the embedding models once: `./scripts/fetch-models.sh` (see [Embedding Models](../operator-guide/model-provisioning.md)).
 
 ## Step 3: Build PyTorch Base Image
 
@@ -250,14 +252,14 @@ Once a message arrives in your monitored channel:
 2. Check PostgreSQL health: `docker-compose exec postgres pg_isready`
 3. Verify Processor logs: `docker-compose logs processor-worker`
 
-### Ollama Model Not Loading
+### Ollama Model Not Loading (`LLM_PROVIDER=ollama`)
 
 **Symptom**: Importance classification fails, logs show "model not found"
 
 **Solution**:
 ```bash
 # Pull the model manually
-docker-compose exec ollama ollama pull qwen2.5:3b
+docker-compose exec ollama ollama pull <your OLLAMA_MODEL>
 
 # Verify it's loaded
 docker-compose exec ollama ollama list
@@ -269,8 +271,8 @@ docker-compose exec ollama ollama list
 
 **Solution**:
 1. Reduce Processor replicas: Edit `docker-compose.yml`, set `replicas: 1`
-2. Use smaller LLM model: Set `OLLAMA_MODEL=gemma2:2b` in `.env`
-3. Disable enrichment workers: Don't use `--profile enrichment`
+2. Use smaller LLM model: set a smaller `OLLAMA_MODEL` in `.env`
+3. Disable enrichment workers: use `COMPOSE_PROFILES=enrichment-lite` or none
 
 ### Port Conflicts
 

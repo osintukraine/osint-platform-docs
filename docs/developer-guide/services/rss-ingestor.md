@@ -420,7 +420,8 @@ RSS_CORRELATION_TIME_WINDOW_HOURS=6
 RSS_CORRELATION_MAX_PER_MESSAGE=10
 
 # ============================================================================
-# RSS VALIDATION LAYER (LLM-based, Enrichment Service)
+# RSS VALIDATION LAYER (LLM-based, enrichment-rss-validation on the gateway batch lane;
+# model alias RSS_VALIDATION_MODEL; see the LLM Gateway page)
 # ============================================================================
 
 # Enable LLM fact-checking of correlations
@@ -465,12 +466,19 @@ RSS_CACHE_MINUTES=10
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `rss.ingestion_enabled` | `true` | Master switch for RSS ingestion |
-| `rss.ingestion_interval_minutes` | `5` | Polling cycle interval |
-| `rss.max_feeds` | `50` | Feeds per cycle |
-| `rss_correlation_enabled` | `true` | Enable correlation |
-| `rss_correlation_similarity_threshold` | `0.40` | Min similarity (0-1) |
-| `rss_correlation_time_window_hours` | `6` | Time window (±hours) |
+| `ingestion_enabled` | `true` | Master switch for RSS ingestion |
+| `ingestion_interval_minutes` | `5` | Polling cycle interval |
+| `max_feeds` | `50` | Feeds per cycle |
+| `correlation_enabled` | `true` | Enable correlation |
+| `correlation_similarity_threshold` | `0.40` | Min similarity (0-1) |
+| `correlation_time_window_hours` | `24` | Time window (±hours) |
+| `correlation_max_per_message` | `10` | Most similar articles kept per message |
+| `fact_check_enabled` | `true` | Queue correlated messages for LLM validation |
+| `fact_check_min_importance` | `low` | Minimum message importance to validate |
+| `validation_min_similarity` | `0.5` | Similarity floor for validation |
+| `retention_days` | `90` | RSS retention (uncorrelated articles only) |
+
+These are admin settings (category `rss`, migration 035) and are listed with defaults in [`runtime_keys.py`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/shared/python/config/runtime_keys.py); they apply without a restart.
 
 **Loading Configuration** (from `main.py`):
 

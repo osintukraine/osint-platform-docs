@@ -111,7 +111,10 @@ nav:
       - Multi-Storage Setup: operator-guide/multi-storage-setup.md
       - Telegram Setup: operator-guide/telegram-setup.md
       - Telegram Disaster Recovery: operator-guide/telegram-disaster-recovery.md
-      - External LLM Providers: operator-guide/external-llm.md
+      - LLM Gateway & Providers: operator-guide/external-llm.md
+      - Backlog Re-classification: operator-guide/backlog-reclassification.md
+      - Media Lanes & Embeds: operator-guide/media-lanes.md
+      - Embedding Models: operator-guide/model-provisioning.md
       - Monitoring & Metrics: operator-guide/monitoring.md
       - Backup & Restore: operator-guide/backup-restore.md
       - Performance Tuning: operator-guide/performance-tuning.md
@@ -171,4 +174,4 @@ nav:
       - Database Tables: reference/database-tables.md
       - Docker Services: reference/docker-services.md
 
-copyright: Copyright &copy; 2025 OSINT Ukraine
+copyright: Copyright &copy; 2026 OSINT Ukraine

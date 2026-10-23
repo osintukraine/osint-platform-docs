@@ -7,7 +7,7 @@ Welcome to the OSINT Intelligence Platform documentation. This platform is a pro
 A fully self-hosted OSINT platform with:
 
 - **Telegram Archiving** - Real-time monitoring with folder-based channel management
-- **AI Classification** - Self-hosted LLM (Ollama) for importance scoring and topic classification
+- **AI Classification** - Self-hosted LLM (GPU gateway or Ollama) plus an embedding spam filter for topic, importance and archive decisions
 - **Entity Knowledge Graph** - OpenSanctions/Yente integration, Wikidata enrichment, custom entity lists
 - **Semantic Search** - pgvector embeddings for "find similar content" queries
 - **RSS Distribution** - "Subscribe to any search" with authenticated feeds

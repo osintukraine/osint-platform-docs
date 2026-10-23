@@ -4,7 +4,7 @@
 
 ## Overview
 
-The **Processor Service** is the core intelligence engine of the OSINT platform. It consumes messages from Redis, applies spam filtering, performs LLM-based classification, extracts entities, archives media, and persists structured intelligence to PostgreSQL.
+The **Processor Service** is the core intelligence engine of the OSINT platform. It consumes messages from Redis, applies the embedding spam filter, performs LLM-based classification, extracts entities, archives media, and persists structured intelligence to PostgreSQL.
 
 !!! info "Critical Path Service"
     Processor is on the **critical path** of message flow. Failures here mean messages don't reach the database. The service is designed for high reliability with automatic retries, graceful degradation, and comprehensive error handling.
@@ -94,18 +94,14 @@ Messages arrive via Redis Streams from the Listener service. Each message contai
 
 ### 2. Spam Filtering
 
-!!! warning "Critical Performance Optimization"
-    Spam filtering happens **before** expensive operations (LLM calls, media downloads) to save ~40% processing cost.
+Spam handling is layered, not a single call:
 
-The LLM classifier performs unified spam detection:
+1. **Embedding filter** (`embedding_spam_filter.py`): a multilingual sentence-embedding model (loaded from `/models`, see [Embedding Models](../../operator-guide/model-provisioning.md)) scores similarity to spam and off-topic examples. At or above `EMBEDDING_SPAM_THRESHOLD` (0.75) a message counts as spam.
+2. **Pre-filter before the LLM**: with LLM classification on, spam similarity at or above the admin setting `llm_prefilter_spam_similarity` (0.80 in production) is decided without calling the LLM.
+3. **LLM verdict**: spam types are crypto, gambling, scam, adult, advertising (including fundraising) and filler. A war report is never spam because of an attached ad or donation footer.
+4. **Later re-checks**: the backlog worker re-judges spam-flagged messages and fact-check audits a sample.
 
-- **Financial spam**: crypto, USDT, trading bots, casino
-- **Promotional spam**: channel ads, merchandise, "subscribe to"
-- **Off-topic spam**: memes, dating, horoscopes
-- **Forwarding spam**: viral chain messages
-- **Fundraising**: Donation requests (even for military equipment)
-
-Spam messages are stored with `is_spam=true` for review/analytics but skip enrichment pipeline.
+Spam messages are stored with `is_spam=true` for review but skip the enrichment pipeline. Details: [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_GATEWAY.md).
 
 ### 3. Message Routing
 
@@ -134,61 +130,13 @@ Entities stored as JSONB in `messages.entities` column.
 ### 5. LLM Classification
 
 !!! info "Unified Classifier"
-    Replaced legacy `rule_engine.py` + `spam_filter.py` with a **single LLM call** (v2→v7 prompt evolution).
+    One call returns spam, Ukraine relevance, topic, importance and the archive decision. The provider is `LLM_PROVIDER` (`openai` gateway in production, `ollama`, or `none`). Production runs prompt **v12** with structured JSON output; the `analysis` field is kept as the audit trail.
 
-**Model**: `qwen2.5:3b` via Ollama (local, €0/month)
+The processor chooses a path per message from runtime settings: embedding filter only (`realtime_use_embedding`), LLM guarded by the embedding filter (pre-filter, and fallback when the LLM is unavailable), or tier-based fallback without an LLM. After the LLM answers, code enforces: spam and non-relevant posts are never archived, a spam verdict on a conflict topic is overridden, and channel tiers decide how strict archiving is.
 
-**Classification Output**:
+Topics are `combat`, `equipment`, `casualties`, `movements`, `infrastructure`, `humanitarian`, `diplomatic`, `intelligence`, `propaganda`, `units`, `locations`, `general` (also used for spam) and `uncertain`, plus `pending` for messages not yet classified; importance is `high`, `medium` or `low`.
 
-```json
-{
-  "is_spam": false,
-  "spam_type": null,
-  "topic": "combat",
-  "importance": "high",
-  "should_archive": true,
-  "is_ukraine_relevant": true,
-  "reasoning": "Strike report on Novorossiysk port with confirmed damage"
-}
-```
-
-**Topics** (13 categories):
-
-- `combat`: Battles, strikes, attacks, explosions
-- `equipment`: Tanks, drones, weapons deliveries
-- `casualties`: KIA/WIA counts, losses
-- `movements`: Troop movements, convoys
-- `infrastructure`: Energy grid, bridges, civilian damage
-- `humanitarian`: Evacuations, aid, refugees
-- `diplomatic`: Sanctions, negotiations
-- `intelligence`: OSINT analysis, reconnaissance
-- `propaganda`: Russian disinformation, tabloid scandals
-- `units`: Brigade/battalion updates
-- `locations`: Frontline updates, city status
-- `general`: Mixed content, analysis
-- `uncertain`: Ambiguous content flagged for review
-
-**Importance Levels**:
-
-- `high`: Breaking news, significant events
-- `medium`: Routine updates, unconfirmed reports
-- `low`: Commentary, repetitive content
-
-**Chain-of-Thought** (v6+):
-
-The LLM outputs structured reasoning before JSON:
-
-```xml
-<analysis>
-ENTITIES: Novorossiysk (Russian port), "прилетіло" (strike landed)
-GEOGRAPHY: Crimea, Black Sea region
-INDICATORS: Military slang confirms combat, damage assessment present
-RELEVANCE: Direct Ukraine-Russia conflict reporting
-</analysis>
-{...json...}
-```
-
-This analysis is stored in `decision_log` table for audit trail.
+Full reference: [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_GATEWAY.md); prompt history: [LLM_PROMPTS.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_PROMPTS.md); operator setup: [LLM Gateway and Providers](../../operator-guide/external-llm.md).
 
 ### 6. Entity Matching
 
@@ -306,18 +254,14 @@ MINIO_SECURE=false
 ### LLM Classification
 
 ```bash
-# Ollama Configuration
-OLLAMA_BASE_URL=http://ollama:11434
-OLLAMA_MODEL=qwen2.5:3b
-OLLAMA_NUM_PREDICT=250           # Max tokens for classification
-OLLAMA_TEMPERATURE=0.1           # Low for deterministic JSON
-LLM_ENABLED=true                 # Master switch
-
-# Performance Tuning (Ollama container)
-OLLAMA_NUM_PARALLEL=1            # Sequential processing
-OLLAMA_MAX_LOADED_MODELS=2       # Memory limit
-OLLAMA_CPU_THREADS=6             # Match CPU allocation
+LLM_ENABLED=true                 # Master switch (admin setting llm_classification_enabled)
+LLM_PROVIDER=openai              # openai (gateway) | ollama | none
+LLM_GATEWAY_URL=...              # see the LLM Gateway page; lane keys and aliases are there too
+EMBEDDING_SPAM_MODEL=/models/paraphrase-multilingual-MiniLM-L12-v2
+EMBEDDING_SPAM_THRESHOLD=0.75
 ```
+
+With `LLM_PROVIDER=ollama`: `OLLAMA_BASE_URL` and `OLLAMA_MODEL`. Every variable is in [`.env.example`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/.env.example); runtime knobs are listed in [`runtime_keys.py`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/shared/python/config/runtime_keys.py).
 
 ### Translation (Optional)
 
@@ -335,65 +279,12 @@ PROCESSOR_REPLICAS=2             # Number of worker containers
 
 ## LLM Classification
 
-### Prompt Versioning
+Prompts are rows in the `llm_prompts` table with a `version` and an `is_active` flag; activate or roll back by flipping the flag (SQL in [LLM Gateway and Providers](../../operator-guide/external-llm.md#prompt-versions)). The military slang glossary (`military_slang` table) is injected through the `{{MILITARY_SLANG}}` placeholder by every caller.
 
-The classifier uses database-driven prompts with version history:
+!!! warning "Before changing prompts or parsing"
+    Read [LLM_PROMPTS.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_PROMPTS.md) (history, constraints) and [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_GATEWAY.md) first, and update LLM_PROMPTS.md after any change.
 
-| Version | Status | Date | Key Features |
-|---------|--------|------|--------------|
-| v2 | Legacy | - | Basic unified classifier |
-| v3 | Legacy | - | Tier-based architecture |
-| v4 | Legacy | - | Fixed relevance detection |
-| v5 | Legacy | - | Expert persona prompting |
-| v6 | Deprecated | 2025-11-29 | Chain-of-thought reasoning |
-| v7 | **Active** | 2025-11-30 | Topic definitions, air raid fix |
-
-!!! warning "Prompt Evolution History"
-    Before modifying prompts, **read `/docs/architecture/LLM_PROMPTS.md`** for full context.
-
-### 4-Tier Fallback Strategy
-
-The classifier implements graceful degradation:
-
-1. **Tier 1**: LLM classification with chain-of-thought (v7 prompt)
-2. **Tier 2**: JSON repair for truncated responses
-3. **Tier 3**: Regex extraction from partial JSON
-4. **Tier 4**: Conservative fallback (archive if tier=archive, skip otherwise)
-
-```python
-# Tier 4 fallback
-ClassificationResult(
-    is_spam=False,
-    topic="general",
-    importance="medium",
-    should_archive=(tier == "archive"),
-    reasoning="Fallback classification (LLM unavailable)"
-)
-```
-
-### Military Slang Glossary
-
-The prompt includes a curated glossary of Ukrainian/Russian military slang stored in `military_slang` table:
-
-**Ukrainian**:
-- `прилетіло` / `приліт` = strike landed (NOT "took off")
-- `бавовна` = explosion (lit. "cotton" - euphemism)
-- `двохсотий` / `200` = KIA
-- `трьохсотий` / `300` = WIA
-
-**Russian**:
-- `хлопок` = explosion (lit. "pop/clap")
-- `задымление` = smoke event (euphemism)
-- `бандерівці` = Ukrainians (derogatory)
-
-The glossary is dynamically injected via `{{MILITARY_SLANG}}` placeholder in prompts.
-
-### Performance
-
-- **Latency**: 1-3s per message (acceptable for real-time)
-- **Throughput**: ~20-30 messages/minute per worker (Ollama CPU-bound)
-- **Cost**: €0/month (self-hosted Ollama)
-- **Accuracy**: ~95% spam detection, ~90% topic classification
+If the LLM is unavailable the embedding verdict replaces the classifier's keyword guess; topic and importance stay `pending` until the [backlog worker](../../operator-guide/backlog-reclassification.md) classifies them. A per-message time limit (`PROCESSOR_MESSAGE_TIMEOUT_S`, default 600 s) cancels a hung message and logs where it waited.
 
 ## Media Archival
 
@@ -520,7 +411,7 @@ processing_duration_seconds{stage="total"}
 ### LLM Classification
 
 ```python
-llm_requests_total{model="qwen2.5:3b", status="success"}
+llm_requests_total{model="<alias>", status="success"}
 llm_request_duration_seconds{model="..."}
 osint_topics_total{topic="combat"}
 ```
@@ -599,7 +490,7 @@ pool_pre_ping=True  # Verify connections before use
 
 **Causes**:
 - Ollama service down
-- Model not loaded (`qwen2.5:3b`)
+- Model not loaded (Ollama) or gateway lane paused (see [Troubleshooting](../../operator-guide/troubleshooting.md#llm-gateway-problems))
 - JSON parsing errors (truncated responses)
 
 **Debug**:
@@ -610,7 +501,7 @@ docker-compose logs ollama
 
 # Test classification manually
 curl http://localhost:11434/api/chat -d '{
-  "model": "qwen2.5:3b",
+  "model": "<your OLLAMA_MODEL>",
   "messages": [{"role": "user", "content": "Test"}],
   "stream": false
 }'
@@ -626,7 +517,7 @@ docker-compose logs -f processor-worker
 docker-compose restart ollama
 
 # Pull model if missing
-docker-compose exec ollama ollama pull qwen2.5:3b
+docker-compose exec ollama ollama pull <your OLLAMA_MODEL>
 ```
 
 #### 2. Media Archival Failures
