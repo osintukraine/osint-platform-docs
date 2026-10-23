@@ -6,12 +6,13 @@ Detailed documentation of each microservice in the platform.
 
 ## Overview
 
-The OSINT Intelligence Platform consists of **15+ application services** organized by function:
+The OSINT Intelligence Platform consists of **15+ application services** organized by function. The canonical service, profile and port list is [Docker Services](../../reference/docker-services.md).
 
 - **Core Pipeline**: Listener → Processor → Enrichment
 - **Data Access**: API → Frontend
 - **Supporting**: RSS Ingestor, OpenSanctions, Notifier
-- **Infrastructure**: PostgreSQL, Redis, MinIO, Ollama
+- **Infrastructure**: PostgreSQL, Redis, MinIO, LLM gateway or Ollama
+- **Background workers**: media-worker, media-sync, backlog-worker
 
 ```mermaid
 graph LR
@@ -29,7 +30,7 @@ graph LR
 
     subgraph "Enrichment"
         DB --> E[Enrichment]
-        E --> LLM[Ollama]
+        E --> LLM[LLM gateway / Ollama]
         E --> DB
     end
 
@@ -67,8 +68,8 @@ graph LR
 
 | Aspect | Details |
 |--------|---------|
-| **Function** | 9-stage pipeline: spam → routing → LLM → entities → media → DB |
-| **Tech** | Redis consumer, Ollama, MinIO, PostgreSQL |
+| **Function** | Pipeline: embedding spam filter → LLM classification → routing → entities → media → DB |
+| **Tech** | Redis consumer, LLM gateway or Ollama, embedding spam filter, MinIO, PostgreSQL |
 | **Target** | <1s per message latency |
 | **Files** | `message_processor.py` (1278 lines), `llm_classifier.py` (1182 lines) |
 
@@ -83,9 +84,9 @@ graph LR
 | Aspect | Details |
 |--------|---------|
 | **Function** | 32 task types across 12 worker pools |
-| **Tech** | Coordinator + Router pattern, Redis Streams, Ollama |
+| **Tech** | Coordinator + Router pattern, Redis Streams, LLM gateway / Ollama |
 | **Speed** | Background - can be slow (hours OK) |
-| **LLM Tasks** | Sequential execution prevents Ollama contention |
+| **LLM Tasks** | Dedicated workers per task; fact-check and RSS validation use the gateway |
 
 [:octicons-arrow-right-24: Full Documentation](enrichment.md)
 
@@ -98,7 +99,7 @@ graph LR
 | Aspect | Details |
 |--------|---------|
 | **Function** | Re-classifies sampled messages, compares with original |
-| **Tech** | Stratified sampling, Ollama, confidence-based actions |
+| **Tech** | Stratified sampling, LLM gateway audit lane, confidence-based actions |
 | **Actions** | Auto-reclassify, auto-hide off-topic, queue for review |
 | **Admin UI** | `/admin/fact-check` for human review |
 
@@ -220,13 +221,13 @@ S3-compatible object storage for archived media.
 - **Paths**: Content-addressed `media/{hash[:2]}/{hash[2:4]}/{hash}.{ext}`
 - **Deduplication**: SHA-256 prevents storing duplicates
 
-### Ollama
+### LLM
 
-Self-hosted LLM inference server.
+Production uses an OpenAI-compatible gateway on a GPU host (`LLM_PROVIDER=openai`) with three lanes (realtime, audit, batch). Local Ollama is the non-GPU option and also serves search-query embeddings.
 
-- **Primary model**: `qwen2.5:3b` (superior RU/UK language support)
-- **Fallback**: `llama3.2:3b`
-- **Tasks**: Classification, tagging, validation, event extraction
+- **Operator guide**: [LLM Gateway and Providers](../../operator-guide/external-llm.md)
+- **Developer reference**: [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_GATEWAY.md)
+- **Also**: [Backlog Re-classification](../../operator-guide/backlog-reclassification.md), [Media Lanes](../../operator-guide/media-lanes.md), [Embedding Models](../../operator-guide/model-provisioning.md)
 
 ---
 
@@ -271,7 +272,7 @@ docker-compose --profile enrichment up -d --scale enrichment-fast-pool=2
 | Processor | Medium | 1GB | 2-8 workers |
 | Enrichment | High | 2GB | By worker type |
 | API | Low | 512MB | 1-4 instances |
-| Ollama | High | 8GB+ | Single (CPU inference) |
+| Ollama (if used) | High | 8GB+ | Single (CPU inference) |
 
 ---
 

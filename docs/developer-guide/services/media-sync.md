@@ -8,6 +8,9 @@ The Media Sync Service handles the asynchronous transfer of media files from the
 
 **Pipeline Position**: `Processor → Local Buffer → Media Sync → MinIO → Hetzner Storage`
 
+!!! note "Media lane"
+    With the `media_lane_enabled` admin setting on, the `media-worker` service (not the processor) downloads media into the buffer in the background. See [Media Lanes](../../operator-guide/media-lanes.md).
+
 **Key Technologies**:
 
 - **Redis**: Job queue with BRPOP (blocking pop)
