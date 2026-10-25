@@ -9,19 +9,19 @@ The Frontend Service is a modern React-based web application built with Next.js 
 **Key Capabilities:**
 - Full-text and semantic search across 254+ channels
 - AI-enriched message cards with 3 density modes (compact, detailed, immersive)
-- Interactive graph visualizations (Cytoscape, ReactFlow)
+- Interactive graph visualizations (Sigma.js + graphology, ReactFlow)
 - Real-time data fetching with React Query
 - Dark/light theme support with CSS variable theming
 - RSS/Atom/JSON feed subscription with signed URLs
 
 **Technology Stack:**
-- **Framework**: Next.js 14.2 (App Router architecture)
+- **Framework**: Next.js 15.5 (App Router architecture), React 19
 - **Runtime**: Bun 1.0 (faster than Node.js)
 - **Language**: TypeScript 5
 - **Styling**: TailwindCSS 3.4 with custom CSS variables
 - **State Management**: TanStack Query (React Query) v5
-- **Graph Visualization**: Cytoscape.js 3.33, ReactFlow 11.11
-- **Charts**: Recharts 2.13
+- **Graph Visualization**: Sigma.js 3 + graphology (ForceAtlas2 layout) for entity and social graphs; ReactFlow 11 for the News timeline (Cytoscape.js was replaced in January 2026)
+- **Charts**: Recharts 3
 - **Authentication**: Ory Kratos integration (placeholder)
 - **Icons**: Lucide React
 
@@ -274,27 +274,33 @@ import { SearchFilters } from '@/components/SearchFilters';
 
 ### EntityRelationshipGraph
 
-**Purpose:** Interactive Cytoscape.js graph for entity relationships.
+**Purpose:** Interactive Sigma.js graph (graphology, ForceAtlas2 layout) of an entity's relationships.
 
 **Features:**
 - Displays corporate, political, and personal relationships
-- Color-coded relationship types
-- Node sizing by connection count
-- Edge labels with relationship names
-- Layout algorithms (cose-bilkent, fcose)
+- Color-coded relationship types, theme-aware palette
+- Category filters
 - Export as PNG
 - Zoom/pan controls
+
+**Data:** loads its own data through `useEntityRelationships` →
+`GET /api/entities/{source}/{id}/relationships` (Wikidata SPARQL + OpenSanctions properties, cached 7 days).
 
 **Usage:**
 ```typescript
 import { EntityRelationshipGraph } from '@/components/EntityRelationshipGraph';
 
 <EntityRelationshipGraph
-  source={entitySource}
+  source="curated"          // or "opensanctions"
   entityId={entityId}
-  relationships={relationshipsData}
+  entityName={entityName}
 />
 ```
+
+The message page's **Network → Entities** tab (`components/tabs/NetworkGraphView.tsx`) and **Network → Social**
+tab (`components/social-graph/SocialNetworkGraph.tsx`) use the same Sigma.js + graphology stack. See
+[Architecture → Graph data](../architecture.md#6-graph-data-on-postgresql-pgvector) for where each graph's data
+comes from.
 
 ### HeaderNav
 

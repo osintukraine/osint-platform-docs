@@ -244,6 +244,42 @@ The CPU-era alternative was two Ollama instances (`ollama` and `ollama-batch`); 
 
 Details: [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_GATEWAY.md) and [LLM Gateway and Providers](../operator-guide/external-llm.md).
 
+### 6. Graph Data on PostgreSQL + pgvector
+
+**Decision**: Build every graph from PostgreSQL (tables, nightly materialized views) and pgvector similarity, in
+the API, per request. No separate graph database.
+
+**How each graph is built** (`services/api/src/routers`):
+
+| Graph (where it is shown) | Built from | Endpoint |
+|---|---|---|
+| Message entity network (message page → Network → Entities) | `message_tags` (classifier / AI tagging: keywords, entities, places), `message_entities` → `curated_entities`, OpenSanctions matches, related posts by pgvector similarity | `GET /api/messages/{id}/network` |
+| Social graph per message (Network → Social) | `messages`, `message_replies`, `message_comments`, `message_reactions`, `channel_interactions` | `GET /api/social-graph/messages/{id}` |
+| Channel network | pgvector cosine similarity between channels' message embeddings | `GET /api/channels/{id}/network` |
+| Channel influence | materialized view `channel_influence_network` | `GET /api/social-graph/influence-network` |
+| Virality | materialized view `top_forwarded_messages` | `GET /api/social-graph/virality/top-forwarded` |
+| Entity relationships (entity page) | Wikidata SPARQL + OpenSanctions properties, cached 7 days on the entity row | `GET /api/entities/{source}/{id}/relationships` |
+
+The analytics service refreshes the materialized views nightly at 03:00 UTC (`message_social_graph`,
+`channel_influence_network`, `top_influencers`, `top_forwarded_messages`, `unified_message_entities`).
+`message_social_graph` is refreshed but not yet read by any endpoint. There is no `entity_cooccurrence` table, and
+the graphs use no recursive CTEs and no NetworkX: they are one- or two-hop queries.
+
+**State of the data (production, 2026-10-25)**: message tags 772k; comments 409k; reactions 53.8M;
+`message_social_graph` 662k rows; forwards 1.6k and channel interactions 505 (their producers were restored on
+2026-10-24 after the May–September gap, so they grow daily); curated entity matches cover ~1% of posts;
+`entity_relationships` 5 rows.
+
+**Rationale**:
+- The queries are shallow (one or two hops, per message, channel or entity) and small (hundreds to low thousands
+  of edges), next to a relational archive of millions of messages
+- Similarity edges come from pgvector next to the data; a separate graph store would have to copy and sync them
+- The limit today is data coverage (entity matching, relationships, forward history), not the query engine
+
+**When to revisit**: a dedicated graph engine (e.g. FalkorDB, Neo4j) earns its place only for multi-hop work at
+scale — path finding between channels, community detection over the whole forward network — and only once a
+concrete query is too slow in PostgreSQL. Until then, improve coverage of the existing schema.
+
 ---
 
 ## Technology Stack
@@ -265,12 +301,13 @@ Details: [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-pla
 
 | Technology | Purpose | Why Chosen |
 |-----------|---------|------------|
-| **Next.js 14** | React framework | Server-side rendering, file-based routing |
-| **React 18** | UI library | Component reusability, large ecosystem |
+| **Next.js 15** | React framework | Server-side rendering, file-based routing |
+| **React 19** | UI library | Component reusability, large ecosystem |
 | **TailwindCSS** | Styling | Utility-first, rapid development |
 | **AG Grid Community** | Data tables | High-performance virtual scrolling (1M+ rows) |
 | **Recharts** | Charts/graphs | Simple API, responsive |
-| **D3.js** | Network visualizations | Force-directed graphs for entity relationships |
+| **Sigma.js + graphology** | Network visualizations | WebGL rendering of entity, channel and social graphs; ForceAtlas2 layout (replaced Cytoscape.js in January 2026) |
+| **ReactFlow** | News timeline | Node/edge layout of articles and correlated posts |
 | **Jotai** | State management | Lightweight, atomic state |
 | **React Query** | Data fetching | Caching, background refetch |
 

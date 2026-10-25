@@ -248,7 +248,7 @@ External news articles mentioning entity:
 Interactive graph of entity relationships from multiple sources:
 
 **Display:**
-- Cytoscape network visualization
+- Network visualization (Sigma.js, ForceAtlas2 layout)
 - Entity nodes connected by relationship types
 - Force-directed layout (default)
 - Zoom, pan, and layout controls
