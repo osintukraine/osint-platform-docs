@@ -17,7 +17,9 @@ Located at the top of the Browse Messages page, the search bar supports:
 
 **Full-Text Search**
 ```
-Search across original content and translations
+Search across original content and translations.
+Searching in English also finds posts that exist only in Russian or
+Ukrainian ("Bakhmut" finds "Бахмут"), and the other way round.
 Examples:
 - "T-90 tank destroyed"
 - "Avdiivka offensive"
@@ -27,6 +29,7 @@ Examples:
 **Semantic Search** (AI-Powered)
 - Toggle "Use Semantic Search" checkbox
 - Finds messages by meaning, not just keywords
+- Works for single names too (e.g. "Bakhmut"), though keyword search is still more exact
 - Example: "military vehicle damage" finds mentions of tanks, APCs, artillery
 
 ```
@@ -185,7 +188,7 @@ Access via `/search` or the top navigation bar.
 
 **Keywords Mode** (📝)
 - Fast PostgreSQL full-text search
-- Matches exact words in original or translated content
+- Matches words in original or translated content, in English, Russian and Ukrainian
 - Good for specific terms, names, locations
 
 **Semantic Mode** (🧠)
@@ -193,7 +196,7 @@ Access via `/search` or the top navigation bar.
 - Finds conceptually related content
 - Slower but more comprehensive
 
-Toggle between modes before searching.
+Toggle between modes before searching. Below the search box you can also pick a location (an optional filter): results are limited to messages geolocated around that place.
 
 ### Search Tabs
 
@@ -209,8 +212,7 @@ Results are organized by content type:
 - Up to 20 results in focused view
 
 **Events Tab**
-- Curated intelligence events
-- Structured reports from ODIN
+- Events detected from RSS news articles, with timestamps and locations
 
 **RSS Articles Tab**
 - External news articles
@@ -241,15 +243,12 @@ Search timing displayed in top-right:
 
 ## Advanced Search Techniques
 
-### Boolean Operators
+### Multi-Word Queries
 
-Full-text search supports PostgreSQL operators:
+Keyword search treats what you type as plain words: a message must contain **all** of them, in any order. Boolean operators (`&`, `|`, `!`), quoted phrases and wildcards are not interpreted, so use filters (channel, topic, date) to narrow results instead.
 
 ```
-tank & destroyed     → Both words must appear
-tank | vehicle       → Either word
-tank & !russian      → "tank" but not "russian"
-"exact phrase"       → Phrase matching
+tank destroyed       → messages containing both "tank" and "destroyed"
 ```
 
 ### Semantic Search Tips
@@ -260,9 +259,9 @@ tank & !russian      → "tank" but not "russian"
 - Situations: "urban combat footage"
 
 **Less effective:**
-- Single words: "tank" (use text search)
-- Proper nouns: "Bakhmut" (use text search)
+- Single common words: "tank" (use text search)
 - Exact quotes: Use text search instead
+- Very short queries return fewer matches because semantic results must reach a minimum similarity
 
 ### Combining Filters
 
@@ -309,9 +308,10 @@ See [RSS Feeds](rss-feeds.md) for detailed feed management.
 
 Browse messages with pagination controls at the bottom:
 
-- **Items per page**: 20, 50, 100
+- **Items per page**: 20 by default
 - **Navigation**: Previous, Next, Jump to page
 - **Total count**: Shows filtered results count
+- **Depth limit**: Browsing stops after the first 10,000 results. Narrow the filters (for example the date range) to reach older items.
 
 ## Performance Tips
 
@@ -328,7 +328,6 @@ Browse messages with pagination controls at the bottom:
 ### Large Result Sets
 - Apply topic filter to narrow scope
 - Use importance filter to prioritize
-- Increase items per page to reduce clicks
 
 ## Troubleshooting
 
@@ -350,7 +349,6 @@ Browse messages with pagination controls at the bottom:
 - Reduce date range
 - Filter by channel first
 - Use text search instead of semantic
-- Avoid wildcard searches
 
 ### Unexpected Results
 
@@ -362,7 +360,6 @@ Browse messages with pagination controls at the bottom:
 ## Keyboard Shortcuts
 
 - `Enter` in search box → Perform search
-- `Esc` → Clear search focus
 - Page controls work with keyboard navigation
 
 ---

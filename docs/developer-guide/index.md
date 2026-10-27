@@ -12,10 +12,10 @@ This guide covers the platform's architecture, development patterns, and contrib
 
 - [Architecture Overview](architecture.md) - System design and component interactions
 - [Services Deep Dive](services/index.md) - Detailed documentation of each service
-- [Shared Libraries](shared-libraries.md) - Common code and utilities (58 Python files)
-- [Database Schema](database-schema.md) - PostgreSQL schema (45 tables, 4658 lines)
+- [Shared Libraries](shared-libraries.md) - Common code and utilities (90+ Python files)
+- [Database Schema](database-schema.md) - PostgreSQL schema (60+ tables, `init.sql` plus numbered migrations)
 - [Adding Features](adding-features.md) - How to extend the platform
-- [LLM Integration](llm-integration.md) - Working with Ollama and prompts
+- [LLM Integration](llm-integration.md) - Working with the LLM gateway and prompts
 - [Frontend API Patterns](frontend-api-patterns.md) - Next.js API client usage
 - [Testing Guide](testing-guide.md) - Test patterns and fixtures
 - [Database Migrations](database-migrations.md) - Schema change workflow
@@ -36,11 +36,11 @@ This guide covers the platform's architecture, development patterns, and contrib
 | Layer | Technology | Version |
 |-------|------------|---------|
 | **Backend** | Python | 3.11+ |
-| **API Framework** | FastAPI | 0.109.0 |
-| **Database** | PostgreSQL + pgvector | 16+ |
-| **Message Queue** | Redis Streams | 7+ |
-| **Frontend** | Next.js | 14.2 |
-| **LLM Inference** | Ollama | Latest |
+| **API Framework** | FastAPI | 0.127 |
+| **Database** | PostgreSQL 16 + pgvector + PostGIS | 16 |
+| **Message Queue** | Redis Streams | 7.4 |
+| **Frontend** | Next.js 15 / React 19 | 15.5 |
+| **LLM Inference** | OpenAI-compatible gateway (LiteLLM + vLLM); Ollama optional | n/a |
 | **Object Storage** | MinIO | Latest |
 | **Deployment** | Docker Compose | v2 |
 
@@ -69,7 +69,7 @@ This guide covers the platform's architecture, development patterns, and contrib
 
     ---
 
-    Deep dive into each microservice (15+ services)
+    Deep dive into each microservice
 
     [:octicons-arrow-right-24: Services Guide](services/index.md)
 
@@ -85,7 +85,7 @@ This guide covers the platform's architecture, development patterns, and contrib
 
     ---
 
-    45 tables with pgvector embeddings
+    60+ tables with pgvector embeddings
 
     [:octicons-arrow-right-24: Schema Guide](database-schema.md)
 
@@ -101,7 +101,7 @@ This guide covers the platform's architecture, development patterns, and contrib
 
     ---
 
-    Ollama prompts and classification
+    Gateway lanes, prompts and classification
 
     [:octicons-arrow-right-24: LLM Guide](llm-integration.md)
 
@@ -138,8 +138,8 @@ docker-compose up -d
 # View logs
 docker-compose logs -f api processor
 
-# Run tests
-docker-compose exec api pytest
+# Run tests (from the repo root, see the Testing Guide)
+pytest
 
 # Rebuild after changes
 docker-compose build --no-cache api
@@ -152,10 +152,10 @@ docker-compose up -d api
 
 ### Python
 
-- **Style**: PEP 8, enforced by `ruff`
+- **Style**: PEP 8, enforced by `ruff` (line length 100, `isort` rules included) with `mypy` for types
 - **Type hints**: Required for public functions
 - **Docstrings**: Google style
-- **Imports**: Sorted by `isort`
+- **Imports**: Sorted by ruff's `I` rules
 
 ```python
 async def process_message(
@@ -215,7 +215,7 @@ TELEGRAM_API_HASH=abcdef123456
 
 # Optional (for full functionality)
 DEEPL_API_KEY=your_key  # Translation
-YENTE_API_KEY=your_key  # OpenSanctions
+LLM_GATEWAY_URL=https://gateway.example/v1  # OpenAI-compatible LLM gateway (LLM_PROVIDER=openai)
 ```
 
 ### Hot Reload

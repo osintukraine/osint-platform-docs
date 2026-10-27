@@ -47,18 +47,17 @@ This guide is organized into four main sections:
 User authentication and identity management using Ory Kratos or JWT.
 
 - 4 authentication modes (None, JWT, Cloudron, Ory)
-- Session management with Redis
-- OAuth2 integration (Google, GitHub)
-- Feed token authentication for RSS
+- Kratos sessions, API keys
+- OAuth2 integration (Google, GitHub; needs credentials in the Kratos config)
+- Signed feed tokens for RSS
 - Password policies and MFA
 
 ### [Authorization](authorization.md)
 Role-based access control and permissions management.
 
-- Admin vs user roles
-- API endpoint protection
-- Feed token scopes
-- Future: Ory Keto integration
+- Roles (admin, analyst, viewer) from Kratos identity metadata
+- API endpoint protection (Oathkeeper rules plus FastAPI dependencies)
+- API key scopes and signed feed tokens
 
 ### [CrowdSec Integration](crowdsec.md)
 Intrusion prevention and threat detection for production deployments.
@@ -78,7 +77,7 @@ Production security best practices and deployment checklist.
 - Secrets management
 - Backup encryption
 - Security monitoring
-- **NEW**: Media storage security (MinIO pre-signed URLs)
+- Media storage security (MinIO pre-signed URLs)
 
 ### [Security Changelog](security-changelog.md)
 Track security improvements and vulnerability fixes.
@@ -110,15 +109,17 @@ Use this checklist to verify your deployment meets minimum security requirements
 - [ ] **HTTPS enabled** - Configure TLS certificates (Let's Encrypt)
 - [ ] **Firewall rules** - Block direct database/Redis access from internet
 - [ ] **CrowdSec deployed** - Enable intrusion prevention (production)
-- [ ] **Password policies** - Enforce strong passwords (12+ chars, bcrypt)
+- [ ] **Password policies** - Kratos default policy (8+ chars, breach check, bcrypt); tighten if needed
 - [ ] **Secrets not in git** - Verify `.env` is gitignored
 - [ ] **Backup encryption** - Encrypt database backups
-- [ ] **Audit logging** - Enable authentication event logging
+- [ ] **Audit logging** - Admin actions go to `admin_audit_log`; keep Kratos/Caddy logs
 - [ ] **Network segmentation** - Use Docker networks to isolate services
 
 ### Production Security Checklist
 
 - [ ] **AUTH_PROVIDER=ory** or **jwt** (never "none")
+- [ ] **FEED_AUTH_REQUIRED=true** - Signed RSS feed URLs (default in compose)
+- [ ] **Published ports** - Only Caddy 80/443 reachable from outside (Docker bypasses UFW)
 - [ ] **AUTH_REQUIRED=true** - Enforce authentication
 - [ ] **POSTGRES_PASSWORD** - Strong random password
 - [ ] **REDIS_PASSWORD** - Strong random password
@@ -127,7 +128,7 @@ Use this checklist to verify your deployment meets minimum security requirements
 - [ ] **KRATOS_SECRET_CIPHER** - Exactly 32 characters
 - [ ] **MINIO_ACCESS_KEY** - Strong credentials
 - [ ] **MINIO_SECRET_KEY** - Minimum 32 characters
-- [ ] **CrowdSec API keys** - Generated and configured
+- [ ] **CrowdSec API keys** - Generated (`./scripts/setup-crowdsec.sh`) and configured
 - [ ] **Regular security updates** - Container image updates enabled
 
 ## Security Features by Deployment Mode
@@ -145,11 +146,11 @@ Use this checklist to verify your deployment meets minimum security requirements
 
 ### Production Mode
 
-- **Authentication**: Required (Ory Kratos or JWT)
+- **Authentication**: Required for writes and personal features (Ory Kratos or JWT)
 - **HTTPS**: Required (Caddy with Let's Encrypt)
 - **Firewall**: Host firewall + CrowdSec
 - **Secrets**: Strong random keys (256-bit minimum)
-- **Monitoring**: Mandatory (Prometheus + Grafana)
+- **Monitoring**: Strongly recommended (Prometheus + Grafana)
 
 ## Threat Model
 
@@ -177,14 +178,15 @@ The OSINT Intelligence Platform is designed to protect against:
 
 - **Ory Kratos** - Production-grade identity management
 - **JWT tokens** - Lightweight authentication for small deployments
-- **Session cookies** - Redis-backed session storage
+- **Session cookies** - Kratos sessions stored in PostgreSQL
 - **Feed tokens** - HMAC-signed URLs for RSS subscriptions
+- **API keys** - `ak_` bearer keys with scopes
 
 ### Authorization Layer
 
 - **Role-based access** - Admin vs authenticated vs anonymous
-- **Endpoint protection** - FastAPI dependency injection
-- **Feed token scopes** - Per-token permissions for RSS feeds
+- **Endpoint protection** - Oathkeeper rules and FastAPI dependency injection
+- **Public read model** - OSINT data is readable without login by design
 
 ### Network Security
 
@@ -195,10 +197,10 @@ The OSINT Intelligence Platform is designed to protect against:
 
 ### Data Security
 
-- **PostgreSQL** - Row-level security (future)
-- **MinIO** - Encrypted object storage
-- **Redis** - Password-protected sessions
-- **Backups** - GPG-encrypted database dumps
+- **PostgreSQL** - Network-isolated on the backend Docker network (password auth)
+- **MinIO** - Object storage with optional pre-signed URLs for media
+- **Redis** - Password-protected (`REDIS_PASSWORD`)
+- **Backups** - `scripts/backup.sh` writes unencrypted dumps; encrypt them yourself before off-site copies
 
 ## Getting Help
 

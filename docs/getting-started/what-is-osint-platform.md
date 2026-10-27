@@ -12,7 +12,7 @@ The platform solves a critical problem for OSINT analysts: **Telegram content di
 : Monitor hundreds of Telegram channels simultaneously with automatic spam filtering, deduplication, and content-addressed media storage. Messages and media are permanently archived before they disappear.
 
 **Enrich with AI**
-: Every message is analyzed by multiple AI models to classify importance (high/medium/low), extract entities (people, locations, equipment), detect sentiment, and generate semantic embeddings for similarity search.
+: Every message is analyzed by AI to classify importance (high/medium/low), extract entities (people, locations, equipment), detect sentiment, and generate semantic embeddings for similarity search.
 
 **Search Intelligently**
 : Full-text search, semantic similarity, and 15+ filters let you find exactly what you need across years of archived content. Search by meaning, not just keywords.
@@ -45,7 +45,7 @@ Study information operations, propaganda patterns, and social networks with comp
 **No admin panel required.** Manage channels directly in your Telegram app using folders:
 
 - Drag channels to `Archive-UA` folder → LLM archives most content (lenient mode)
-- Drag to `Monitor-RU` folder → LLM archives only high-value OSINT (strict mode)
+- Drag to `Monitor-RU` folder → LLM archives only medium- and high-importance content (strict mode)
 - Platform detects changes within 5 minutes automatically
 
 This folder-based approach takes **30 seconds** instead of 10 minutes of SSH/config editing.
@@ -59,7 +59,7 @@ The platform talks to an LLM you run yourself: a local Ollama model on modest ha
 
 ### Cost-Effective Architecture
 
-Self-hosted design minimizes ongoing costs. Aggressive spam filtering (95%+ accuracy) and content-addressed deduplication save 75-80% on storage costs compared to naive archival.
+Self-hosted design minimizes ongoing costs. Layered spam filtering (embedding filter plus LLM) and content-addressed deduplication keep storage far below naive archival.
 
 ### Battle-Tested Design
 
@@ -67,28 +67,28 @@ Built from years of production experience monitoring conflict zones. Spam patter
 
 ### Privacy-First Design
 
-Self-hosted PostgreSQL, MinIO, Ollama - no cloud dependencies. Your data never leaves your infrastructure. Perfect for air-gapped deployments or sensitive research.
+Self-hosted PostgreSQL, MinIO and LLM (Ollama or your own GPU gateway) - no cloud AI dependencies. Your data never leaves your infrastructure. Perfect for air-gapped deployments or sensitive research.
 
 ## Key Features
 
 ### Intelligence Collection
 
 - **Scalable Monitoring**: Monitor hundreds of channels simultaneously
-- **Real-Time Ingestion**: Sub-second message latency
+- **Real-Time Ingestion**: Messages are queued as they arrive and processed within seconds
 - **Historical Backfill**: Fetch messages from any date (configurable)
 - **Media Archival**: Content-addressed storage with SHA-256 deduplication
 - **Automatic Discovery**: Platform finds new channels via forward chain analysis
-- **Multi-Account Support**: Separate accounts for different source regions
+- **Multi-Account Support**: Optional separate Telegram accounts per source region (`TELEGRAM_MODE=multi`, `multi-account` profile: a listener, media worker, enrichment and analytics per account)
 
 ### AI/ML Enrichment
 
-- **Multi-Model Classification**: 6 LLM models with runtime switching
+- **LLM Classification**: One model call decides spam, relevance, topic, importance and whether to archive; the model comes from your own LLM provider
 - **Importance Levels**: High/medium/low classification for filtering
-- **Spam Filter**: >95% accuracy, battle-tested rules
+- **Spam Filter**: Embedding pre-filter plus LLM verdict
 - **Entity Extraction**: Military units, equipment, locations, coordinates
 - **Semantic Embeddings**: 384-dim vectors for similarity search
 - **AI Tagging**: Keywords, topics, emotions, urgency
-- **Translation**: DeepL Pro (free) + Google Translate fallback
+- **Translation**: DeepL (free API tier) with Google Translate as fallback for most errors
 
 ### Entity Knowledge Graph
 
@@ -102,9 +102,10 @@ Self-hosted PostgreSQL, MinIO, Ollama - no cloud dependencies. Your data never l
 
 - **Full-Text Search**: PostgreSQL GIN index, <100ms queries
 - **Semantic Search**: pgvector + HNSW index for meaning-based search
-- **Hybrid Search**: Combine text and semantic ranking
+- **Unified Search**: One query across messages, events, RSS articles and entities, in keyword or semantic mode
 - **15+ Filters**: Date range, channel, media type, importance, tags, sentiment
-- **Network Graph**: Visualize channel relationships and forward chains
+- **Social Graph**: Per-message graph of author, forwards, replies, comments and reactions
+- **Map**: Geolocated messages and event clusters
 
 ### Intelligence Distribution
 
@@ -118,7 +119,6 @@ Self-hosted PostgreSQL, MinIO, Ollama - no cloud dependencies. Your data never l
 - **NocoDB Admin UI**: Airtable-like interface over PostgreSQL
 - **Grafana Dashboards**: Pre-configured monitoring views
 - **Prometheus Metrics**: All services instrumented
-- **Dozzle Logs**: Real-time Docker log viewer
 - **Health Checks**: Automated service monitoring
 
 ## Use Cases
@@ -159,8 +159,9 @@ The platform is organized into containerized service layers:
 
 - **Core Infrastructure**: PostgreSQL 16 + pgvector, Redis 7, MinIO, Ollama (search embeddings)
 - **Application Layer**: Listener, Processor, Enrichment workers, API, Frontend
-- **Monitoring Stack**: Prometheus, Grafana, AlertManager, ntfy, Exporters
+- **Monitoring Stack** (optional profile): Prometheus, Grafana, Loki, AlertManager, ntfy, exporters
 - **Authentication** (optional): Ory Kratos, Ory Oathkeeper
+- **Entity Services** (optional): Yente (OpenSanctions matching), entity ingestion, NocoDB admin UI
 
 ### Processing Pipeline
 
@@ -201,7 +202,7 @@ Storage needs depend on:
 - **Channel activity** (messages per day)
 - **Media types** (text-only vs image/video heavy)
 - **Spam filtering rate** (typically removes 80-90% of content)
-- **Deduplication savings** (typically 50-70% for forwarded content)
+- **Deduplication savings** (largest for forwarded content)
 
 Use the spam filter and content-addressed storage to significantly reduce storage requirements.
 
@@ -217,8 +218,7 @@ Use the spam filter and content-addressed storage to significantly reduce storag
 
 ### Frontend
 
-- **Next.js 14**: React framework with App Router
-- **Bun**: Fast JavaScript runtime
+- **Next.js 15**: React framework with App Router
 - **Tailwind CSS**: Utility-first styling
 - **shadcn/ui**: Accessible component library
 
@@ -227,7 +227,6 @@ Use the spam filter and content-addressed storage to significantly reduce storag
 - **Prometheus**: Metrics collection and alerting
 - **Grafana 11**: Visualization and dashboards
 - **ntfy**: Self-hosted notification delivery
-- **Dozzle**: Real-time log viewer
 
 ### Entity Data Sources
 

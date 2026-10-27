@@ -25,7 +25,7 @@ This mirrors industry standards used by GitLab, Mastodon, and other mature platf
 
 1. **Fresh installs**: Clean, fast bootstrap from `init.sql`
 2. **Production updates**: Safe incremental migrations without data loss
-3. **Schema tracking**: `schema_migrations` table tracks applied changes
+3. **Schema tracking**: `schema_migrations` table tracks applied changes (keyed by migration file name)
 4. **Predictable**: No ORM magic, pure SQL you can review
 5. **Rollback**: Each migration includes DOWN instructions
 
@@ -40,7 +40,7 @@ This mirrors industry standards used by GitLab, Mastodon, and other mature platf
 - Creates all tables, indexes, constraints
 - Defines all functions and triggers
 - Inserts seed data (prompts, slang, etc.)
-- ~3000+ lines (complete schema)
+- ~7,200 lines (complete schema)
 - Used for fresh deployments
 
 ### Migration Files
@@ -48,7 +48,7 @@ This mirrors industry standards used by GitLab, Mastodon, and other mature platf
 **`infrastructure/postgres/migrations/`**
 
 - `000_template.sql` - Template for new migrations
-- `001_*.sql`, `002_*.sql`, etc. - Incremental migrations
+- `001_*.sql` ... `058_*.sql` (and counting) - Incremental migrations. Numeric prefixes are not unique (there are several `002_*` and `012_*` files), so the *file name* is the identity
 - `README.md` - Migration workflow documentation
 
 ### Migration Tracking
@@ -57,13 +57,15 @@ This mirrors industry standards used by GitLab, Mastodon, and other mature platf
 
 ```sql
 CREATE TABLE schema_migrations (
-    version VARCHAR(50) PRIMARY KEY,      -- '001', '002', etc.
+    version VARCHAR(50) PRIMARY KEY,      -- file name without .sql, e.g. '058_messages_pending_enrichment_indexes'
     description TEXT NOT NULL,            -- Human-readable description
     applied_at TIMESTAMPTZ DEFAULT NOW(), -- When applied
     checksum VARCHAR(64),                 -- Optional integrity check
     applied_by VARCHAR(100)               -- Who ran it
 );
 ```
+
+`scripts/migrate.sh` records each migration it applies, using the file name stem as `version`. Legacy rows hold only the numeric prefix (`'010'`) and still count as applied. Recent migrations therefore do not insert into `schema_migrations` themselves.
 
 ---
 
@@ -76,6 +78,10 @@ Use `init.sql` directly - no migrations needed:
 ```bash
 docker-compose up -d postgres
 # init.sql runs automatically, schema_migrations seeded with version '000'
+
+# init.sql already contains every migration: mark the files as applied,
+# otherwise migrate.sh would try to replay them
+./scripts/migrate.sh --baseline
 ```
 
 ### Production Update (Existing Data)
@@ -101,23 +107,24 @@ Use the migration system:
 
 ```bash
 cd infrastructure/postgres/migrations
-cp 000_template.sql 001_add_user_preferences.sql
+# Take the next free number: ls | tail -3  (currently 058, so use 059)
+cp 000_template.sql 059_add_user_preferences.sql
 ```
 
 ### Step 2: Edit the Migration
 
 ```sql
 -- ============================================================================
--- Migration: 001 - Add user preferences table
+-- Migration: 059 - Add user preferences table
 -- ============================================================================
--- Date: 2025-01-15
--- Author: @username
+-- Date: 2026-10-28
+-- Author: your name
 --
 -- Description:
 --   Adds user_preferences table for storing UI preferences per user.
 --
 -- Prerequisites:
---   - None (first migration after init.sql)
+--   - None
 --
 -- Rollback:
 --   See DOWN section at bottom of file
@@ -141,13 +148,7 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 CREATE INDEX IF NOT EXISTS idx_user_preferences_user_id
 ON user_preferences(user_id);
 
--- Record this migration
-INSERT INTO schema_migrations (version, description, checksum)
-VALUES (
-    '001',
-    'Add user preferences table',
-    NULL
-);
+-- No INSERT INTO schema_migrations needed: scripts/migrate.sh records the file name
 
 COMMIT;
 
@@ -161,7 +162,7 @@ COMMIT;
 --
 -- DROP TABLE IF EXISTS user_preferences;
 --
--- DELETE FROM schema_migrations WHERE version = '001';
+-- DELETE FROM schema_migrations WHERE version = '059_add_user_preferences';
 --
 -- COMMIT;
 ```
@@ -193,20 +194,26 @@ Edit `shared/python/models/` to match:
 
 ```python
 # shared/python/models/user_preferences.py
-from sqlalchemy import Column, Integer, String, Boolean
-from sqlalchemy.sql import func
-from shared.python.database import Base
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, String, func
+from sqlalchemy.orm import Mapped, mapped_column
+
+from .base import Base
+
 
 class UserPreferences(Base):
     __tablename__ = "user_preferences"
 
-    id = Column(Integer, primary_key=True)
-    user_id = Column(String, nullable=False, unique=True)
-    theme = Column(String(20), default='system')
-    notifications_enabled = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, unique=True)
+    theme: Mapped[str] = mapped_column(String(20), default="system")
+    notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 ```
+
+Then export the class from `shared/python/models/__init__.py`.
 
 ### Step 5: Test the Migration
 
@@ -216,13 +223,14 @@ docker-compose down
 docker volume rm osint-intelligence-platform_postgres_data
 docker-compose up -d postgres
 ./scripts/migrate.sh --status  # Should show only '000'
+./scripts/migrate.sh --baseline  # Mark existing files as applied
 
 # Test migration path (simulate production)
 docker-compose exec postgres psql -U osint_user -d osint_platform \
-  -c "DELETE FROM schema_migrations WHERE version = '001'"
-./scripts/migrate.sh --dry-run  # Should list 001
+  -c "DELETE FROM schema_migrations WHERE version = '059_add_user_preferences'"
+./scripts/migrate.sh --dry-run  # Should list 059
 ./scripts/migrate.sh            # Apply it
-./scripts/migrate.sh --status   # Should show 000 and 001
+./scripts/migrate.sh --status   # Should list 059 again
 ```
 
 ---
@@ -241,14 +249,20 @@ The helper script manages migrations:
 # Preview pending migrations (no changes)
 ./scripts/migrate.sh --dry-run
 
-# Apply all pending migrations
+# Apply all pending migrations (stops at the first error: psql ON_ERROR_STOP)
 ./scripts/migrate.sh
+
+# Mark every migration file as applied without running it
+# (fresh init.sql installs; one-time fix for untracked production databases)
+./scripts/migrate.sh --baseline
 ```
+
+`scripts/deploy.sh` runs `migrate.sh` as part of a deploy. Each file is piped to `psql` as a whole, so a file may contain its own `BEGIN`/`COMMIT` or none.
 
 ### Environment Variables
 
 ```bash
-DB_CONTAINER=osint-postgres    # Docker container name
+DB_SERVICE=postgres            # docker-compose service name
 POSTGRES_USER=osint_user       # Database user
 POSTGRES_DB=osint_platform     # Database name
 ```
@@ -266,14 +280,11 @@ BEGIN;
 ALTER TABLE messages ADD COLUMN priority INTEGER DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_messages_priority ON messages(priority);
 
-INSERT INTO schema_migrations (version, description)
-VALUES ('002', 'Add priority column to messages');
 
 COMMIT;
 
 -- DOWN (commented)
 -- ALTER TABLE messages DROP COLUMN priority;
--- DELETE FROM schema_migrations WHERE version = '002';
 ```
 
 ### Adding an Index (Production-Safe)
@@ -282,17 +293,12 @@ COMMIT;
 -- UP
 BEGIN;
 
--- Use CONCURRENTLY for zero-downtime (must be outside transaction)
-COMMIT;
+-- CONCURRENTLY cannot run inside a transaction: the file has no BEGIN/COMMIT
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_messages_channel_date
-ON messages(channel_id, message_date);
-BEGIN;
-
-INSERT INTO schema_migrations (version, description)
-VALUES ('003', 'Add composite index on channel_id and message_date');
-
-COMMIT;
+ON messages(channel_id, telegram_date);
 ```
+
+`messages` is large and written continuously, so migrations that touch it avoid blocking writes: `CONCURRENTLY` for indexes and a `SET lock_timeout` for `ALTER TABLE`. A failed `CREATE INDEX CONCURRENTLY` leaves an *invalid* index behind, and `IF NOT EXISTS` then keeps it: `DROP INDEX CONCURRENTLY IF EXISTS` first (see `058_messages_pending_enrichment_indexes.sql`).
 
 ### Renaming a Column
 
@@ -302,8 +308,6 @@ BEGIN;
 
 ALTER TABLE messages RENAME COLUMN old_name TO new_name;
 
-INSERT INTO schema_migrations (version, description)
-VALUES ('004', 'Rename old_name to new_name');
 
 COMMIT;
 
@@ -328,8 +332,6 @@ CREATE TABLE IF NOT EXISTS message_reactions (
 CREATE INDEX IF NOT EXISTS idx_message_reactions_message_id
 ON message_reactions(message_id);
 
-INSERT INTO schema_migrations (version, description)
-VALUES ('005', 'Add message_reactions table');
 
 COMMIT;
 
@@ -353,8 +355,6 @@ UPDATE channels SET member_count = 0 WHERE member_count IS NULL;
 ALTER TABLE channels ALTER COLUMN member_count SET DEFAULT 0;
 ALTER TABLE channels ALTER COLUMN member_count SET NOT NULL;
 
-INSERT INTO schema_migrations (version, description)
-VALUES ('006', 'Add member_count to channels with backfill');
 
 COMMIT;
 ```
@@ -396,7 +396,7 @@ git pull origin master
 ./scripts/migrate.sh
 
 # 4. Restart services to pick up ORM changes
-docker-compose restart api processor enrichment
+docker-compose restart api processor-worker
 
 # 5. Verify
 ./scripts/migrate.sh --status
@@ -409,14 +409,14 @@ If something goes wrong:
 
 ```bash
 # 1. Stop affected services
-docker-compose stop api processor enrichment
+docker-compose stop api processor-worker
 
 # 2. Run DOWN migration manually
 docker-compose exec postgres psql -U osint_user -d osint_platform <<'EOF'
 BEGIN;
 -- Paste DOWN migration statements here
 DROP TABLE IF EXISTS new_table;
-DELETE FROM schema_migrations WHERE version = '00X';
+DELETE FROM schema_migrations WHERE version = '<migration file name>';
 COMMIT;
 EOF
 
@@ -431,15 +431,12 @@ docker-compose up -d
 
 ## Migration Numbering
 
-Use sequential three-digit numbers:
+Use the next three-digit number (check `ls infrastructure/postgres/migrations | tail`). Early migrations reused prefixes; do not.
 
 ```
-001_add_user_preferences.sql
-002_add_message_priority.sql
-003_add_channel_indexes.sql
-...
-099_some_change.sql
-100_another_change.sql
+057_analytics_daily_summary_unique.sql
+058_messages_pending_enrichment_indexes.sql
+059_your_change.sql
 ```
 
 ### Naming Conventions
@@ -468,15 +465,15 @@ docker-compose up -d postgres
 # 3. Test migration path
 # Reset to simulate existing deployment
 docker-compose exec postgres psql -U osint_user -d osint_platform \
-  -c "DELETE FROM schema_migrations WHERE version > '000'"
+  -c "DELETE FROM schema_migrations WHERE version <> '000'"
 ./scripts/migrate.sh
 
 # 4. Verify schema
 docker-compose exec postgres psql -U osint_user -d osint_platform \
   -c "\d your_table"
 
-# 5. Run application tests
-docker-compose exec api pytest
+# 5. Run application tests (from the repo root)
+pytest
 ```
 
 ---

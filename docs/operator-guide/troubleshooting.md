@@ -28,10 +28,11 @@ Comprehensive troubleshooting guide based on 3+ years of production operations. 
 
 **Key Resources:**
 
-- **Logs**: Dozzle (http://localhost:8888) for real-time container logs
-- **Metrics**: Grafana (http://localhost:3001) for performance dashboards
+- **Logs**: `docker compose logs -f SERVICE`, or Grafana Explore with Loki (`monitoring` profile)
+- **Metrics**: Grafana (`GRAFANA_PORT`, 3001 with `.env.example`) for performance dashboards
 - **Alerts**: Prometheus (http://localhost:9090/alerts) for active alerts
-- **Health checks**: `./scripts/health-check.sh` for automated status
+- **Health checks**: `./scripts/platform-health-check.py` (smoke test; `--full` for functional checks) and `./scripts/preflight-check.sh`
+- **Pipeline view**: `./scripts/pipeline-status.py`
 
 **Troubleshooting Philosophy:**
 
@@ -48,26 +49,14 @@ Comprehensive troubleshooting guide based on 3+ years of production operations. 
 ### Health Check Script
 
 ```bash
-# Run automated health check
-./scripts/health-check.sh
+# Quick smoke test of the components enabled in .env
+./scripts/platform-health-check.py
 
-# Expected output:
-# === OSINT Platform Health Check ===
-#
-# Listener: healthy
-# Processor: healthy
-# API: healthy
-# Enrichment: healthy
-#
-# PostgreSQL: healthy
-# Redis: PONG
-# MinIO: healthy
-# Ollama: healthy
-#
-# Prometheus: healthy
-# Grafana: healthy
-#
-# === Health Check Complete ===
+# Full functional verification (add --ci for JSON output)
+./scripts/platform-health-check.py --full
+
+# Configuration and readiness checks (secrets, ports, storage, backups)
+./scripts/preflight-check.sh
 ```
 
 ### Quick Service Status
@@ -113,7 +102,7 @@ df -h
 docker system df
 
 # Database size
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT pg_size_pretty(pg_database_size('osint_platform'));
 "
 
@@ -244,12 +233,12 @@ services:
 
 ```bash
 # Check active connections
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT count(*) FROM pg_stat_activity;
 "
 
-# If near max_connections (100), check for connection leaks
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+# If near max_connections (200 by default), check for connection leaks
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT application_name, state, count(*)
   FROM pg_stat_activity
   GROUP BY application_name, state;
@@ -272,7 +261,7 @@ docker compose ps postgres
 
 ```bash
 # Check healthcheck command manually
-docker compose exec postgres pg_isready -U postgres -d osint_platform
+docker compose exec postgres pg_isready -U osint_user -d osint_platform
 
 # Should output: osint_platform:5432 - accepting connections
 # If not, database is not ready
@@ -372,17 +361,17 @@ sudo ufw disable
 
 ```bash
 # Count active connections
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT count(*) FROM pg_stat_activity;
 "
 
 # Check max_connections setting
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SHOW max_connections;
 "
 
 # Identify connection leakers
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT application_name, state, count(*)
   FROM pg_stat_activity
   GROUP BY application_name, state
@@ -395,37 +384,26 @@ docker compose exec postgres psql -U postgres -d osint_platform -c "
 **A. Increase max_connections (temporary fix):**
 
 ```bash
-# Edit infrastructure/postgres/postgresql.conf
-max_connections = 200  # Increase from 100
+# Edit infrastructure/postgres/postgresql.conf (default is already 200)
+max_connections = 300
 
 # Restart PostgreSQL
 docker compose restart postgres
+
+# Better first: every service replica holds up to POSTGRES_POOL_SIZE +
+# POSTGRES_MAX_OVERFLOW connections (40 + 40 by default). Lower the pool or the
+# replica count (see Performance Tuning)
 ```
 
 **B. Fix connection leaks (permanent fix):**
 
-```python
-# Check code for unclosed database sessions
-# services/processor/src/worker.py
-
-# BAD: Session not closed
-session = SessionLocal()
-messages = session.query(Message).all()
-# If exception occurs here, session never closed!
-
-# GOOD: Use context manager
-from shared.database import get_db_session
-
-with get_db_session() as session:
-    messages = session.query(Message).all()
-# Session automatically closed, even if exception occurs
-```
+Services use SQLAlchemy sessions from `shared/python/models/base.py`. A leak shows up as many `idle in transaction` rows for one `application_name`; fix the code path to close its session (use the session context manager) and restart that service.
 
 **C. Kill idle connections:**
 
 ```bash
 # Kill connections idle for >10 minutes
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT pg_terminate_backend(pid)
   FROM pg_stat_activity
   WHERE state = 'idle'
@@ -446,7 +424,7 @@ docker compose exec postgres psql -U postgres -d osint_platform -c "
 
 ```bash
 # Find slow queries (>100ms)
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT calls, mean_exec_time, query
   FROM pg_stat_statements
   ORDER BY mean_exec_time DESC
@@ -454,14 +432,14 @@ docker compose exec postgres psql -U postgres -d osint_platform -c "
 "
 
 # Check for missing indexes
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT schemaname, tablename, indexname
   FROM pg_indexes
   WHERE tablename = 'messages';
 "
 
 # Check table bloat (needs VACUUM)
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT schemaname, tablename,
     pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS size
   FROM pg_tables
@@ -473,52 +451,38 @@ docker compose exec postgres psql -U postgres -d osint_platform -c "
 
 **Solutions:**
 
-**A. Add missing indexes:**
+**A. Check the indexes:**
+
+The `messages` indexes ship in `init.sql` and the numbered migrations (for example `idx_messages_telegram_date`, `idx_messages_channel_date`, `idx_messages_importance_level`, `idx_messages_is_spam`). Run `./scripts/migrate.sh --status` first: a missing index usually means a pending migration. If you still need a new one, add it through a migration (see [Database Migrations](../developer-guide/database-migrations.md)); the date column is `telegram_date` and the spam flag is `is_spam`.
 
 ```sql
-# Common missing indexes (from production experience)
-
--- Index for date range queries (most common)
-CREATE INDEX CONCURRENTLY idx_messages_date_id ON messages(date DESC, id DESC);
-
--- Index for channel-specific queries
-CREATE INDEX CONCURRENTLY idx_messages_channel_date ON messages(channel_id, date DESC);
-
--- Index for importance level filtering
-CREATE INDEX CONCURRENTLY idx_messages_importance ON messages(importance_level) WHERE importance_level IS NOT NULL;
-
--- Index for spam filtering
-CREATE INDEX CONCURRENTLY idx_messages_spam ON messages(spam, date DESC);
+-- Example shape of an index created CONCURRENTLY
+CREATE INDEX CONCURRENTLY idx_messages_example ON messages(channel_id, telegram_date DESC);
 ```
 
 **B. Run VACUUM to reduce bloat:**
 
 ```bash
 # Analyze and vacuum (can run online, safe for production)
-docker compose exec postgres psql -U postgres -d osint_platform -c "VACUUM ANALYZE messages;"
+docker compose exec postgres psql -U osint_user -d osint_platform -c "VACUUM ANALYZE messages;"
 
 # For heavily bloated tables, use VACUUM FULL (requires table lock, downtime!)
 # Only run during maintenance window
-docker compose exec postgres psql -U postgres -d osint_platform -c "VACUUM FULL messages;"
+docker compose exec postgres psql -U osint_user -d osint_platform -c "VACUUM FULL messages;"
 ```
 
 **C. Tune PostgreSQL configuration:**
 
 ```bash
-# Edit infrastructure/postgres/postgresql.conf
+# Memory settings come from .env (compose passes them on the postgres command line)
+POSTGRES_SHARED_BUFFERS=2GB     # raise if cache hit ratio <90%
+POSTGRES_WORK_MEM=128MB         # raise for complex queries that spill to disk
+POSTGRES_EFFECTIVE_CACHE=8GB
 
-# Increase shared_buffers (if cache hit ratio <90%)
-shared_buffers = 512MB  # Increase from 256MB
-
-# Increase work_mem (for complex queries)
-work_mem = 16MB  # Increase from 4MB
-
-# Increase effective_cache_size (total RAM available)
-effective_cache_size = 2GB
-
-# Restart PostgreSQL
-docker compose restart postgres
+docker compose up -d postgres
 ```
+
+See [Performance Tuning](performance-tuning.md#postgresql-tuning).
 
 ---
 
@@ -553,37 +517,23 @@ The listener automatically waits for the required time and retries. No action ne
 
 **B. Reduce request rate:**
 
+The listener is event driven (live updates), so FloodWait mostly comes from backfill, folder sync and joins. Lower the backfill pressure instead of polling intervals:
+
 ```bash
-# Edit services/listener/src/config.py
+# .env
+BACKFILL_BATCH_SIZE=50          # default 100
+FOLDER_SYNC_INTERVAL=300        # seconds, minimum 30
 
-# Increase delay between channel polls
-POLL_INTERVAL_SECONDS = 60  # Increase from 30
-
-# Reduce concurrent channel fetches
-MAX_CONCURRENT_CHANNELS = 5  # Reduce from 10
-
-# Restart listener
-docker compose restart listener
+docker compose up -d listener
 ```
 
 **C. Multi-account strategy (if persistent):**
 
-```yaml
-# Use multiple Telegram accounts to distribute load
-# docker-compose.yml
-services:
-  listener-account-1:
-    environment:
-      TELEGRAM_SESSION_NAME: account1
-      MONITORED_CHANNELS: "channel1,channel2,channel3"
+Run one listener per Telegram account with the `multi-account` profile (`listener-russia`, `listener-ukraine`; each handles the channels whose `SOURCE_ACCOUNT` matches). Authenticate each account with `python3 scripts/telegram_auth.py --account NAME`. Details in [Telegram Setup](telegram-setup.md).
 
-  listener-account-2:
-    environment:
-      TELEGRAM_SESSION_NAME: account2
-      MONITORED_CHANNELS: "channel4,channel5,channel6"
+```bash
+./scripts/switch-telegram-mode.sh multi    # TELEGRAM_MODE=multi; checks prerequisites, then starts the per-account services
 ```
-
-**Reference**: See `/osint-intelligence-platform/docs/PITFALLS_FROM_PRODUCTION.md` HIGH #1 for detailed multi-account strategy.
 
 ### Issue: Session Expired / Auth Required
 
@@ -599,7 +549,7 @@ services:
 
 ```bash
 # Check if session file exists
-ls -la telegram_sessions/listener.session
+ls -la telegram_sessions/*.session
 
 # If missing or 0 bytes, session needs re-authentication
 ```
@@ -612,8 +562,8 @@ ls -la telegram_sessions/listener.session
 # Stop listener
 docker compose stop listener
 
-# Run interactive auth
-docker compose run --rm listener python -m services.listener.src.auth
+# Run interactive auth (on the host, from the repository root)
+python3 scripts/telegram_auth.py            # add --account NAME for named accounts
 
 # Follow prompts:
 # - Enter phone number (with country code: +1234567890)
@@ -628,14 +578,14 @@ ls -la telegram_sessions/listener.session
 docker compose up -d listener
 
 # Verify authentication
-docker compose logs -f listener | grep "Logged in as"
+docker compose logs -f listener
 ```
 
 **B. Restore from backup:**
 
 ```bash
 # If you have backup session files (see backup-restore.md)
-tar -xzf backups/sessions/sessions_latest.tar.gz -C telegram_sessions/
+tar -xzf backups/sessions/sessions_latest.tar.gz   # contains telegram_sessions/
 chmod 600 telegram_sessions/*.session*
 
 docker compose restart listener
@@ -663,29 +613,16 @@ docker compose restart listener
 
 **Solutions:**
 
-**A. Join channel via invite link:**
+**A. Rejoin the channel**
 
-```python
-# If channel went private, get invite link from admin
-# services/listener/src/manual_join.py
-
-from telethon.sync import TelegramClient
-
-client = TelegramClient('listener', api_id, api_hash)
-client.start()
-
-# Join via invite link
-client(JoinChannelRequest('https://t.me/+INVITE_CODE'))
-```
+Channels are managed through Telegram folders. Join the channel again in the Telegram app with the monitoring account (invite link if it went private); the next folder sync (`FOLDER_SYNC_INTERVAL`) picks it up. Sessions are per account, so use the account that owns the folder.
 
 **B. Remove inaccessible channel from monitoring:**
 
-```bash
-# Edit config to skip this channel
-# config/channels.yml (or database)
+Remove it from the Telegram folder, or mark it inactive:
 
-# Mark channel as inactive
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+```bash
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   UPDATE channels SET active = false WHERE telegram_id = 1234567890;
 "
 ```
@@ -705,11 +642,11 @@ docker compose exec postgres psql -U postgres -d osint_platform -c "
 
 ```bash
 # 1. Check listener is receiving messages
-docker compose logs listener | grep "New message"
-# Should show recent messages
+docker compose logs listener --since 10m | tail -20
+# Should show recent activity (queued messages, no errors)
 
 # 2. Check Redis queue has messages
-docker compose exec redis redis-cli XLEN telegram_messages
+docker compose exec redis redis-cli XLEN telegram:messages:realtime
 # Should show count > 0
 
 # 3. Check processor is consuming from queue
@@ -717,8 +654,8 @@ docker compose logs processor-worker | grep "Processing message"
 # Should show recent processing
 
 # 4. Check database for recent messages
-docker compose exec postgres psql -U postgres -d osint_platform -c "
-  SELECT COUNT(*) FROM messages WHERE date > NOW() - INTERVAL '1 hour';
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
+  SELECT COUNT(*) FROM messages WHERE created_at > NOW() - INTERVAL '1 hour';
 "
 # Should match messages received by listener
 ```
@@ -737,12 +674,11 @@ docker compose logs listener | grep -i error
 # - Spam filter blocking all messages
 
 # Verify Redis connectivity
-docker compose exec listener ping redis
-# Should respond
+docker compose exec redis redis-cli ping
+# Should respond: PONG
 
-# Check spam filter rate
-docker compose logs listener | grep "spam detected"
-# If >95%, spam filter may be misconfigured
+# Spam is decided in the processor, not the listener: check the spam rate there
+# (Grafana: spam rate; osint:spam_rate:5m). If >95%, the spam filter may be misconfigured
 ```
 
 **B. Processor not consuming from queue:**
@@ -757,7 +693,7 @@ docker compose logs processor-worker | grep -i error
 
 # Common errors:
 # - Database connection failed
-# - Ollama LLM timeout
+# - LLM timeout (gateway or Ollama)
 # - MinIO media upload failed
 
 # Restart processor
@@ -768,14 +704,14 @@ docker compose restart processor-worker
 
 ```bash
 # Check queue depth
-docker compose exec redis redis-cli XLEN telegram_messages
+docker compose exec redis redis-cli XLEN telegram:messages:realtime
 
 # If >10,000, processor can't keep up
 # Scale up processor workers
-docker compose up -d --scale processor-worker=4
+docker compose up -d --scale processor-worker=4   # persist: PROCESSOR_WORKER_REPLICAS=4 in .env
 
 # Monitor queue drain
-watch 'docker compose exec redis redis-cli XLEN telegram_messages'
+watch 'docker compose exec redis redis-cli XLEN telegram:messages:realtime'
 ```
 
 ### Issue: High Message Skip Rate (>90%)
@@ -792,7 +728,7 @@ watch 'docker compose exec redis redis-cli XLEN telegram_messages'
 docker compose exec processor-worker curl -s http://localhost:8002/metrics | grep osint_messages_skipped
 
 # Check importance level distribution
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT
     importance_level,
     COUNT(*) as count
@@ -801,46 +737,32 @@ docker compose exec postgres psql -U postgres -d osint_platform -c "
   GROUP BY importance_level
   ORDER BY
     CASE importance_level
-      WHEN 'critical' THEN 1
-      WHEN 'high' THEN 2
-      WHEN 'medium' THEN 3
-      WHEN 'low' THEN 4
-      ELSE 5
+      WHEN 'high' THEN 1
+      WHEN 'medium' THEN 2
+      WHEN 'low' THEN 3
+      ELSE 4
     END;
 "
 ```
 
 **Solutions:**
 
-**A. Importance threshold too high:**
+**A. Minimum importance too high:**
+
+The archive/skip decision uses `monitoring_min_importance` (`low`, `medium` or `high`, default `medium`), a runtime setting in **Admin, Config, Platform Settings** (env fallback `MONITORING_MIN_IMPORTANCE`). Lowering it archives more messages. The change applies within about 30 seconds, no restart.
+
+**B. Spam filter too aggressive:**
+
+Messages are skipped as spam by the embedding filter and the LLM. Check the spam settings and recent spam rate:
 
 ```bash
-# Check current threshold in .env
-grep MONITORING_OSINT_THRESHOLD .env
-
-# If >70, lowering threshold will archive more messages
-# Edit .env:
-MONITORING_OSINT_THRESHOLD=50  # Lower from 70
-
-# Restart processor
-docker compose restart processor-worker
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
+  SELECT is_spam, spam_type, COUNT(*) FROM messages
+  WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY 1, 2 ORDER BY 3 DESC;
+"
 ```
 
-**B. Rule patterns too strict:**
-
-```bash
-# Check rule coverage (% messages matched by rules)
-# Grafana → RuleEngine Performance → Rule Coverage Over Time
-
-# If <30%, rules may be too specific
-# Review and broaden rule patterns in config/osint_rules.yml
-
-# Example: Broaden location matching
-rules:
-  - name: bakhmut_mentions
-    pattern: "Bakhmut|Бахмут|Артемовск"  # Add alternate spellings
-    score_adjustment: +30
-```
+Relevant runtime settings: `embedding_spam_threshold`, `llm_prefilter_spam_similarity`, `realtime_use_embedding`. Review false positives in the admin spam queue; see [Backlog Re-classification](backlog-reclassification.md) to re-check spam with the LLM.
 
 **C. LLM scoring too conservative:**
 
@@ -855,7 +777,7 @@ docker compose exec postgres psql -U osint_user -d osint_platform -c "
 # see "Prompt versions" in LLM Gateway and Providers (operator-guide/external-llm.md).
 # Prompt history: docs/architecture/LLM_PROMPTS.md in the platform repo.
 
-# Restart processor to reload prompts
+# Prompt changes are read from the database; restart the processor if a change does not apply
 docker compose restart processor-worker
 ```
 
@@ -879,9 +801,9 @@ docker stats
 docker compose exec processor-worker top
 
 # Check for CPU-intensive tasks:
-# - LLM inference (Ollama)
-# - Entity extraction (spaCy)
-# - Embedding generation
+# - LLM inference (when LLM_PROVIDER=ollama)
+# - Entity extraction and matching
+# - Embedding generation (sentence-transformers, CPU)
 
 # Check Grafana → cAdvisor Dashboard → Container CPU Usage
 # Identify which container(s) are CPU-bound
@@ -892,24 +814,19 @@ docker compose exec processor-worker top
 **A. LLM inference bottleneck:**
 
 ```bash
-# Check LLM response time
-docker compose logs processor-worker | grep "LLM inference took"
+# Check LLM response time (processor metrics)
+docker compose exec processor-worker curl -s localhost:8002/metrics | grep osint_llm_response_duration
 
 # If >15s per message, LLM is bottleneck
 # Options:
-# 1. Use faster model
-# 2. Reduce LLM calls (embedding pre-filter threshold)
-# 3. Scale horizontally (dedicated Ollama instance)
+# 1. Move to the LLM gateway (see LLM Gateway and Providers) - best option
+# 2. Skip the LLM for obvious spam (admin setting llm_prefilter_spam_similarity)
+# 3. Use a faster model (Ollama only)
 
-# Option 1: Switch to faster model
+# Option 3: Switch to a faster model
 docker compose exec ollama ollama pull <smaller model>  # Faster, less accurate
 # Update .env:
 OLLAMA_MODEL=<smaller model>
-
-# Option 2: Skip the LLM for obvious spam (admin setting llm_prefilter_spam_similarity)
-# Option 4: Move to the LLM gateway (see LLM Gateway and Providers)
-
-# Option 3: Dedicated Ollama (see docker-compose.yml ollama-batch service)
 ```
 
 **B. Too many concurrent workers:**
@@ -933,16 +850,15 @@ docker stats
 # See "Slow Query Performance" section above
 
 # Check cache hit ratio
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT sum(blks_hit)::float / (sum(blks_hit) + sum(blks_read)) AS cache_hit_ratio
   FROM pg_stat_database;
 "
 
-# If <0.9, increase shared_buffers
-# Edit infrastructure/postgres/postgresql.conf:
-shared_buffers = 512MB
+# If <0.9, increase shared_buffers (set in .env, passed to postgres by compose)
+POSTGRES_SHARED_BUFFERS=2GB
 
-docker compose restart postgres
+docker compose up -d postgres
 ```
 
 ### Issue: High Memory Usage / OOM Kills
@@ -989,45 +905,9 @@ services:
 docker compose up -d processor-worker
 ```
 
-**B. Fix memory leaks:**
+**B. Reduce concurrency and batch sizes:**
 
-```python
-# Common memory leak: Not closing sessions
-# services/processor/src/worker.py
-
-# BAD: Session never closed
-session = SessionLocal()
-for message in messages:
-    session.query(Message).filter_by(id=message.id).first()
-# Session accumulates objects, memory grows
-
-# GOOD: Use context manager
-with SessionLocal() as session:
-    for message in messages:
-        msg = session.query(Message).filter_by(id=message.id).first()
-        session.expunge(msg)  # Remove from session to free memory
-```
-
-**C. Reduce batch sizes:**
-
-```python
-# If processing large batches, split into smaller chunks
-# services/enrichment/src/tasks/ai_tagging.py
-
-# BAD: Load all pending messages (may be 100,000+)
-messages = session.query(Message).filter(Message.ai_tags.is_(None)).all()
-
-# GOOD: Process in batches
-BATCH_SIZE = 100
-offset = 0
-while True:
-    messages = session.query(Message).filter(Message.ai_tags.is_(None)) \
-        .limit(BATCH_SIZE).offset(offset).all()
-    if not messages:
-        break
-    process_batch(messages)
-    offset += BATCH_SIZE
-```
+Memory grows with concurrent work. Lower `PROCESSOR_CONCURRENCY`, `PROCESSOR_BATCH_SIZE`, the replica counts (`PROCESSOR_WORKER_REPLICAS`, `ENRICHMENT_WORKER_REPLICAS`) or the enrichment window settings (`ai_tagging_window_days`, `enrichment_llm_concurrency` in the admin settings), then recreate the service. If one service grows without bound, capture `docker stats` over time and open an issue with the service log.
 
 ---
 
@@ -1058,11 +938,11 @@ docker system df
 du -sh /* | sort -h | tail -10
 
 # Check database size
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT pg_size_pretty(pg_database_size('osint_platform'));
 "
 
-# Check MinIO bucket size
+# Check MinIO bucket size (mc alias as in Backup & Restore)
 ./bin/mc du production/osint-media
 ```
 
@@ -1100,16 +980,14 @@ services:
         max-file: "3"
 ```
 
-**C. Archive old database data:**
+**C. Database growth:**
 
 ```sql
 -- Move old messages to archive table
-CREATE TABLE messages_archive AS
-SELECT * FROM messages WHERE date < '2024-01-01';
-
-DELETE FROM messages WHERE date < '2024-01-01';
-
-VACUUM FULL messages;
+-- The platform is an archive: avoid deleting messages. If you must, export first
+-- (pg_dump -t messages, see Backup & Restore) and expect many dependent rows
+-- (entities, media links, embeddings) to be affected by cascades.
+SELECT pg_size_pretty(pg_total_relation_size('messages'));
 ```
 
 **D. Prune old MinIO media (with caution):**
@@ -1144,7 +1022,7 @@ curl http://localhost:9000/minio/health/live
 # Should return HTTP 200
 
 # Test S3 API
-./bin/mc alias set test http://localhost:9000 minioadmin minioadmin
+./bin/mc alias set test http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
 ./bin/mc ls test/
 # Should list buckets
 ```
@@ -1164,9 +1042,9 @@ docker compose restart processor-worker
 ```bash
 # Check if bucket exists
 ./bin/mc ls production/
-# Should show: osint-media
+# Should show the bucket from MINIO_BUCKET_NAME (compose default: osint-media)
 
-# If missing, create bucket
+# If missing, create bucket (minio-init normally does this at startup)
 ./bin/mc mb production/osint-media
 ./bin/mc anonymous set download production/osint-media
 ```
@@ -1177,12 +1055,9 @@ docker compose restart processor-worker
 # Verify .env has correct credentials
 grep MINIO .env
 
-# Should match docker-compose.yml minio service:
-MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=minioadmin
-
-# Update processor .env if different
-docker compose restart processor-worker
+# The processor, media-worker and API read the same MINIO_* values as the minio service.
+# After changing credentials in .env, recreate everything that uses them:
+docker compose up -d --force-recreate minio minio-init processor-worker media-worker api
 ```
 
 ---
@@ -1286,18 +1161,15 @@ docker stats ollama
 # Options:
 # 1. Use faster model (smaller parameters)
 # 2. Scale horizontally (dedicated Ollama instance)
-# 3. Increase timeout in processor config
+# 3. Increase the timeout (LLM_TIMEOUT in .env, see .env.example)
 
 # Option 1: Use faster model
-docker compose exec ollama ollama pull qwen2.5:1.5b
+docker compose exec ollama ollama pull <smaller model>
 # Update .env:
 OLLAMA_MODEL=<smaller model>
 
-# Option 3: Increase timeout
-# Edit services/processor/src/llm_classifier.py:
-LLM_TIMEOUT_SECONDS = 60  # Increase from 30
-
-docker compose restart processor-worker
+# Option 3: set LLM_TIMEOUT=60 in .env, then
+docker compose up -d processor-worker
 ```
 
 ### Issue: Low LLM Success Rate (<90%)
@@ -1311,7 +1183,7 @@ docker compose restart processor-worker
 
 ```bash
 # Check LLM error rate
-docker compose logs processor-worker | grep "LLM error" | tail -20
+docker compose logs processor-worker | grep -i "llm" | grep -i "error\|fail" | tail -20
 
 # Common errors:
 # - "Model not found"
@@ -1370,13 +1242,13 @@ docker compose restart processor-worker
 
 ```bash
 # Test search directly via PostgreSQL
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT COUNT(*) FROM messages WHERE search_vector @@ websearch_to_tsquery('english', 'Bakhmut');
 "
 
 # If 0, search_vector may not be populated
 # Check if search_vector column exists
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT column_name FROM information_schema.columns
   WHERE table_name = 'messages' AND column_name = 'search_vector';
 "
@@ -1428,7 +1300,7 @@ SELECT * FROM messages WHERE to_tsvector('ukrainian', content) @@ websearch_to_t
 
 ```bash
 # Check if pgvector extension is installed
-docker compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   SELECT * FROM pg_extension WHERE extname = 'vector';
 "
 
@@ -1441,7 +1313,7 @@ docker compose exec postgres psql -U postgres -d osint_platform -c "
 
 ```sql
 -- Connect as superuser
-docker compose exec postgres psql -U postgres -d osint_platform
+docker compose exec postgres psql -U osint_user -d osint_platform
 
 -- Create extension
 CREATE EXTENSION vector;
@@ -1795,7 +1667,7 @@ docker compose logs | grep -i error > errors.txt
 ### Where to Get Help
 
 1. **Check this troubleshooting guide first**
-2. **Review logs** via Dozzle (http://localhost:8888)
+2. **Review logs** with `docker compose logs` or Grafana Explore (Loki)
 3. **Check metrics** via Grafana (http://localhost:3001)
 4. **Search GitHub Issues**: https://github.com/osintukraine/osint-intelligence-platform/issues
 5. **Create new issue** with diagnostic information above
@@ -1849,8 +1721,8 @@ Any other relevant information.
 
 ### Project Files
 
-- Health check script: `/scripts/health-check.sh`
-- Stack manager: `/scripts/stack-manager.sh`
+- Health check script: `/scripts/platform-health-check.py`
+- Stack manager: `/scripts/stack-manager-py.sh` ([Stack Manager](stack-manager.md))
 - Monitoring dashboards: `/infrastructure/grafana/dashboards/`
 
 ---

@@ -23,7 +23,7 @@ After this tutorial, you will be able to:
 Before starting, make sure you have:
 
 - A Telegram account (mobile app, desktop app, or both)
-- The OSINT Intelligence Platform running locally (`docker-compose up -d`)
+- The OSINT Intelligence Platform running (`docker-compose up -d`) with the Telegram session already authenticated (see [Telegram Setup](../operator-guide/telegram-setup.md))
 - At least one Telegram channel you want to monitor (public or private)
 - Basic familiarity with Telegram's folder feature
 
@@ -35,7 +35,7 @@ Before starting, make sure you have:
 
 The OSINT platform uses an innovative approach to channel management:
 
-Instead of building a complex admin panel, it reads your Telegram folders directly. You manage channels the same way you'd organize any other Telegram folder - in your native Telegram app.
+Instead of building a complex admin panel, it reads your Telegram folders directly (via the account the listener is logged in as). You manage channels the same way you'd organize any other Telegram folder - in your native Telegram app.
 
 ### Folder Naming Convention
 
@@ -43,10 +43,13 @@ The platform recognizes specific folder name patterns:
 
 | Folder Pattern | Processing Tier | LLM Strictness | Use Case |
 |---|---|---|---|
-| `Archive-*` | Archive tier | Lenient (most messages pass) | Primary sources, official channels |
-| `Monitor-*` | Monitor tier | Strict (only high-value passes) | News aggregators, noisy sources |
-| `Discover-*` | Discovery tier | Very strict + 14-day probation | Auto-discovered from forward chains |
-| `Rec-*` | Recommendation tier | Very strict + 14-day probation | Auto-discovered from Telegram's "Similar Channels" |
+| `Archive-*` | Archive tier (`archive_all`) | Lenient (no importance floor) | Primary sources, official channels |
+| `Monitor-*` | Monitor tier (`selective_archive`) | Strict (nothing below medium importance) | News aggregators, noisy sources |
+| `Discover-*` | Discovery tier (`discovery`) | Strict (same floor as Monitor) + 7-day probation | Auto-discovered from forward chains |
+| `Rec-*` | Treated as Discovery tier | Strict (same floor as Monitor) + 7-day probation | Auto-created from Telegram's "Similar Channels" |
+
+!!! note "You create `Archive-*` and `Monitor-*` folders"
+    `Discover-*` and `Rec-*` folders are created and filled by the platform itself. A folder you create yourself is only picked up if its name starts with `Archive`, `Monitor` or `Discover` (case-insensitive).
 
 !!! important "The LLM is the Arbiter"
     Unlike simple rule-based systems, the OSINT platform uses an **AI classifier** to decide what gets archived. The folder tier sets how strict the LLM should be, but the **LLM makes the final `should_archive` decision** for every message.
@@ -141,7 +144,7 @@ The channel is now moved into the folder.
 
 ## Step 3: Verify Channel Discovery
 
-Now that you've added a channel to a folder, the platform needs to discover it. The listener service automatically syncs your Telegram folders every 5 minutes.
+Now that you've added a channel to a folder, the platform needs to discover it. The listener service automatically syncs your Telegram folders every 5 minutes (300 s).
 
 ### Check the Logs
 
@@ -149,16 +152,13 @@ Now that you've added a channel to a folder, the platform needs to discover it. 
 2. Run the following command to watch the listener service:
 
 ```bash
-docker-compose logs -f listener | grep -i "discover"
+docker-compose logs -f listener | grep -i "folder\|discover"
 ```
 
 **Expected Output:**
 
 ```
-INFO - Discovery cycle starting (checking 2 folders)
-INFO - Found "Archive" folder with 1 channels
-INFO - Syncing channel to database: example_channel
-INFO - Discovery complete: 1 new channels discovered
+(log wording varies by version: look for the folder name and the channel title)
 ```
 
 Wait up to 5 minutes for the discovery cycle to run automatically. Or force an immediate check by restarting:
@@ -167,13 +167,16 @@ Wait up to 5 minutes for the discovery cycle to run automatically. Or force an i
 docker-compose restart listener
 ```
 
+!!! note "Multi-account deployments"
+    With `TELEGRAM_MODE=multi` (compose profile `multi-account`), `listener-russia` and `listener-ukraine` run instead of `listener`, each with its own Telegram account and folders. Check the logs of the listener that owns the account you added the folder to, e.g. `docker-compose logs -f listener-ukraine`. Each channel records its account in `channels.source_account`.
+
 ### Or: Check the Database Directly
 
 To see channels immediately (without waiting for logs):
 
 ```bash
 docker-compose exec -T postgres psql -U osint_user -d osint_platform -c \
-  "SELECT id, name, username, folder, rule, active FROM channels ORDER BY id DESC LIMIT 5;"
+  "SELECT id, name, username, folder, rule, active, source_account FROM channels ORDER BY id DESC LIMIT 5;"
 ```
 
 **Expected Output:**
@@ -188,7 +191,7 @@ docker-compose exec -T postgres psql -U osint_user -d osint_platform -c \
 Look for:
 - ✅ Your channel name in the `name` column
 - ✅ The correct folder in the `folder` column
-- ✅ `archive_all` or `selective_archive` in the `rule` column
+- ✅ `archive_all` (Archive-*), `selective_archive` (Monitor-*) or `discovery` (Discover-*) in the `rule` column
 - ✅ `t` (true) in the `active` column
 
 ---
@@ -212,31 +215,24 @@ Let's verify the system is actually capturing messages by sending a test message
 ### Check if Message Was Received
 
 ```bash
-docker-compose logs -f processor | grep -i "processing\|received" | head -20
+docker-compose logs -f processor-worker | grep -i "message" | head -20
 ```
 
-**Expected Output:**
-
-```
-INFO - Processing message 123456: "Test message from OSINT..."
-INFO - Message passed spam filter
-INFO - Message importance: high
-INFO - Message archived successfully
-```
+You should see log lines for the message as the worker processes it (exact wording varies by version).
 
 Or query the database:
 
 ```bash
 docker-compose exec -T postgres psql -U osint_user -d osint_platform -c \
-  "SELECT id, channel_id, content, created_at FROM messages ORDER BY created_at DESC LIMIT 3;"
+  "SELECT id, channel_id, left(content, 40) AS content, telegram_date FROM messages ORDER BY id DESC LIMIT 3;"
 ```
 
 **Expected Output:**
 
 ```
-   id   | channel_id |          content          |         created_at
---------+------------+---------------------------+---------------------
- 123456 |          3 | Test message from OSINT...| 2025-12-09 14:32:15
+   id   | channel_id |                 content                  |     telegram_date
+--------+------------+------------------------------------------+------------------------
+ 123456 |          3 | Test message from OSINT platform tutori  | 2025-12-09 14:32:15+00
 ```
 
 ---
@@ -260,22 +256,24 @@ flowchart LR
     F -->|Yes| H[Archive to Database]
 ```
 
-1. **Spam filter** - Fast rule-based filter removes obvious spam (donation scams, crypto ads)
+1. **Spam filter** - Fast filter flags obvious spam (donation scams, crypto ads)
 2. **Ukraine relevance check** - Is this message relevant to the Ukraine conflict?
 3. **LLM classification** - The AI decides: `should_archive = true/false`
 
+Spam and non-relevant messages are never archived. Media is downloaded afterwards by the `media-worker`; the text is archived first.
+
 ### How Folder Tiers Affect the LLM
 
-The folder tier tells the LLM **how strict to be**:
+The folder tier tells the platform **how strict to be**:
 
-| Tier | LLM Behavior | Typical Archive Rate |
-|------|--------------|---------------------|
-| **Archive tier** (`Archive-*`) | Lenient - archive most relevant content | 70-90% of non-spam |
-| **Monitor tier** (`Monitor-*`) | Strict - only high-value OSINT content | 20-40% of non-spam |
-| **Discover tier** (`Discover-*`) | Very strict - prove the channel's worth | 10-20% of non-spam |
+| Tier | Behavior |
+|------|----------|
+| **Archive tier** (`Archive-*`) | Lenient - the LLM's `should_archive` decision applies, no importance floor |
+| **Monitor tier** (`Monitor-*`) | Strict - additionally, messages rated `low` importance are never archived (floor set by the admin setting `monitoring_min_importance`, default `medium`) |
+| **Discover tier** (`Discover-*`, `Rec-*`) | Same floor as Monitor, plus a probation period before the channel is accepted |
 
 !!! important "The LLM Makes the Final Decision"
-    Even in `Archive-*` folders, the LLM can reject low-value messages. The tier sets the threshold, but the **AI evaluates every message individually** based on OSINT relevance, importance, and content quality.
+    Even in `Archive-*` folders, the LLM can reject low-value messages. The **AI evaluates every message individually** based on OSINT relevance, importance, and content quality; the tier adds the importance floor on top.
 
 ### Archive Tier (`Archive-*` folders)
 
@@ -292,18 +290,17 @@ The folder tier tells the LLM **how strict to be**:
 
 **Use for:** Noisy channels where you only want high-value content.
 
-**LLM behavior:** Strict classification. Only archives messages with clear OSINT value (troop movements, equipment losses, official statements).
+**Behavior:** Strict. Messages the LLM rates `low` importance are dropped, so mostly messages with clear OSINT value (troop movements, equipment losses, official statements) are kept.
 
 **Examples:**
 - News aggregators with mixed content
 - Discussion groups
 - Regional channels with local chatter
 
-**Storage Savings:**
-Monitor tier typically archives 60-80% less than Archive tier while capturing critical intelligence.
+Monitor tier archives considerably less than Archive tier while still capturing the important messages.
 
-!!! warning "Spam filtering saves the most"
-    The spam filter runs first on ALL tiers. This removes 80-90% of junk before the LLM even sees it, saving processing costs regardless of tier.
+!!! note "Spam filtering runs first"
+    The spam filter runs on ALL tiers, before the LLM classification.
 
 ---
 
@@ -341,7 +338,7 @@ You can add as many channels as you want to a folder:
 3. Select multiple channels
 4. Tap "Add" or "Done"
 
-The platform can monitor 100+ channels simultaneously.
+The platform can monitor hundreds of channels simultaneously (Telegram limits how many channels one account can join).
 
 ### "What if I want to change monitoring rules?"
 
@@ -360,7 +357,7 @@ The processing rule will automatically update.
 2. Select "Remove from Folder" or "Delete"
 3. Wait 5 minutes for sync
 
-The channel will no longer appear in the `channels` table and new messages won't be archived.
+The channel is marked inactive (`active = f`) in the `channels` table, and new messages are no longer archived. Existing messages are kept.
 
 ---
 
@@ -372,7 +369,7 @@ The channel will no longer appear in the `channels` table and new messages won't
 
 **Solutions:**
 
-1. **Check folder naming:** Folder name must start with `Archive`, `Monitor`, or `Discover`
+1. **Check folder naming:** Folder name must start with `Archive`, `Monitor`, or `Discover` (case-insensitive)
    - ✅ `Archive` works (8 chars)
    - ✅ `Archive-UA` works (10 chars)
    - ✅ `Monitor-RU` works (10 chars)
@@ -382,8 +379,7 @@ The channel will no longer appear in the `channels` table and new messages won't
 
 2. **Wait for sync:** The platform checks folders every 5 minutes. It might not be immediate:
    ```bash
-   # Force check the current time in logs
-   docker-compose logs listener | tail -20
+   docker-compose logs --tail 20 listener
    ```
 
 3. **Verify the listener is running:**
@@ -427,33 +423,33 @@ The channel will no longer appear in the `channels` table and new messages won't
 
 1. **Check the spam filter:** Your message might be flagged as spam
    ```bash
-   docker-compose logs processor | grep "is_spam"
+   docker-compose logs processor-worker | grep "is_spam"
    ```
 
 2. **Check Ukraine relevance:** Messages not relevant to Ukraine go to quarantine
    ```bash
-   docker-compose logs processor | grep "ukraine_relevant"
+   docker-compose logs processor-worker | grep "ukraine_relevant"
    ```
 
 3. **Check LLM decision:** The LLM may have decided `should_archive = false`
    ```bash
-   docker-compose logs processor | grep "should_archive"
+   docker-compose logs processor-worker | grep "should_archive"
    ```
 
    This happens more often in `Monitor-*` folders (strict mode) than `Archive-*` folders (lenient mode).
 
 4. **Check processor is running:**
    ```bash
-   docker-compose ps processor
+   docker-compose ps processor-worker
    ```
-   Should show "Up". If not:
+   Should show "Up" (two replicas by default). If not:
    ```bash
-   docker-compose up -d processor
+   docker-compose up -d processor-worker
    ```
 
 5. **Wait for processing:** Messages take 5-30 seconds to appear. Check logs:
    ```bash
-   docker-compose logs -f processor
+   docker-compose logs -f processor-worker
    ```
 
 ---
@@ -500,7 +496,7 @@ Now that you have channels being monitored, you can:
 | **Folder Management** | Use native Telegram folders - no admin panel needed |
 | **12-Char Limit** | Folder names max 12 characters: `Archive-UA` not `Archive-Ukraine` |
 | **LLM is Arbiter** | AI decides what to archive; folder tier sets strictness level |
-| **Four Tiers** | `Archive-*` (lenient), `Monitor-*` (strict), `Discover-*` (very strict), `Rec-*` (recommendations) |
+| **Tiers** | `Archive-*` (lenient), `Monitor-*` (strict), `Discover-*` and `Rec-*` (strict + probation, platform-managed) |
 | **Auto-Discovery** | Channels discovered from forwards (`Discover-*`) and Telegram recommendations (`Rec-*`) |
 | **3-Round Detection** | Country detection uses keywords + 2x LLM analysis for high confidence |
 | **Human Review** | Uncertain channels go to `Discover-?` or `Rec-?` for manual classification |

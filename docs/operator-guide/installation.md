@@ -73,6 +73,10 @@ Before you begin, ensure you have:
 | 443 | HTTPS (Caddy reverse proxy) | Optional |
 | 3000 | Frontend (Next.js) | Development only |
 | 8000 | API (FastAPI) | Development only |
+| 22/other | SSH, and nothing else if Caddy fronts everything | Admin only |
+
+!!! warning "Published ports"
+    `docker-compose.yml` publishes many internal ports (PostgreSQL 5432, Redis 6379, MinIO 9000/9001, metrics ports 8001-8003 and 92xx, Kratos 4433/4434, ...). In production put the host firewall (or `docker-compose.production.yml`) in front of them and expose only 80/443. See [Production Gotchas](production-gotchas.md) and the [Security Guide](../security-guide/index.md).
 
 **Outbound Ports (required for operation):**
 
@@ -139,9 +143,7 @@ git clone https://github.com/osintukraine/osint-intelligence-platform.git
 cd osint-intelligence-platform
 
 # Checkout master branch (production) or develop (latest features)
-git checkout master  # For production
-# OR
-git checkout develop  # For latest features (may be unstable)
+git checkout master  # production branch
 ```
 
 ### Step 3: Configure Environment Variables
@@ -179,7 +181,7 @@ TELEGRAM_PHONE=+1234567890  # Your phone number with country code
 # DeepL API key (free from https://www.deepl.com/pro-api)
 DEEPL_API_KEY=your_deepl_api_key_here
 
-# Grafana admin password (CHANGE THIS!)
+# Grafana admin password (required by the monitoring profile)
 GRAFANA_ADMIN_PASSWORD=your_grafana_password
 
 # NocoDB admin credentials (CHANGE THESE!)
@@ -194,7 +196,7 @@ NOCODB_JWT_SECRET=$(openssl rand -hex 32)
 # Generate random passwords and secrets
 openssl rand -hex 32  # For JWT_SECRET_KEY
 openssl rand -base64 32  # For database passwords
-openssl rand -base64 24  # For KRATOS_SECRET_CIPHER (must be exactly 32 chars)
+openssl rand -base64 24  # For KRATOS_SECRET_CIPHER (24 random bytes = exactly 32 characters)
 ```
 
 **Optional production settings:**
@@ -233,15 +235,13 @@ python3 scripts/telegram_auth.py
 
 # Follow the prompts:
 # 1. Enter your phone number (with country code: +1234567890)
-# 2. Enter verification code sent to Telegram app
-# 3. Session files are created automatically
+# 2. Enter verification code sent to Telegram app (and your 2FA password, if set)
+# 3. The seed session is created and copied to the per-service session files
 
 # Verify session files were created
 ls -lh telegram_sessions/
-# Should show:
-# osint_platform.session
-# listener.session
-# enrichment.session
+# Should show osint_platform.session plus listener, discovery, enrichment
+# and analytics .session files
 ```
 
 **For multi-account setup** (optional, for rate limit scaling):
@@ -253,9 +253,12 @@ python3 scripts/telegram_auth.py --account russia
 # Authenticate Ukraine account
 python3 scripts/telegram_auth.py --account ukraine
 
-# Check status
+# Check account configuration / list session files
 python3 scripts/telegram_auth.py --status
+python3 scripts/telegram_auth.py --list
 ```
+
+Named accounts use `TELEGRAM_API_ID_<NAME>` / `TELEGRAM_API_HASH_<NAME>` and per-role session files named `<role>-<account>` (for example `listener-russia.session`). Switch to the per-account services with `./scripts/switch-telegram-mode.sh multi` (`TELEGRAM_MODE` in `.env`; unset means single-account). See [Telegram Setup](telegram-setup.md).
 
 ### Step 6: Provision Models
 
@@ -333,14 +336,16 @@ docker compose up -d
 # With monitoring (Prometheus, Grafana)
 docker compose --profile monitoring up -d
 
-# With enrichment workers
-docker compose --profile enrichment up -d
+# With enrichment workers (lite = CPU only; standard/full add the LLM workers)
+docker compose --profile enrichment-lite up -d
 
 # With OpenSanctions entity matching
 docker compose --profile opensanctions up -d
 
 # All profiles (full production stack)
 docker compose --profile monitoring --profile enrichment-standard --profile opensanctions up -d
+
+# Or set COMPOSE_PROFILES in .env once (see Configuration)
 ```
 
 ### Step 9: Check the LLM Provider
@@ -407,11 +412,11 @@ docker compose exec postgres psql -U osint_user -d osint_platform
 - Should show Swagger UI with API endpoints
 - Try GET /health endpoint - should return {"status": "healthy"}
 
-**Grafana** (if monitoring profile enabled): [http://localhost:3001](http://localhost:3001)
-- Default credentials: admin/admin (change on first login)
+**Grafana** (if monitoring profile enabled): [http://localhost:3001](http://localhost:3001) (`GRAFANA_PORT`; `.env.example` sets 3001, the compose default is 3000)
+- Login: `GRAFANA_ADMIN_USER` (default `admin`) with `GRAFANA_ADMIN_PASSWORD`
 - Dashboards should be pre-configured
 
-**NocoDB** (if dev profile enabled): [http://localhost:8080](http://localhost:8080)
+**NocoDB** (if `tools` profile enabled): [http://localhost:8080](http://localhost:8080)
 - Create account on first access
 - Connect to PostgreSQL database manually
 
@@ -421,26 +426,22 @@ docker compose exec postgres psql -U osint_user -d osint_platform
 # Check listener logs
 docker compose logs listener | tail -50
 
-# Should show:
-# "Successfully connected to Telegram"
-# "Discovering channels from folders..."
-# "Found X channels in Archive-* folders"
+# Should show the Telegram connection and folder-based channel discovery
+# (Archive-*, Monitor-*, Discover-* folders)
 ```
 
 ### Step 5: Verify Message Processing Pipeline
 
 ```bash
 # Check Redis queue
-docker compose exec redis redis-cli XLEN telegram_messages
+docker compose exec redis redis-cli XLEN telegram:messages:realtime
 # Should return: 0 (no messages yet)
 
 # Check processor logs
 docker compose logs processor-worker | tail -50
 
-# Should show:
-# "Waiting for messages..."
-# "Connected to PostgreSQL"
-# "Connected to Ollama"
+# Should show the Redis consumer starting and, with LLM_PROVIDER set,
+# "LLM classifier connected successfully (model: ...)"
 ```
 
 ### Step 6: Verify Storage Box Configuration
@@ -449,24 +450,17 @@ docker compose logs processor-worker | tail -50
     Media archival requires a default storage box entry. Without it, media files won't be archived (fails silently).
 
 ```bash
-# Check for default storage box
+# Check for the default storage box (id 'default', created by init.sql / migration 017)
 docker compose exec postgres psql -U osint_user -d osint_platform -c \
-  "SELECT id, name, is_default FROM storage_boxes WHERE is_default = true;"
+  "SELECT id, account_region, is_active, is_readonly FROM storage_boxes;"
 ```
 
-**Expected output**: One row with `is_default = true`
+**Expected output**: at least one row (`default`) with `is_active = t`.
 
-If no rows returned, migration 017 may not have run. Fix with:
+If no rows are returned, apply pending migrations:
 
 ```bash
-# Run migrations
 ./scripts/migrate.sh
-
-# Or manually add default storage box
-docker compose exec postgres psql -U osint_user -d osint_platform -c \
-  "INSERT INTO storage_boxes (name, box_type, is_default, is_active, created_at)
-   VALUES ('local', 'local', true, true, NOW())
-   ON CONFLICT DO NOTHING;"
 ```
 
 See [Production Gotchas](production-gotchas.md#storage-boxes-default-entry) for more details.
@@ -525,14 +519,11 @@ If using monitoring profile:
 # Edit Prometheus alert rules
 nano infrastructure/prometheus/rules/alerting_rules.yml
 
-# Reload Prometheus configuration
+# Reload Prometheus configuration (needs --web.enable-lifecycle)
 curl -X POST http://localhost:9090/-/reload
 
-# Configure ntfy subscriptions (for mobile notifications)
-# Open http://localhost:8090 and subscribe to topics:
-# - osint-platform-critical
-# - osint-platform-warnings
-# - osint-platform-info
+# ntfy listens on 127.0.0.1:8090 (NTFY_PORT); topics are prefixed with
+# NTFY_TOPIC_PREFIX (default "osint-platform"). See the Monitoring guide.
 ```
 
 ## Troubleshooting Installation Issues
@@ -574,10 +565,11 @@ docker compose logs postgres
 
 # Reset database (WARNING: deletes all data)
 docker compose down
-docker volume rm osint-intelligence-platform_postgres_data
+docker volume ls | grep postgres_data   # note the exact volume name
+docker volume rm <project>_postgres_data
 docker compose up -d postgres
 
-# Wait for init.sql to run
+# Wait for infrastructure/postgres/init.sql to run
 docker compose logs postgres | grep "database system is ready"
 ```
 
@@ -600,8 +592,8 @@ docker compose logs listener | grep -i telegram
 # Check Ollama logs
 docker compose logs ollama ollama-init
 
-# Manually download model
-docker compose exec ollama ollama pull <your OLLAMA_MODEL>
+# Manually pull the search-embedding model
+docker compose exec ollama ollama pull all-minilm
 
 # Check available models
 docker compose exec ollama ollama list
@@ -614,9 +606,9 @@ docker compose exec ollama ollama list
 docker stats
 
 # Reduce services:
-# - Stop enrichment profile
-# - Reduce processor replicas to 1
-# - Limit Ollama memory in docker-compose.yml
+# - Stop the enrichment profiles
+# - Set PROCESSOR_WORKER_REPLICAS=1 in .env
+# - Lower REDIS_MAXMEMORY / POSTGRES_SHARED_BUFFERS
 ```
 
 ## Next Steps

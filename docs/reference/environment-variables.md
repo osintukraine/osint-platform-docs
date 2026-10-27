@@ -32,6 +32,20 @@ You also need Telegram API credentials and, for translation, `DEEPL_API_KEY`. Ru
 | Frontend, monitoring, deployment mode | Public URLs, Prometheus and Grafana, domain |
 | Backup, NocoDB, timeouts, disaster recovery | Operations and optional tools |
 
+## Telegram accounts and mode
+
+| Variable | Purpose |
+|---|---|
+| `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_PHONE` | The default account (single mode) |
+| `TELEGRAM_API_ID_RUSSIA`, `TELEGRAM_API_HASH_RUSSIA`, `TELEGRAM_PHONE_RUSSIA` | Russia account (`*-RU` folders), used by the `*-russia` services |
+| `TELEGRAM_API_ID_UKRAINE`, `TELEGRAM_API_HASH_UKRAINE`, `TELEGRAM_PHONE_UKRAINE` | Ukraine account (`*-UA` folders), used by the `*-ukraine` services |
+| `TELEGRAM_MODE` | `single` or `multi`; unset = `single`. Selects which Telegram services run, see [Docker Services](docker-services.md#telegram-mode-single-or-multi) |
+| `SINGLE_ACCOUNT_REPLICAS` | `0` in multi mode (stops the default `listener`, `media-worker`, `enrichment-telegram`, `analytics`); unset in single mode |
+| `COMPOSE_PROFILES` | Includes `multi-account` in multi mode |
+| `SOURCE_ACCOUNT` | Set per service by compose (`russia`, `ukraine`; unset = `default`): the account a worker serves |
+
+Do not set `TELEGRAM_MODE`, `SINGLE_ACCOUNT_REPLICAS` or the `multi-account` profile by hand: `./scripts/switch-telegram-mode.sh single|multi` writes them together, and `deploy.sh` refuses to run when they disagree. Session files are named `<role>-<account>` (for example `listener-russia.session`); the default account keeps the bare role name (`listener`, `discovery`, `enrichment`, `analytics`).
+
 ## LLM variables
 
 Details and examples: [LLM Gateway and Providers](../operator-guide/external-llm.md).

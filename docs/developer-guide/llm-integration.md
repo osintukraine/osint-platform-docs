@@ -29,7 +29,7 @@ Some rules are enforced in code whatever the model says: spam and non-relevant p
 
 ## Prompts
 
-Prompts are rows in `llm_prompts` (`task`, `version`, `is_active`, `expected_output_format`). Never edit a row in place: insert a new version and flip `is_active`; rollback is flipping it back. Production runs v12 (migration 037), which carries a JSON schema in `expected_output_format` and so makes the classifier request structured output. The activation and rollback SQL is in [LLM Gateway and Providers](../operator-guide/external-llm.md#prompt-versions). `{{MILITARY_SLANG}}` is injected from the `military_slang` table by every caller.
+Prompts are rows in `llm_prompts` (`task`, `version`, `is_active`, `expected_output_format`). Never edit a row in place: insert a new version and flip `is_active`; rollback is flipping it back. Production runs v12 (migration 037), which carries a JSON schema in `expected_output_format` and so makes the classifier request structured output. The activation and rollback SQL is in [LLM Gateway and Providers](../operator-guide/external-llm.md#prompt-versions). Prompt v13 (migration 044, inserted inactive until benchmarked against v12) adds a one-call enrichment step (keywords, entities, locations, urgency, sentiment) written as `message_tags` with `generated_by = 'classifier'`. With `LLM_CLASSIFIER_MODE=modular` the processor instead runs three parallel prompts (`classify_screen`, `classify_assess`, `classify_enrich`, migration 048) and merges them into the v13 output; the default is `unified`. `{{MILITARY_SLANG}}` is injected from the `military_slang` table by every caller.
 
 ## Background LLM work
 

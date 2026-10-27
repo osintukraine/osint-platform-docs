@@ -13,7 +13,7 @@ graph LR
     C --> D{Match?}
     D -->|Yes| E[Log Match]
     D -->|No| F{Confidence?}
-    F -->|≥85%| G[Auto-Action]
+    F -->|≥85%| G[Auto-hide or reclassify 'uncertain'; else review]
     F -->|60-85%| H[Queue Review]
     F -->|<60%| I[Log Only]
     G --> J[Audit Log]
@@ -31,12 +31,14 @@ graph LR
 | **Processing Mode** | Background batch sampling |
 | **Speed** | Slow (LLM inference per message) |
 | **Priority** | Low (25) - runs when LLM resources available |
+| **Worker** | `enrichment-fact-check` compose service, metrics on port 9203 |
 | **Purpose** | Classification quality assurance |
 | **Actions** | Auto-reclassify, auto-hide, queue for review |
 
 !!! success "Production Stats"
-    - **Sampling**: 50 messages per cycle across all topics
+    - **Sampling**: 50 messages per cycle across all topics, after any pending council votes
     - **Accuracy Target**: 95%+ classification match rate
+    - **Council**: also casts the auditor vote on `council_pending` decisions (see [Classification Council](#classification-council))
     - **Review Queue**: Surfaces misclassifications for human review
     - **Lane**: runs on the LLM gateway's *audit* lane (reasoning alias); with `LLM_PROVIDER=ollama` it uses the configured Ollama endpoint
 
@@ -147,7 +149,7 @@ SELECT * FROM sampled WHERE rn <= :per_topic LIMIT :batch_size
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `FACT_CHECK_SAMPLE_SIZE` | 50 | Total messages per cycle |
-| `FACT_CHECK_PER_TOPIC` | 5 | Max messages per topic |
+| `FACT_CHECK_PER_TOPIC` | 5 in code, `3` in compose | Max messages per topic |
 
 This ensures rare topics (e.g., `disinformation`) get checked alongside common ones (e.g., `combat`).
 
@@ -162,9 +164,10 @@ graph TD
     B -->|60-85%| D[Queue Review]
     B -->|<60%| E[Log Only]
 
-    C --> F{Spam Type?}
-    F -->|off_topic| G[Auto-Hide Message]
-    F -->|other| H[Auto-Reclassify]
+    C --> F{Verdict?}
+    F -->|off_topic spam| G[Auto-Hide Message]
+    F -->|original was 'uncertain'| H[Auto-Reclassify]
+    F -->|other topic flip| D
 
     style C fill:#e1ffe1
     style D fill:#fff4e1
@@ -175,9 +178,12 @@ graph TD
 
 | Threshold | Action | Description |
 |-----------|--------|-------------|
-| ≥85% | **Auto-Action** | Automatic reclassification or hide |
+| ≥85% | **Auto-Action** | Auto-hide for confident `off_topic`; auto-reclassify only when the original topic was `uncertain`; any other confident disagreement is queued for review |
 | 60-85% | **Queue Review** | Sets `needs_human_review=TRUE` |
 | <60% | **Log Only** | Records discrepancy for analysis |
+
+!!! note "Why confident topic flips are not applied"
+    The auditor shares the classifier's prompt, so a confident topic flip is usually a boundary call (e.g. movements vs locations). An audit found hundreds of such flips had been applied, so `audit_action()` in `fact_check.py` now only replaces an `uncertain` original automatically.
 
 ### Auto-Hide (Off-Topic Detection)
 
@@ -193,9 +199,9 @@ UPDATE messages SET
 WHERE id = :message_id
 ```
 
-### Auto-Reclassify (Topic Mismatch)
+### Auto-Reclassify (Uncertain Originals)
 
-When fact-check disagrees on topic with high confidence:
+When the original topic was `uncertain` and fact-check returns a different topic with high confidence:
 
 ```python
 # Topic is updated to fact-check result
@@ -209,12 +215,24 @@ All automated actions are logged to `admin_audit_log`:
 ```python
 INSERT INTO admin_audit_log (
     kratos_identity_id,  -- SYSTEM_UUID for automated actions
-    action,              -- 'fact_check_auto_reclassify' or 'fact_check_auto_hide'
+    action,              -- e.g. 'fact_check_auto_reclassify', 'fact_check_auto_hide' (see fact_check.py)
     resource_type,       -- 'message'
     resource_id,         -- message ID
     details              -- JSON with original/new values, confidence, reasoning
 )
 ```
+
+## Classification Council
+
+Besides random sampling, the worker casts the auditor vote of the **classification council** (`shared/python/ai/council.py`). When a post is sent back through the pipeline with `council=true` and the current prompt disagrees with what the platform shows (outcome: spam / off_topic / low_value / archive, plus topic for archived posts), nothing is applied: the new decision is logged in `decision_log` as `council_pending`. Each cycle, `fact_check.py` selects these first, re-classifies the post on the audit lane, and the majority of three decides:
+
+| Auditor says | `decision_log.verification_status` | Result |
+|--------------|-----------------------------------|--------|
+| Same as the new decision | `council_approved` | Decision reprocessor sends the post back; the processor replays the stored decision (no further LLM call) |
+| Same as the current state | `council_rejected` | Post keeps its state |
+| All three differ | `council_human` | Human review queue, post unchanged |
+
+Council votes run unified mode only. Concurrency is `FACT_CHECK_COUNCIL_CONCURRENCY` (admin runtime key `fact_check_council_concurrency`, default 2, range 1-8); a post the auditor cannot answer is dropped from the head of the queue after 3 batches. Only disagreements that change whether the post is shown are voted on; the rest are applied directly.
 
 ## Configuration
 
@@ -227,7 +245,7 @@ Defaults are in `docker-compose.yml` (service `enrichment-fact-check`); the gate
 LLM_PROVIDER=openai                   # or ollama
 LLM_GATEWAY_URL=...
 LLM_GATEWAY_AUDIT_API_KEY=...         # audit lane key (falls back to LLM_GATEWAY_API_KEY)
-FACT_CHECK_MODEL=osint-audit          # gateway alias (a reasoning model)
+FACT_CHECK_MODEL=osint-audit          # gateway alias (a reasoning model); compose default is qwen2.5:3b (Ollama option only)
 FACT_CHECK_NUM_PREDICT=4096           # reasoning tokens count: keep >= 4096 (compose default 500 suits Ollama)
 
 # Classifier Mode
@@ -236,7 +254,8 @@ FACT_CHECK_CLASSIFIER_MODE=unified    # "unified" or "modular"
 # Sampling
 FACT_CHECK_LOOKBACK_DAYS=7            # only recent LLM-classified messages (not 'pending')
 FACT_CHECK_SAMPLE_SIZE=50             # Messages per cycle
-FACT_CHECK_PER_TOPIC=3                # Max per topic
+FACT_CHECK_PER_TOPIC=3                # Max per topic (compose default; code default is 5)
+FACT_CHECK_COUNCIL_CONCURRENCY=       # empty = runtime default (2); admin page overrides
 
 # Action Thresholds
 FACT_CHECK_AUTO_ACTION_THRESHOLD=0.85 # Auto-action confidence
@@ -265,21 +284,21 @@ The service starts with the `enrichment-standard`, `enrichment-full` or `llm-gat
 
 ```sql
 CREATE TABLE classification_fact_checks (
-    id SERIAL PRIMARY KEY,
-    message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE UNIQUE,
+    id BIGSERIAL PRIMARY KEY,
+    message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE UNIQUE,
 
     -- Original classification (from processor)
     original_topic VARCHAR(50),
     original_is_spam BOOLEAN,
     original_spam_type VARCHAR(50),
-    original_confidence FLOAT,
+    original_confidence NUMERIC(5,2),
     original_prompt_version INTEGER,
 
     -- Fact-check classification
     factcheck_topic VARCHAR(50),
     factcheck_is_spam BOOLEAN,
     factcheck_spam_type VARCHAR(50),
-    factcheck_confidence FLOAT,
+    factcheck_confidence NUMERIC(5,2),
     factcheck_prompt_version INTEGER,
     factcheck_model VARCHAR(100),
     factcheck_reasoning TEXT,
@@ -292,12 +311,15 @@ CREATE TABLE classification_fact_checks (
 
     -- Review tracking
     human_reviewed BOOLEAN DEFAULT FALSE,
-    human_decision VARCHAR(50),
-    reviewed_by UUID,
+    human_correct_topic VARCHAR(50),
+    human_correct_is_spam BOOLEAN,
+    human_correct_spam_type VARCHAR(50),
+    human_notes TEXT,
+    reviewed_by VARCHAR(100),
     reviewed_at TIMESTAMP WITH TIME ZONE,
 
     -- Action tracking
-    action_taken VARCHAR(50),  -- 'logged_only', 'auto_reclassify', 'auto_hide', 'queued_review'
+    action_taken VARCHAR(50),  -- 'logged_only', 'auto_reclassify', 'auto_hide', 'queued_review', 'council_*'
     action_taken_at TIMESTAMP WITH TIME ZONE,
 
     -- Metrics
@@ -305,9 +327,9 @@ CREATE TABLE classification_fact_checks (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Index for pending review queries
-CREATE INDEX idx_fact_checks_pending ON classification_fact_checks
-    (created_at DESC) WHERE classification_match = FALSE AND human_reviewed = FALSE;
+-- Partial index for pending review queries
+CREATE INDEX idx_fact_checks_human_review ON classification_fact_checks
+    (human_reviewed) WHERE human_reviewed = FALSE AND classification_match = FALSE;
 ```
 
 ## Admin API
@@ -318,10 +340,16 @@ CREATE INDEX idx_fact_checks_pending ON classification_fact_checks
 |--------|----------|-------------|
 | GET | `/api/admin/fact-check/stats` | Dashboard statistics |
 | GET | `/api/admin/fact-check/pending` | Pending review queue |
+| GET | `/api/admin/fact-check/reviewed` | Already reviewed items |
 | GET | `/api/admin/fact-check/all` | All fact-checks (paginated) |
-| POST | `/api/admin/fact-check/{id}/review` | Submit human review |
-| POST | `/api/admin/fact-check/bulk/approve-original` | Bulk approve originals |
-| POST | `/api/admin/fact-check/bulk/approve-factcheck` | Bulk approve fact-checks |
+| POST | `/api/admin/fact-check/{fact_check_id}/approve` | Accept the fact-check classification (applies it to the message) |
+| POST | `/api/admin/fact-check/{fact_check_id}/reject` | Keep the original classification |
+| POST | `/api/admin/fact-check/{message_id}/unhide` | Unhide a message hidden by auto-hide |
+| DELETE | `/api/admin/fact-check/{message_id}` | Delete a message |
+| POST | `/api/admin/fact-check/bulk-approve` | Bulk approve fact-checks |
+| POST | `/api/admin/fact-check/bulk-delete` | Bulk delete |
+
+All endpoints require an admin user.
 
 ### Stats Response
 
@@ -368,36 +396,39 @@ CREATE INDEX idx_fact_checks_pending ON classification_fact_checks
 
 ## Metrics
 
-### Prometheus Endpoints
+### Prometheus Endpoint
 
-The fact-check worker exposes metrics on port 9197:
+The `enrichment-fact-check` worker serves metrics on port **9203** (`METRICS_PORT` in compose; the worker's built-in fallback is 9197):
 
 ```bash
-curl http://localhost:9197/metrics
+curl http://localhost:9203/metrics
 ```
 
 ### Key Metrics
 
+The worker uses the shared enrichment metrics (`services/enrichment/src/metrics.py`); there are no fact-check-specific series. Per-task labels use `task="fact_check"`.
+
 ```prometheus
-# Messages processed
-enrichment_messages_processed_total{task="fact_check"} 1500
-
-# Discrepancies found
-enrichment_fact_check_discrepancies_total{type="topic_mismatch"} 52
-enrichment_fact_check_discrepancies_total{type="spam_mismatch"} 23
-
-# Actions taken
-enrichment_fact_check_actions_total{action="auto_reclassify"} 15
-enrichment_fact_check_actions_total{action="auto_hide"} 8
-enrichment_fact_check_actions_total{action="queued_review"} 45
-
-# Accuracy rate
-enrichment_fact_check_accuracy_rate 0.948
-
-# Processing time
-enrichment_fact_check_processing_ms{quantile="0.5"} 1200
-enrichment_fact_check_processing_ms{quantile="0.95"} 3500
+enrichment_messages_processed_total{task="fact_check"}
+enrichment_errors_total{task="fact_check", error_type="..."}
+enrichment_task_duration_seconds{task="fact_check"}
+llm_requests_total{task="fact_check", model="...", status="..."}
 ```
+
+Discrepancy rates and actions come from SQL on `classification_fact_checks` (`classification_match`, `discrepancy_type`, `action_taken`) or the `/stats` endpoint.
+
+## Running Locally
+
+```bash
+# Start the worker (profiles: enrichment-standard, enrichment-full, enrichment or llm-gateway)
+docker-compose --profile llm-gateway up -d enrichment-fact-check
+docker-compose logs -f enrichment-fact-check
+
+# Outside Docker (from services/enrichment, with the compose env exported)
+python -m src.workers.fact_check_worker
+```
+
+Verify: `curl -s localhost:9203/metrics | grep 'task="fact_check"'` and `SELECT COUNT(*) FROM classification_fact_checks;`.
 
 ## Troubleshooting
 

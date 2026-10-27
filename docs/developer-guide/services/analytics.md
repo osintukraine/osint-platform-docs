@@ -16,7 +16,7 @@ The Analytics Service provides automated social graph data collection from Teleg
 **Service Type:** Background scheduler (APScheduler)
 **Language:** Python 3.11+
 **Key Libraries:** Telethon, asyncpg, APScheduler
-**Docker Profile:** `enrichment`
+**Docker Profiles:** `enrichment-lite`, `enrichment-standard`, `enrichment-full`, `enrichment`
 
 ---
 
@@ -40,8 +40,9 @@ Telegram API (Polling)
 │                                            │
 │   ┌─────────────────────────────────────┐ │
 │   │  View Refresher                     │ │
-│   │  - Refresh materialized views       │ │
-│   │  - Update social graph data         │ │
+│   │  - Rebuild channel_interactions and │ │
+│   │    tag_stats aggregate tables       │ │
+│   │  - Refresh 6 materialized views     │ │
 │   │  Schedule: Daily at 03:00 UTC       │ │
 │   └─────────────────────────────────────┘ │
 │                                            │
@@ -63,12 +64,12 @@ PostgreSQL Database
 
 | File | Purpose | Lines |
 |------|---------|-------|
-| `src/main.py` | Service entry point, scheduler setup | 324 |
-| `src/engagement_poller.py` | Hourly engagement metric polling | 421 |
-| `src/view_refresher.py` | Daily materialized view refresh | 228 |
-| `src/telethon_client.py` | Shared Telegram client (singleton) | 133 |
-| `Dockerfile` | Container image definition | 48 |
-| `requirements.txt` | Python dependencies | 27 |
+| `src/main.py` | Service entry point, scheduler setup | 322 |
+| `src/engagement_poller.py` | Hourly engagement metric polling | 420 |
+| `src/view_refresher.py` | Daily aggregate rebuild and materialized view refresh | 295 |
+| `src/telethon_client.py` | Shared Telegram client (singleton, dedicated `analytics` / `analytics-<account>` session) | 132 |
+| `Dockerfile` | Container image definition | |
+| `requirements.txt` | Python dependencies | |
 
 ---
 
@@ -80,7 +81,7 @@ PostgreSQL Database
 
 **What it does:**
 
-- Polls Telegram API for last 24 hours of messages
+- Polls Telegram API for the last 24 hours of non-spam messages per active channel (newest 500 per channel)
 - Fetches: `message.views`, `message.forwards`, `message.reactions`
 - Calculates deltas (change since last snapshot)
 - Stores time-series data in `message_engagement_timeline`
@@ -111,7 +112,7 @@ The service implements a two-tier reaction tracking strategy:
 !!! tip "Rate Limiting"
     - Batch size: 100 messages per API call (Telegram's limit)
     - Sleep: 1-2 seconds between batches
-    - Flood-wait handling: Automatic retry with exponential backoff (max 3 attempts)
+    - Flood-wait handling: Waits the server-specified time (+1 s) and retries, max 3 attempts
 
 ### 2. Materialized View Refresh
 
@@ -119,9 +120,12 @@ The service implements a two-tier reaction tracking strategy:
 
 **What it does:**
 
+- First rebuilds two aggregate tables that had no other writer: `channel_interactions` (from `message_forwards`: original's channel to forwarding channel) and `tag_stats` (from `message_tags`)
 - Refreshes pre-computed materialized views for fast API queries
-- Uses `REFRESH MATERIALIZED VIEW CONCURRENTLY` (non-blocking)
-- Logs refresh duration and row counts for monitoring
+- Uses `REFRESH MATERIALIZED VIEW CONCURRENTLY` (non-blocking), falling back to a blocking `REFRESH MATERIALIZED VIEW` when the view has no unique index or is unpopulated
+- Each statement has a 2-hour timeout (`REFRESH_TIMEOUT_SECONDS = 7200`), because the pool's default 60 s command timeout is too short for `message_social_graph` (hundreds of thousands of rows)
+- A failure in one view or aggregate is logged and does not stop the others
+- Logs refresh duration and row counts to `materialized_view_refresh_log` (90-day retention)
 
 **Views Refreshed:**
 
@@ -130,6 +134,12 @@ The service implements a two-tier reaction tracking strategy:
 | `message_social_graph` | Per-message network data (author, forwards, reactions) | 10K-100K | 2-3 minutes |
 | `channel_influence_network` | Cross-channel forwarding patterns | 1K-10K | 1-2 minutes |
 | `top_influencers` | Most influential users/channels | 100-1K | <1 minute |
+| `top_forwarded_messages` | Virality panel | - | - |
+| `unified_message_entities` | Entity views | - | - |
+| `analytics_daily_summary` | Backs `/api/analytics/channels` | - | - |
+
+!!! note
+    Row counts and times are rough, from early deployments. `message_social_graph` has taken over 30 minutes on a large database. Check `materialized_view_refresh_log` for real numbers.
 
 **Monitoring:**
 
@@ -188,6 +198,8 @@ TELEGRAM_API_HASH=your_api_hash       # From https://my.telegram.org
 TELEGRAM_SESSION_PATH=/app/sessions   # Session file location
 ```
 
+Per-account services (multi mode) also get `SOURCE_ACCOUNT` (`russia` or `ukraine`; unset = default account, which serves every channel no named account follows) and use `TELEGRAM_API_ID_<ACCOUNT>` / `TELEGRAM_API_HASH_<ACCOUNT>` as their API credentials. `VIEW_REFRESH=false` turns off the daily view refresh in a service (compose sets it on `analytics-ukraine`).
+
 **Database:**
 
 ```bash
@@ -211,9 +223,11 @@ REDIS_DB=0
 
 ```bash
 MINIO_ENDPOINT=minio:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
+MINIO_ACCESS_KEY=your_access_key
+MINIO_SECRET_KEY=your_secret_key
 ```
+
+**JWT (required by shared config):** `JWT_SECRET_KEY` must be set; compose refuses to start without it.
 
 **Logging:**
 
@@ -260,14 +274,13 @@ scheduler.add_job(
 
 1. **Telegram Authentication**
 
-The analytics service shares Telegram sessions with the listener. You must authenticate once:
+The analytics service opens its own dedicated session file, `./telegram_sessions/analytics.session` (SQLite cannot be shared between services because of write locks). Authenticate once with the auth script, which also creates the per-service session copies:
 
 ```bash
-# Authenticate via listener (creates session file)
-docker-compose exec listener python -m src.telegram_auth
-
-# Session file is shared with analytics at ./telegram_sessions/analytics.session
+python3 scripts/telegram_auth.py
 ```
+
+Session names follow the `role` / `role-account` scheme from `shared/python/telegram/session_names.py`. The service opens `analytics` for the default account, or `analytics-<account>` when `SOURCE_ACCOUNT` is `russia` or `ukraine` (`python3 scripts/telegram_auth.py --account russia|ukraine` creates them). In multi mode (`TELEGRAM_MODE=multi`) compose runs `analytics-russia` and `analytics-ukraine` instead of `analytics`; each polls engagement and metadata only for the channels of its own account (`account_filter` on `channels.source_account`). The daily materialized-view refresh is database-only, so `analytics-ukraine` sets `VIEW_REFRESH=false` and `analytics-russia` refreshes the views once.
 
 2. **Environment Configuration**
 
@@ -281,11 +294,11 @@ POSTGRES_PASSWORD=your_secure_password
 
 ### Docker Compose (Recommended)
 
-The service is part of the `enrichment` profile:
+The service is part of the `enrichment-lite`, `enrichment-standard`, `enrichment-full` and `enrichment` profiles. It depends on healthy `postgres` and `listener` containers:
 
 ```bash
 # Start analytics service
-docker-compose --profile enrichment up -d analytics
+docker-compose --profile enrichment-standard up -d analytics
 
 # View logs
 docker-compose logs -f analytics
@@ -387,7 +400,7 @@ CREATE TABLE message_reactions (
     message_id BIGINT NOT NULL REFERENCES messages(id),
 
     -- Reaction details
-    emoji VARCHAR(20) NOT NULL,       -- 👍, 👎, ❤️, 🔥, etc.
+    emoji VARCHAR(50) NOT NULL,       -- 👍, 👎, ❤️, 🔥, or custom:{document_id}
     count INTEGER DEFAULT 1,          -- Aggregate count or 1 for individual
 
     -- Optional: Individual user reactions
@@ -423,6 +436,8 @@ Tracks which channels forward to which channels, enabling influence mapping and 
 **`top_influencers`** - Influential users/channels
 
 Ranked by interaction count, reach, and engagement for trending analysis.
+
+`top_forwarded_messages`, `unified_message_entities` and `analytics_daily_summary` are refreshed by the same job (see the table above).
 
 ---
 
@@ -613,7 +628,7 @@ docker-compose logs analytics | grep "FloodWait"
 
 **Increase Sleep Between Batches:**
 
-Edit `src/engagement_poller.py` line ~170:
+Edit the `asyncio.sleep(1)` after each batch in `src/engagement_poller.py`:
 
 ```python
 # Increase from 1 to 2 seconds
@@ -677,7 +692,7 @@ trigger=CronTrigger(hour='0,6,12,18', minute=0)
 
 Telegram API limit is 100 messages per request. If you have many small channels:
 
-Edit `src/engagement_poller.py` line ~144:
+Edit `batch_size` in `src/engagement_poller.py`:
 
 ```python
 # Reduce batch size for more frequent sleep breaks
@@ -715,8 +730,8 @@ For large deployments (>100K messages), consider:
 
 ### Access Control
 
-- Service uses **read-only** Telegram account (cannot post/delete)
-- Database user has INSERT/UPDATE permissions only
+- The service only reads from Telegram (it never posts or deletes)
+- Uses the shared platform database user (not a restricted INSERT/UPDATE role)
 - No external API endpoints (internal service only)
 
 ### Rate Limit Compliance
@@ -724,8 +739,14 @@ For large deployments (>100K messages), consider:
 The service respects Telegram's rate limits:
 
 - 20 requests/second global limit
-- Automatic flood-wait retry with exponential backoff
+- Flood-wait handling: waits the server-specified time plus 1 s, up to 3 attempts
 - Staggered job schedules to spread API load
+
+---
+
+## Metrics
+
+The service does not currently expose Prometheus metrics (`prometheus-client` is a dependency but unused). Its compose healthcheck only verifies that PID 1 exists. Monitor it through logs and the `materialized_view_refresh_log` table (see [Monitoring](#monitoring)).
 
 ---
 
@@ -756,6 +777,6 @@ The service respects Telegram's rate limits:
 
 ---
 
-**Last Updated:** 2025-12-09
+**Last Updated:** 2026-10-27
 **Service Version:** v0.1.0
 **Status:** Production-ready

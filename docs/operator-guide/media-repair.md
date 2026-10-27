@@ -24,7 +24,7 @@ The media repair tool is a unified CLI utility for diagnosing and fixing media a
 
 **Location**: `services/processor/tools/media_repair.py`
 
-**Access**: Run from the processor-worker container:
+**Access**: Run from the processor-worker container (the `tools/` directory is copied into the processor image, so rebuild it after upgrading):
 
 ```bash
 docker-compose exec processor-worker python tools/media_repair.py <command>
@@ -92,7 +92,8 @@ docker-compose exec processor-worker python tools/media_repair.py albums --limit
 |--------|-------------|
 | `--limit N` | Process only N albums |
 | `--dry-run` | Report issues without making changes |
-| `--temp-session` | Use separate Telegram session (avoids lock) |
+
+`--temp-session` is a global option and goes **before** the command (see [Scenario 4](#scenario-4-telegram-session-lock)).
 
 ---
 
@@ -120,7 +121,6 @@ docker-compose exec processor-worker python tools/media_repair.py message 817060
 | Option | Description |
 |--------|-------------|
 | `--dry-run` | Report only, no downloads |
-| `--temp-session` | Use separate Telegram session |
 
 ---
 
@@ -236,8 +236,10 @@ docker-compose logs media-sync --tail 50
 **Symptom**: Error "database is locked" when running repair
 
 ```bash
-# Use temp session flag to avoid conflict with listener
-docker-compose exec processor-worker python tools/media_repair.py albums --temp-session
+# The tool uses the session file "listener" by default. --temp-session (global option, before the
+# command) uses the session file "repair_temp" instead; it must exist in telegram_sessions/ and be authorized
+# (a copy of an authorized session, see Telegram Setup)
+docker-compose exec processor-worker python tools/media_repair.py --temp-session albums
 
 # Or stop listener temporarily
 docker-compose stop listener
@@ -255,10 +257,10 @@ The Telegram session file doesn't exist or is expired.
 
 ```bash
 # Check session files exist
-docker-compose exec processor-worker ls -la /data/telegram_sessions/
+docker-compose exec processor-worker ls -la /app/sessions/
 
-# If missing, copy from listener or re-authenticate
-docker-compose exec listener ls -la /data/telegram_sessions/
+# If missing, re-authenticate (see Telegram Setup). Session files are bound to the server that created them
+docker-compose exec listener ls -la /app/sessions/
 ```
 
 ### Error: "Connection refused" to Redis
@@ -335,6 +337,8 @@ GROUP BY 1;
 
 ## See Also
 
+- [Media Lanes](media-lanes.md) - Background media download (`media_status`); this tool repairs the legacy `media_files` path
+- [Telegram Setup](telegram-setup.md) - Session files
 - [Troubleshooting Guide](troubleshooting.md) - General platform troubleshooting
 - [Backup & Restore](backup-restore.md) - Media backup procedures
 - [Hetzner Storage](hetzner-storage.md) - Storage box configuration

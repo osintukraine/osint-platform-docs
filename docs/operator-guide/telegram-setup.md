@@ -111,13 +111,11 @@ python3 scripts/telegram_auth.py
 # Enter the verification code you received: 12345
 # Enter 2FA password (if enabled): ******
 
-# Success output:
-# Successfully logged in as: John Doe (@johndoe)
-# Session files created:
-#   - telegram_sessions/osint_platform.session (master)
-#   - telegram_sessions/listener.session
-#   - telegram_sessions/enrichment.session
+# Success output: the master session telegram_sessions/osint_platform.session, plus one copy per
+# service role: listener.session, enrichment.session, discovery.session, analytics.session
 ```
+
+Run it on the server that will use the sessions: a session is bound to its server and IP, and copying one to a second host gets it revoked (`AuthKeyDuplicated`).
 
 **Check session status:**
 
@@ -177,13 +175,19 @@ session files from another machine.
 **Option A: Using mode switcher script (Recommended)**
 
 ```bash
+# Check the prerequisites without changing anything
+./scripts/switch-telegram-mode.sh ready
+
 # Switch to multi-account mode
 ./scripts/switch-telegram-mode.sh multi
 
 # This automatically:
-# - Stops the single-account listener
-# - Starts listener-russia and listener-ukraine
-# - Starts enrichment-russia and enrichment-ukraine
+# - Refuses to switch unless both accounts' TELEGRAM_API_ID_/HASH_ values are in .env and their sessions
+#   exist, media_lane_enabled is on in every processor, and no channel of the default account is still active
+# - Writes TELEGRAM_MODE=multi, SINGLE_ACCOUNT_REPLICAS=0 and `multi-account` in COMPOSE_PROFILES to .env
+#   (backup first), which stops the default account's listener, media-worker, enrichment-telegram and analytics
+# - Runs ./scripts/deploy.sh --quick, which starts the per-account services: listener-, media-worker-,
+#   enrichment-telegram- and analytics-<account> for russia and ukraine (shadow-sync is not part of it)
 
 # Check current mode
 ./scripts/switch-telegram-mode.sh status
@@ -192,10 +196,13 @@ session files from another machine.
 ./scripts/switch-telegram-mode.sh single
 ```
 
+`TELEGRAM_MODE` in `.env` (`single` or `multi`, unset means `single`) is the switch; `deploy.sh` stops with an
+error if the `.env` lines disagree with it (`./scripts/switch-telegram-mode.sh check`). Processors run in both modes.
+
 **Option B: Manual docker-compose commands**
 
 ```bash
-# Start both listeners
+# Start both listeners (prefer the mode switcher above: it also scopes the default account's services)
 docker-compose --profile multi-account up -d listener-russia listener-ukraine
 
 # Verify running
@@ -205,16 +212,20 @@ docker-compose ps | grep listener
 # osint-listener-russia    running   8011/tcp
 # osint-listener-ukraine   running   8012/tcp
 
-# (Optional) Stop default single-account listener
+# Stop the default single-account listener (the mode switcher does this with SINGLE_ACCOUNT_REPLICAS=0)
 docker-compose stop listener
 ```
 
 ### Session File Structure
 
+One file per service role and account: `<role>.session` for the default account, `<role>-<account>.session` for a named account. The processor and media-worker also claim numbered copies (`processor-0.session`, `media-worker-0.session`, ...) at start, so no two processes share a session; a named account's media workers copy from its seed (`russia.session` gives `media-worker-russia-0.session`), the default ones from `listener.session`.
+
 ```bash
 telegram_sessions/
-├── osint_platform.session          # Default account: listener (single-account mode)
+├── osint_platform.session          # Default account: master created by telegram_auth.py
+├── listener.session                # Default account: listener (single-account mode)
 ├── discovery.session               # Default account: folder sync and backfill
+├── analytics.session               # Default account: analytics
 ├── enrichment.session              # Default account: enrichment worker (separate to avoid SQLite locks)
 ├── russia.session                  # Russia account seed (telegram_auth.py --account russia)
 ├── listener-russia.session         # Russia account: listener
@@ -270,11 +281,12 @@ Telegram sessions can expire due to:
 **Solution**: Re-authenticate:
 
 ```bash
-# Remove old session
-rm telegram_sessions/osint_platform.session
+# Remove the expired session files (default account; use e.g. *-russia.session for a named account)
+rm telegram_sessions/osint_platform.session telegram_sessions/{listener,discovery,enrichment,analytics}.session
 
-# Create new session (follow prompts)
-docker-compose run --rm listener python -m telethon_session_creator
+# Create new sessions (follow prompts); add --account russia / ukraine for named accounts
+python3 scripts/telegram_auth.py
+docker-compose restart listener
 ```
 
 ### Session Security
@@ -291,48 +303,11 @@ gpg -c sessions-backup-$(date +%Y%m%d).tar.gz  # Encrypt with password
 rm sessions-backup-$(date +%Y%m%d).tar.gz      # Remove unencrypted backup
 ```
 
-### Upgrading from Previous Versions
+### Session File Location
 
-!!! warning "Session Location Changed (December 2025)"
-    If you're upgrading from a pre-December 2025 installation, session file locations have changed.
+Session files live in `telegram_sessions/` in the repository root, bind-mounted at `/app/sessions` in every container (compose sets `TELEGRAM_SESSION_PATH=/app/sessions`). Sessions from an older layout or from another machine are not picked up: re-authenticate with `scripts/telegram_auth.py` on the server that runs the stack.
 
-**Changes Made:**
-
-| Setting | Old Value | New Value |
-|---------|-----------|-----------|
-| Session directory | `/app/data/` | `/data/sessions/` |
-| Mount propagation | `:rshared` flag | Removed (incompatible with SSHFS) |
-
-**Symptoms if not migrated:**
-
-- "Session file not found" errors in listener logs
-- Telegram prompts for re-authentication
-- Listener fails to start
-
-**Migration Steps:**
-
-```bash
-# 1. Check where your old sessions are
-ls -la data/*.session 2>/dev/null
-ls -la data/telegram_sessions/*.session 2>/dev/null
-
-# 2. Create new directory
-mkdir -p data/sessions
-
-# 3. Move session files
-mv data/*.session data/sessions/ 2>/dev/null
-mv data/telegram_sessions/*.session data/sessions/ 2>/dev/null
-
-# 4. Restart listener
-docker-compose restart listener
-
-# 5. Verify it's working
-docker-compose logs listener | tail -20
-```
-
-**If session files are corrupted**, you'll need to re-authenticate (see [Session Creation](#creating-telegram-sessions)).
-
-See [Production Gotchas](production-gotchas.md#session-file-location-changes) for more details.
+See [Production Gotchas](production-gotchas.md#session-file-location-and-names) for symptoms and prevention.
 
 ## Folder-Based Channel Management
 
@@ -343,15 +318,15 @@ The platform uses Telegram app folders to organize and manage channels. No datab
 !!! warning "12-Character Folder Name Limit"
     Telegram limits folder names to **12 characters maximum**. Use short suffixes like `-UA` and `-RU` instead of full country names.
 
-| Folder Pattern | Processing Tier | LLM Behavior |
+| Folder Pattern | Processing Tier | Behavior |
 |----------------|-----------------|--------------|
-| `Archive-*` | Archive tier | Lenient - archives most Ukraine-relevant content |
-| `Monitor-*` | Monitor tier | Strict - only high-value OSINT content |
-| `Discover-*` | Discovery tier | Very strict + 14-day probation (from forward chains) |
-| `Rec-*` | Recommendation tier | Very strict + 14-day probation (from Telegram recommendations) |
+| `Archive-*` | Archive tier | Lenient - archives Ukraine-relevant, non-spam content |
+| `Monitor-*` | Monitor tier | Archives only posts rated at or above `monitoring_min_importance` (default `medium`) |
+| `Discover-*` | Discovery tier | Same minimum importance as Monitor + probation (from forward chains) |
+| `Rec-*` | Recommendation tier | Treated as the discovery tier (from Telegram recommendations) |
 
 !!! important "The LLM is the Arbiter"
-    The folder tier sets how strict the LLM should be, but the **AI makes the final `should_archive` decision** for every message. Even Archive-tier messages can be rejected if the LLM determines they lack OSINT value.
+    The folder tier is context for the classifier, and the **AI makes the `should_archive` decision** for every message, so even Archive-tier messages can be rejected. Rules in code then apply whatever the model says: spam and non-Ukraine-relevant posts are never archived, and Monitor/Discover/Rec posts below `monitoring_min_importance` are not archived. Without an LLM the [embedding filter](processing-modes.md) decides.
 
 **Valid Examples** (≤12 characters):
 
@@ -406,7 +381,7 @@ grep FOLDER_SYNC_INTERVAL .env
 **Sync Workflow**:
 
 1. Listener reads all folders from Telegram account
-2. Matches folder names against patterns (`Archive-*`, `Monitor-*`, `Discover-*`)
+2. Matches folder names against patterns (`Archive*`, `Monitor*`, `Discover*`)
 3. Creates/updates channels in database
 4. Assigns intelligence rules based on folder pattern
 5. Starts monitoring matched channels
@@ -414,7 +389,7 @@ grep FOLDER_SYNC_INTERVAL .env
 **View sync logs**:
 
 ```bash
-docker-compose logs listener | grep -i folder
+docker-compose logs listener | grep -i folder     # listener-russia / listener-ukraine in multi-account mode
 
 # Expected output:
 # INFO: Discovered folder: Archive-RU (12 channels)
@@ -439,9 +414,12 @@ docker-compose logs listener | grep "Assigned rule"
 
 **Method 2: Auto-Discovery (Discover-* folders)**
 
-1. Create `Discover-New` folder
-2. Platform auto-joins channels found in forward chains
-3. Channels stay for 14-day probation
+!!! warning "Automatic joins are off by default"
+    The admin setting `channel_joins_enabled` (`CHANNEL_JOINS_ENABLED`) defaults to **off**: the platform does not join channels on its own (forward discovery, accepted channel submissions) until you turn it on. With it off, add channels to folders by hand.
+
+1. Create a `Discover-UA` / `Discover-RU` folder
+2. With joins enabled, the platform joins channels found in forward chains
+3. Channels are evaluated after a probation of 7 days that starts once they have 30+ messages
 4. Move to `Archive-*` or `Monitor-*` to keep permanently
 
 #### Removing Channels
@@ -467,7 +445,7 @@ ORDER BY last_message_at;
 # Disable stale channels (mark inactive, stop monitoring)
 docker-compose exec postgres psql -U osint_user -d osint_platform -c "
 UPDATE channels
-SET is_active = false
+SET active = false
 WHERE last_message_at < NOW() - INTERVAL '30 days';
 "
 ```
@@ -482,18 +460,18 @@ flowchart LR
     B -->|Spam| C[Discard]
     B -->|Not Spam| D{Ukraine Relevant?}
     D -->|No| E[Quarantine]
-    D -->|Yes| F{LLM Classification}
-    F -->|should_archive=false| G[Discard]
+    D -->|Yes| F{LLM Classification + tier rules}
+    F -->|should_archive=false| G[Not archived]
     F -->|should_archive=true| H[Archive]
 ```
 
 #### Archive Tier (`Archive-*` folders)
 
-**LLM behavior**: Lenient classification - archives most Ukraine-relevant content.
+**Behavior**: Lenient - archives most Ukraine-relevant content.
 
 - **Spam filter**: YES (filters donation scams, crypto ads)
 - **Ukraine relevance**: YES (non-relevant goes to quarantine)
-- **LLM strictness**: LOW (most relevant messages pass)
+- **Importance floor**: none (low-importance relevant posts are archived)
 - **Typical archive rate**: 70-90% of non-spam messages
 
 **Use cases**:
@@ -503,11 +481,11 @@ flowchart LR
 
 #### Monitor Tier (`Monitor-*` folders)
 
-**LLM behavior**: Strict classification - only high-value OSINT content.
+**Behavior**: Selective - only posts rated `medium` importance or higher are archived (`monitoring_min_importance`).
 
 - **Spam filter**: YES
 - **Ukraine relevance**: YES
-- **LLM strictness**: HIGH (only clear OSINT value passes)
+- **Importance floor**: `monitoring_min_importance` (default `medium`)
 - **Typical archive rate**: 20-40% of non-spam messages
 
 **Use cases**:
@@ -519,12 +497,12 @@ flowchart LR
 
 #### Discovery Tier (`Discover-*` folders)
 
-**LLM behavior**: Very strict classification + 14-day probation period.
+**Behavior**: Same importance floor as Monitor, plus a probation period.
 
-- **Auto-join**: YES (from forward chains)
-- **LLM strictness**: VERY HIGH (prove the channel's worth)
-- **Probation period**: 14 days
-- **Auto-removal**: After 14 days if inactive or spam
+- **Auto-join**: from forward chains, only when `channel_joins_enabled` is on
+- **Probation period**: 7 days, started once the channel has 30+ messages
+- **Auto-promotion** (to a `Monitor-<country>` folder): 100+ messages, under 15% spam and under 30% off-topic
+- **Auto-rejection** (channel left): over 50% spam or over 70% off-topic
 
 **Discovery Sources**:
 
@@ -569,10 +547,10 @@ The platform discovers new channels through two mechanisms:
 3. Auto-joins and adds to `Discover-{country}` folder
 4. Fetches top 3 Telegram recommendations for that channel
 5. For each recommendation: runs 3-round detection → adds to `Rec-{country}` folder
-6. Monitors for 14 days with very strict filtering
-7. **Decision after 14 days**:
-   - **Active + valuable**: Move to `Archive-*` or `Monitor-*`
-   - **Inactive or spam**: Auto-removed
+6. Monitors with the Monitor-tier importance floor; probation (7 days) starts once the channel has 30+ messages
+7. **Decision after probation**:
+   - **Active + valuable**: Promoted to a `Monitor-<country>` folder (or move it to `Archive-*` yourself)
+   - **Spam or off-topic**: Channel is left and marked for removal
 
 **View discovery candidates**:
 
@@ -618,6 +596,8 @@ ORDER BY created_at DESC;
 
 ### Account Assignment by Folder
 
+Each account is a separate Telegram account with its own folders. A listener syncs the folders of its own account (`SOURCE_ACCOUNT`: `russia`, `ukraine`, or default) and tags the channels it finds with that `source_account`. The `-RU` / `-UA` suffixes are a naming convention; the account a channel belongs to is the one whose folders it appears in.
+
 !!! warning "12-Character Folder Limit Applies"
     Remember: Telegram folder names are limited to 12 characters. Use short suffixes like `-RU` and `-UA`.
 
@@ -647,8 +627,8 @@ Ukraine Account:
 
 **Rate Limits** (per account):
 
-- **Message fetching**: 20 requests/second per account
-- **Channel joins**: 20 joins/day per account
+- **Message fetching**: roughly 20 requests/second per account
+- **Channel joins**: ~20 joins/day per account (Telegram's limit)
 - **Downloads**: Unlimited (but throttled by Telegram)
 
 **With 2 accounts** (Russia + Ukraine):
@@ -664,28 +644,20 @@ Telegram enforces strict API rate limits. The platform handles this automaticall
 
 #### 1. Global Rate Limit
 
-**Limit**: 20 requests/second per account
+**Limit**: roughly 20 requests/second per account (Telegram-side; the exact figure is not published)
 
 **Platform Handling**:
-- Worker pool distributes requests across workers
-- Per-channel rate limiting (1 request per 2 seconds)
-- Redis-based distributed rate limiter
-
-**Configuration**:
-
-```bash
-# In .env (defaults are safe)
-TELEGRAM_RATE_LIMIT_PER_CHANNEL=20  # Messages per minute
-```
+- Telethon sleeps through short FloodWaits automatically
+- Backfills are throttled (`BACKFILL_BATCH_SIZE`, `BACKFILL_DELAY_MS`, `BACKFILL_MAX_CONCURRENT` per listener)
+- Each Telegram account runs in its own process with its own session
 
 #### 2. FloodWait Errors
 
 **Symptom**: `FloodWaitError: Must wait 300 seconds before next request`
 
 **Platform Handling**:
-- Automatic backoff with exponential delay
-- Re-queue message for later processing
-- Continue processing other channels (worker pool isolates failures)
+- Telethon waits out the requested time; long waits are logged
+- Other services keep running (each has its own session)
 
 **View FloodWait in logs**:
 
@@ -696,32 +668,12 @@ docker-compose logs listener | grep FloodWait
 # WARNING: Channel @example flood wait 300s, re-queuing
 ```
 
-**Configuration**:
-
-```bash
-# Flood wait multiplier (backoff aggressiveness)
-TELEGRAM_FLOOD_WAIT_MULTIPLIER=2  # Default: 2 (doubles wait time each retry)
-```
-
 #### 3. Channel Join Limits
 
-**Limit**: 20 joins/day per account
+**Limit**: about 20 joins/day per account
 
 **Platform Handling**:
-- Discovery feature only joins high-potential channels
-- Manual approval workflow for new channels
-- Join queue with daily limit tracking
-
-**View join queue**:
-
-```bash
-docker-compose exec postgres psql -U osint_user -d osint_platform -c "
-SELECT name, join_attempted_at, join_status
-FROM channels
-WHERE join_status = 'pending'
-ORDER BY join_attempted_at;
-"
-```
+- Automatic joins are off by default (`channel_joins_enabled`); add channels to folders by hand and spread large additions over days
 
 ### Handling Rate Limit Errors
 
@@ -766,11 +718,10 @@ asyncio.run(check())
 
 ### Rate Limit Best Practices
 
-1. **Use folder-based management** - Avoid manual channel additions (triggers rate limits)
-2. **Enable worker pool** - Isolates failures, continues processing other channels
-3. **Monitor FloodWait frequency** - If frequent, reduce `TELEGRAM_RATE_LIMIT_PER_CHANNEL`
-4. **Use multi-account** - Doubles effective rate limit
-5. **Avoid bulk operations** - Spread channel additions over days, not hours
+1. **Use folder-based management** - Avoid bulk channel additions (triggers rate limits)
+2. **Monitor FloodWait frequency** - If frequent, raise `BACKFILL_DELAY_MS` and lower `BACKFILL_MAX_CONCURRENT`
+3. **Use multi-account** - Doubles effective rate limit
+4. **Avoid bulk operations** - Spread channel additions over days, not hours
 
 ## Historical Backfill
 
@@ -786,11 +737,12 @@ BACKFILL_ENABLED=true
 BACKFILL_START_DATE=2022-02-24    # Day of Russian invasion
 
 # Backfill mode
-BACKFILL_MODE=manual              # manual, on_discovery, scheduled
+BACKFILL_MODE=manual              # manual, on_discovery (scheduled is not implemented)
 
 # Rate-limit friendly settings
 BACKFILL_BATCH_SIZE=100           # Messages per batch
 BACKFILL_DELAY_MS=1000            # 1 second between batches
+BACKFILL_MAX_CONCURRENT=2         # Backfills each listener runs at once
 
 # Media handling
 BACKFILL_MEDIA_STRATEGY=download_available  # download_available, skip, download_all
@@ -803,14 +755,14 @@ BACKFILL_MEDIA_STRATEGY=download_available  # download_available, skip, download
 Start backfill via API call:
 
 ```bash
-# Trigger backfill for specific channel
-curl -X POST http://localhost:8000/api/admin/backfill \
+# Trigger backfill for one channel (admin API key or session; BACKFILL_ENABLED=true required)
+curl -X POST http://localhost:8000/api/channels/12345/backfill \
+  -H "Authorization: Bearer $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{
-    "channel_id": 12345,
-    "start_date": "2024-01-01"
-  }'
+  -d '{"from_date": "2024-01-01T00:00:00Z"}'
 ```
+
+The request sets the channel's `backfill_status` to `pending`; the listener picks it up. Backfilled messages go to the Redis backfill stream, which only `processor-worker-backfill` reads: add the `backfill` profile to `COMPOSE_PROFILES` (see [Processing Modes](processing-modes.md#backfill-processing)) or they are never stored.
 
 #### On-Discovery Backfill
 
@@ -845,9 +797,9 @@ BACKFILL_MODE=on_discovery
 ```bash
 # View backfill status
 docker-compose exec postgres psql -U osint_user -d osint_platform -c "
-SELECT name, backfill_status, backfill_progress, backfill_started_at
+SELECT name, backfill_status, backfill_messages_fetched, backfill_from_date, backfill_completed_at
 FROM channels
-WHERE backfill_status = 'in_progress';
+WHERE backfill_status IN ('pending', 'in_progress');
 "
 
 # View backfill logs
@@ -927,7 +879,7 @@ docker-compose logs listener | grep -i "folder\|channel"
 
 # Verify channel exists
 docker-compose exec postgres psql -U osint_user -d osint_platform -c "
-SELECT name, folder, is_active
+SELECT name, folder, active
 FROM channels
 WHERE name LIKE '%channel_name%';
 "
@@ -945,7 +897,8 @@ docker-compose restart listener
 1. **Reduce request rate**:
 
 ```bash
-TELEGRAM_RATE_LIMIT_PER_CHANNEL=10  # Lower from 20
+BACKFILL_DELAY_MS=2000       # slower backfill batches
+BACKFILL_MAX_CONCURRENT=1    # one backfill at a time per listener
 ```
 
 2. **Enable multi-account** (doubles capacity):
@@ -977,25 +930,9 @@ LIMIT 10;
 **Solution**: Re-authenticate
 
 ```bash
-# Remove old session
-rm telegram_sessions/osint_platform.session
-
-# Create new session
-docker-compose run --rm listener python -c "
-from telethon import TelegramClient
-import os
-
-async def auth():
-    client = TelegramClient('/app/sessions/osint_platform',
-                           int(os.getenv('TELEGRAM_API_ID')),
-                           os.getenv('TELEGRAM_API_HASH'))
-    await client.start(phone=os.getenv('TELEGRAM_PHONE'))
-    print('Re-authenticated successfully')
-    await client.disconnect()
-
-import asyncio
-asyncio.run(auth())
-"
+# Remove the expired session files and re-authenticate (see Session Expiration above)
+rm telegram_sessions/osint_platform.session telegram_sessions/{listener,discovery,enrichment,analytics}.session
+python3 scripts/telegram_auth.py        # add --account russia / ukraine for named accounts
 
 # Restart listener
 docker-compose restart listener
@@ -1012,5 +949,5 @@ docker-compose restart listener
 
 - Telegram API Documentation: https://core.telegram.org/api
 - Telethon Library: https://docs.telethon.dev
-- CLAUDE.md - Critical Rule #1 (Telegram Session Management)
+- [Telegram Disaster Recovery](telegram-disaster-recovery.md) - Shadow accounts and failover
 - `.env.example` - Telegram configuration variables

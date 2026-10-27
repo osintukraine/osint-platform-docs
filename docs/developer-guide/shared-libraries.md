@@ -6,22 +6,27 @@ Documentation of shared Python libraries used across services.
 
 ## Overview
 
-The `shared/python/` package contains **58 Python files** of common code used by all services:
+The `shared/python/` package contains **80+ Python files** of common code used by all services:
 
-- **Models**: 29 SQLAlchemy models (~4000 lines)
-- **Configuration**: Pydantic settings with validation
+- **Models**: ~40 SQLAlchemy model modules (`models/`)
+- **Configuration**: Pydantic settings plus admin-editable runtime settings (`config/runtime.py`)
 - **Observability**: Logging, metrics, tracing
-- **AI Utilities**: Ollama client wrapper
-- **Storage**: MinIO media archiver
-- **Translation**: DeepL integration
+- **AI Utilities**: Ollama client, OpenAI-compatible gateway client, classification council
+- **Storage**: MinIO media archiver, multi-box selection
+- **Translation**: DeepL integration with allowance handling
+- **Telegram**: client factory and session file names (`session_names.py`: `<role>-<account>` names, per-account queue and SQL filters)
+- **Hardware, hashing, utils**: hardware tiers, perceptual hashes, circuit breaker, graceful shutdown
 
 **Location**: `/shared/python/`
 
-**Installation**: Installed as editable package in each service's Docker container:
+**Installation**: Not a pip package. Each service `Dockerfile` installs `shared/python/requirements.txt`, copies the directory to `/shared/python` and puts it on the path, so modules import by top-level name (`from models import Message`, `from config.settings import settings`):
 ```dockerfile
-COPY shared/python /app/shared/python
-RUN pip install -e /app/shared/python
+COPY shared/python/requirements.txt /shared/requirements.txt
+RUN pip install -r /shared/requirements.txt
+COPY shared/python /shared/python
+ENV PYTHONPATH="/shared/python:${PYTHONPATH}"
 ```
+Some services also add the directory with `sys.path.insert` for local runs.
 
 ---
 
@@ -31,28 +36,34 @@ RUN pip install -e /app/shared/python
 shared/python/
 ├── __init__.py              # Package metadata (v0.1.0)
 ├── requirements.txt         # Shared dependencies
-├── models/                  # SQLAlchemy models (29 files)
+├── models/                  # SQLAlchemy models (~40 files)
 │   ├── __init__.py         # Exports all models
 │   ├── base.py             # AsyncSessionLocal, Base, engine
 │   ├── message.py          # Core message model
 │   ├── channel.py          # Channel/folder management
-│   └── ...                 # 26 more model files
+│   └── ...                 # one module per table group
 ├── config/                  # Configuration management
-│   ├── __init__.py
-│   └── settings.py         # Pydantic Settings class
+│   ├── settings.py         # Pydantic Settings class (tier 1: environment)
+│   ├── runtime.py          # runtime_config(): DB override > env > default (tier 2)
+│   ├── runtime_keys.py     # Registry of admin-editable keys
+│   └── constants.py
 ├── observability/           # Logging and metrics
 │   ├── __init__.py         # setup_logging, record_* helpers
 │   ├── logging.py          # Structured JSON logging
 │   └── metrics.py          # Prometheus metrics
 ├── ai/                      # LLM utilities
-│   ├── __init__.py
-│   └── ollama_client.py    # Async Ollama wrapper
+│   ├── ollama_client.py    # Async Ollama wrapper, create_ollama_client()
+│   ├── openai_compat.py    # OpenAICompatClient / GatewayGenerateClient (LLM gateway)
+│   └── council.py          # Classification council (reprocessing votes)
+├── services/                # model_selector.py, model_validator.py
 ├── database/                # Database utilities
 ├── notifications/           # NotificationClient
-├── storage/                 # Storage abstractions
-├── telegram/                # Telegram utilities
-├── translation/             # DeepL integration
-├── utils/                   # General utilities
+├── storage/                 # BoxSelector, MinioClientPool
+├── telegram/                # client_factory.py, session_names.py
+├── translation/             # translator.py, deepl_limits.py
+├── hardware/                # Hardware detection and tiers
+├── hashing/                 # message_hasher.py, perceptual.py
+├── utils/                   # circuit_breaker.py, graceful_shutdown.py
 ├── media_archiver.py        # Content-addressed media storage
 └── translation.py           # Translation service
 ```
@@ -73,8 +84,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 # Create async engine with connection pooling
 engine = create_async_engine(
     settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://"),
+    echo=settings.DEBUG,
     pool_size=settings.POSTGRES_POOL_SIZE,      # Default: 20
     max_overflow=settings.POSTGRES_MAX_OVERFLOW, # Default: 10
+    pool_timeout=settings.POSTGRES_POOL_TIMEOUT,
     pool_pre_ping=True,                          # Verify connections
     pool_recycle=settings.POSTGRES_POOL_RECYCLE, # Default: 3600s
 )
@@ -108,7 +121,7 @@ from models import (
     Base, engine, AsyncSessionLocal, get_db,
 
     # Core
-    Message, Channel, User,
+    Message, Channel, ChannelSubmission, User,
 
     # Media
     MediaFile, MessageMedia,
@@ -130,7 +143,7 @@ from models import (
     # Events
     Event, EventMessage,
 
-    # Validation
+    # Validation and audit
     MessageValidation, DecisionLog,
 
     # Translation
@@ -178,27 +191,29 @@ class Message(Base):
     content_translated: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Vector embedding (pgvector)
-    embedding: Mapped[Optional[list]] = mapped_column(Vector(384), nullable=True)
+    content_embedding: Mapped[Optional[Vector]] = mapped_column(Vector(384), nullable=True)
 
     # Relationships
     channel = relationship("Channel", back_populates="messages")
     tags = relationship("MessageTag", back_populates="message")
 ```
 
-### Key Models (29 total)
+### Key Models
 
 | Model | Table | Purpose |
 |-------|-------|---------|
 | `Message` | `messages` | Core message storage with enrichment |
 | `Channel` | `channels` | Telegram channels with folder/rule |
-| `CuratedEntity` | `curated_entities` | Custom entity knowledge graph |
+| `CuratedEntity` | `curated_entities` | Curated entity reference data |
 | `OpenSanctionsEntity` | `opensanctions_entities` | Sanctions data |
 | `LLMPrompt` | `llm_prompts` | Versioned LLM prompts |
-| `Event` | `events` | Detected OSINT events |
+| `Event` | `events` | Timeline events from RSS and Telegram |
 | `RSSFeed` | `rss_feeds` | RSS feed configuration |
 | `ExternalNews` | `external_news` | Ingested news articles |
 | `MessageValidation` | `message_validations` | Cross-validation results |
-| `DecisionLog` | `decision_logs` | Archive decision audit trail |
+| `DecisionLog` | `decision_log` | Archive decision audit trail |
+| `TelegramEventCluster` | `telegram_event_clusters` | Velocity-detected Telegram clusters |
+| `StorageBox` | `storage_boxes` | Media storage boxes (`models/storage.py`) |
 
 ---
 
@@ -247,7 +262,7 @@ class Settings(BaseSettings):
     MINIO_ENDPOINT: str = Field(...)  # Required
     MINIO_ACCESS_KEY: str = Field(...)
     MINIO_SECRET_KEY: str = Field(...)
-    MINIO_BUCKET_NAME: str = Field(default="telegram-archive")
+    MINIO_BUCKET_NAME: str = Field(default="osint-media")
 
     # Telegram
     TELEGRAM_API_ID: Optional[int] = Field(None)
@@ -276,6 +291,18 @@ from config.settings import settings
 # Access configuration
 db_url = settings.DATABASE_URL
 pool_size = settings.POSTGRES_POOL_SIZE
+```
+
+### Runtime configuration (admin-editable)
+
+Settings an operator changes in the admin UI without a restart go through `config/runtime.py`. A key must be registered in `config/runtime_keys.py`; its value is the `platform_config.value` override, else the environment variable, else the default. Overrides are cached for `ttl` seconds (default 30), and a database outage falls back to the last loaded values.
+
+```python
+from config.runtime import runtime_config
+
+rc = runtime_config("processor")
+if await rc.get("translation_enabled"):
+    ...
 ```
 
 ---
@@ -335,42 +362,44 @@ from observability import (
 
 # Record message processing
 record_message_processed(
+    worker_id="processor-1",
     channel_id=123,
-    topic="combat",
-    importance="high",
-    latency_seconds=0.15,
+    duration_seconds=0.15,
 )
 
 # Record spam detection
-record_spam_detection(spam_type="financial", confidence=0.95)
+record_spam_detection(channel_id=123, is_spam=True, spam_reason="financial", confidence=0.95)
 
 # Record LLM request
-record_llm_request(model="qwen2.5:3b", success=True, latency_seconds=1.2)
+record_llm_request(model="chat", status="success", duration_seconds=1.2, tokens=350)
 ```
 
 ---
 
 ## AI Utilities (`ai/`)
 
-### Ollama Client
+### LLM clients
 
-Async wrapper for Ollama API:
+`create_ollama_client()` is the factory for single-prompt `generate()` calls. With `LLM_PROVIDER=openai` and `LLM_GATEWAY_URL` set it returns a `GatewayGenerateClient` (alias from `LLM_GATEWAY_MODEL`); otherwise an async `OllamaClient`:
 
 ```python
 from ai import create_ollama_client
 
-async with create_ollama_client(
-    host="http://ollama:11434",
-    timeout=180.0,
-) as client:
+async with create_ollama_client(timeout=180.0) as client:
     response = await client.generate(
-        model="qwen2.5:3b",
+        model="chat",          # Ollama model name, or ignored in favour of the gateway alias
         prompt="Analyze this message...",
         temperature=0.3,
         max_tokens=500,
     )
     result = response["response"]
 ```
+
+The processor's chat-style calls use `OpenAICompatClient` (`ai/openai_compat.py`), which mirrors the part of `ollama.AsyncClient` the platform uses and raises `LanePaused` when a gateway lane is paused after a 401/403. See [LLM Integration](llm-integration.md).
+
+### Circuit breaker
+
+`utils/circuit_breaker.py` provides `CircuitBreaker` (CLOSED, OPEN, HALF_OPEN) for LLM tasks: consecutive failures or a per-message timeout open it, and it retries after `recovery_time`.
 
 ---
 
@@ -379,26 +408,23 @@ async with create_ollama_client(
 Content-addressed storage with SHA-256 deduplication:
 
 ```python
-# shared/python/media_archiver.py
+# shared/python/media_archiver.py (the processor has its own copy: services/processor/src/media_archiver.py)
 
 from media_archiver import MediaArchiver
 
-archiver = MediaArchiver(minio_client)
+archiver = MediaArchiver(redis_client=redis, storage_box_id="default")
 
-# Archive media (returns existing key if duplicate)
-s3_key = await archiver.archive_media(
-    data=media_bytes,
-    content_type="image/jpeg",
-    original_filename="photo.jpg",
+# Download from Telegram, hash, deduplicate, write to the local buffer,
+# queue the sync job; returns the media_files id
+media_file_id = await archiver.archive_media(
+    telegram_client=client,
+    telegram_message=telethon_message,
+    message_db_id=message.id,
+    session=session,
 )
-# Returns: "media/2f/a1/2fa1b3c4d5e6f7...abc.jpg"
-
-# Check if media exists
-exists = await archiver.media_exists(sha256_hash)
-
-# Get media URL
-url = archiver.get_media_url(s3_key)
 ```
+
+Files land in the local buffer first and `media-sync` moves them to the storage box; see [Media Storage](media-storage.md). `BoxSelector` and `MinioClientPool` live in `storage/`.
 
 **Path Format**: `media/{hash[:2]}/{hash[2:4]}/{hash}.{ext}`
 
@@ -414,7 +440,10 @@ from models import Message, Channel, AsyncSessionLocal, get_db
 from config.settings import settings
 from observability import setup_logging, get_logger, record_message_processed
 from ai import create_ollama_client
+from telegram.session_names import session_name   # '<role>-<account>' session file names
 ```
+
+`telegram.session_names` is pure Python and safe to import in images without Telethon (the API does): `telegram/__init__.py` imports `create_telegram_client` lazily, so only code that actually builds a client needs Telethon. Main helpers: `NAMED_ACCOUNTS` (`russia`, `ukraine`), `account_of()` (any other `source_account`, including `legacy` and NULL, is `default`), `worker_account()` (reads `SOURCE_ACCOUNT`), `session_name(role, account)` (`listener-russia`; the default account keeps the bare role, e.g. `listener`), `telegram_queue(account)` (`telegram` or `telegram:<account>`) and `account_filter(column, account)` (SQL predicate for a worker's channels).
 
 ### FastAPI Dependency
 
@@ -467,7 +496,7 @@ Keep in service when:
 2. **Design interface** with clear API
 3. **Implement** in `shared/python/`
 4. **Add exports** to `__init__.py`
-5. **Write tests** in `tests/`
+5. **Write tests** next to the code (`shared/python/<package>/tests/`)
 6. **Update services** to use shared code
 7. **Document** usage patterns
 

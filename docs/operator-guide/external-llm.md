@@ -41,7 +41,7 @@ COMPOSE_PROFILES=enrichment-lite,monitoring,auth,llm-gateway
 docker compose up -d
 ```
 
-The `llm-gateway` profile starts `backlog-worker`, `enrichment-fact-check` and `enrichment-rss-validation`. With it you do not need the local `ollama-batch` service.
+The `llm-gateway` profile starts `backlog-worker`, `backlog-enrich`, `backlog-reprocess` (all idle until switched on in the admin page), `enrichment-fact-check`, `enrichment-rss-validation`, `enrichment-ai-tagging`, `enrichment-geolocation-llm`, `enrichment-cluster-validation` and `enrichment-event-detection`. With it you do not need the local `ollama-batch` service.
 
 ## Lanes
 
@@ -51,9 +51,9 @@ The gateway caps parallelism per API key and schedules by model alias, so each k
 |---|---|---|---|
 | realtime | `processor-worker` (live classification) | `LLM_GATEWAY_MODEL` (`osint-realtime`) | `LLM_GATEWAY_API_KEY` |
 | audit | `enrichment-fact-check` | `FACT_CHECK_MODEL` (`osint-audit`) | `LLM_GATEWAY_AUDIT_API_KEY` |
-| batch | `backlog-worker`, `enrichment-rss-validation` | `LLM_GATEWAY_BATCH_MODEL`, `RSS_VALIDATION_MODEL` (`osint-batch`) | `LLM_GATEWAY_BATCH_API_KEY` |
+| batch | `backlog-*`, `enrichment-rss-validation`, `enrichment-ai-tagging`, `enrichment-geolocation-llm`, `enrichment-cluster-validation`, `enrichment-event-detection` | `LLM_GATEWAY_BATCH_MODEL`, `RSS_VALIDATION_MODEL` (`osint-batch`) | `LLM_GATEWAY_BATCH_API_KEY` |
 
-The audit and batch keys fall back to `LLM_GATEWAY_API_KEY` when unset. The aliases above are the names production uses; they must exist on your gateway.
+Each processor worker handles `processor_concurrency` messages at once (admin setting, default 1); with the gateway set workers x concurrency close to the realtime lane cap. The audit and batch keys fall back to `LLM_GATEWAY_API_KEY` when unset. The aliases above are the names production uses; they must exist on your gateway.
 
 Fact-check uses a reasoning ("thinking") alias, so keep `FACT_CHECK_NUM_PREDICT` at 4096 or higher: reasoning tokens count against the limit.
 
@@ -68,7 +68,7 @@ Fact-check uses a reasoning ("thinking") alias, so keep `FACT_CHECK_NUM_PREDICT`
 
 **Fallback.** When the LLM is unavailable, the processor keeps archiving: the embedding filter's verdict replaces the classifier's, and topic and importance stay `pending` for the [backlog worker](backlog-reclassification.md) to fill in later. The backlog worker writes nothing while the LLM is unavailable.
 
-To save GPU time, the processor also skips the LLM for obvious spam: when a message's spam similarity is at or above the admin setting `llm_prefilter_spam_similarity` (0.80 in production), the embedding filter decides alone. See [Embedding models](model-provisioning.md).
+To save GPU time, the processor also skips the LLM for obvious spam: when a message's spam similarity is at or above the admin setting `llm_prefilter_spam_similarity` (built-in default 0.90; 0.80 in production), the embedding filter decides alone. See [Embedding models](model-provisioning.md).
 
 ## Prompt versions
 

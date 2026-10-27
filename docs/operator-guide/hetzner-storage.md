@@ -59,9 +59,10 @@ Browser: GET /media/ab/cd/abcd1234.jpg
 Telegram Message
          │
          ▼
-    ┌──────────┐
-    │Processor │ ─────→ Download to .tmp/
-    └──────────┘
+    ┌──────────────────────────┐
+    │Processor (or media-worker│ ─────→ Download to .tmp/
+    │ when media_lane_enabled) │
+    └──────────────────────────┘
          │
          ▼
     Atomic move to local buffer
@@ -75,7 +76,7 @@ Telegram Message
          │
          ▼ (async, background)
     ┌─────────────┐
-    │ Media-Sync  │ ─────→ Upload to MinIO (Hetzner SSHFS)
+    │ Media-Sync  │ ─────→ Copy to the Hetzner SSHFS mount (verifies size)
     │   Worker    │ ─────→ Update DB (synced_at = NOW())
     └─────────────┘ ─────→ Delete local file
 ```
@@ -122,12 +123,16 @@ HETZNER_USER=uXXXXXX
 HETZNER_PORT=23
 HETZNER_SSH_KEY=/home/youruser/.ssh/id_ed25519
 
-# Mount path for SSHFS (no dashes - avoids systemd escaping issues)
-HETZNER_MOUNT_PATH=/mnt/hetznerstorage
+# Where MinIO stores its data on the box. The setup script mounts the first three path
+# components (/mnt/hetznerstorage) and creates osint-platform/minio below it.
+# No dashes in the path: avoids systemd escaping issues. Leave empty for local ./data/minio.
+HETZNER_MOUNT_PATH=/mnt/hetznerstorage/osint-platform/minio
 
 # Local buffer path (should be on SSD)
 MEDIA_BUFFER_PATH=/var/cache/osint-media-buffer
 ```
+
+The mount point must be `/mnt/hetznerstorage`: `docker-compose.yml` bind-mounts `/mnt/hetznerstorage/osint-platform` into `media-sync` and `generate-systemd-units.sh` hardcodes that path.
 
 Get your credentials from [Hetzner Robot Console](https://robot.hetzner.com) → Storage Boxes → Your Box → Access Data.
 
@@ -243,19 +248,18 @@ docker-compose logs -f media-sync
 
 **Purpose**: Background service that uploads buffered media to Hetzner
 
-**Configuration** (in `docker-compose.yml`):
+**Configuration** (in `docker-compose.yml`, abbreviated):
 ```yaml
 media-sync:
-  build:
-    context: .
-    dockerfile: services/media-sync/Dockerfile
   environment:
-    REDIS_URL: redis://redis:6379/0
-    DATABASE_URL: postgresql+asyncpg://...
-    MINIO_ENDPOINT: minio:9000
+    SYNC_MODE: ${MEDIA_SYNC_MODE:-filesystem}   # filesystem (default) or minio (legacy)
+    HETZNER_MEDIA_PATH: /mnt/hetzner-media/osint-media
   volumes:
-    - ${MEDIA_BUFFER_PATH:-./data/media-buffer}:/var/cache/osint-media-buffer:rshared
+    - ${MEDIA_BUFFER_PATH:-./data/media-buffer}:/var/cache/osint-media-buffer
+    - /mnt/hetznerstorage/osint-platform:/mnt/hetzner-media
 ```
+
+In `filesystem` mode the worker copies files straight onto the mounted box; `minio` mode uploads through MinIO instead. A job that fails 3 times moves to `media:sync:failed`.
 
 **Scaling**: For high-volume deployments, scale the worker:
 ```bash
@@ -271,7 +275,7 @@ The setup creates these systemd units:
 | `mnt-hetznerstorage.mount` | SSHFS mount definition |
 | `mnt-hetznerstorage.automount` | On-demand mount trigger |
 | `hetzner-storage-health.service` | Health check with auto-remount |
-| `hetzner-storage-health.timer` | Runs health check every 5 minutes |
+| `hetzner-storage-health.timer` | Runs the health check every 60 seconds |
 
 !!! note "Unit Naming"
     The unit is named `mnt-hetznerstorage` matching the mount path `/mnt/hetznerstorage`. We avoid dashes in the path name to prevent systemd escaping complexity.
@@ -280,7 +284,7 @@ Check status:
 
 ```bash
 # Mount status
-systemctl status 'mnt-hetzner\x2dstorage.automount'
+systemctl status mnt-hetznerstorage.automount
 
 # Health timer
 systemctl status hetzner-storage-health.timer
@@ -294,7 +298,7 @@ Caddy routes media requests with a two-tier strategy:
 1. **Fast path**: Check local buffer, serve if found
 2. **Fallback**: Call API for redirect to Hetzner
 
-Configuration (in `infrastructure/caddy/Caddyfile.ory`):
+Configuration (in `infrastructure/caddy/Caddyfile.ory` and `Caddyfile.production`; abbreviated):
 ```caddyfile
 handle /media/* {
     root * /var/cache/osint-media-buffer/osint-media
@@ -333,12 +337,14 @@ docker-compose exec redis redis-cli LLEN media:sync:failed
 curl http://localhost:8000/api/media/internal/media-stats
 ```
 
-Response:
+Response (the endpoint is internal; call it from the host or inside the compose network):
 ```json
 {
-  "cache_size": 15234,
-  "estimated_hit_rate": 0.994,
-  "cache_ttl_seconds": 86400
+  "cached_files": 15234,
+  "redis_memory_mb": 45.2,
+  "cache_db": 2,
+  "ttl_seconds": 604800,
+  "note": "99%+ hit rate expected after warm-up"
 }
 ```
 
@@ -436,7 +442,8 @@ docker-compose logs media-sync | grep ERROR
 | `HETZNER_USER` | - | Storage box username (e.g., `uXXXXXX`) |
 | `HETZNER_PORT` | `23` | SSH port (always 23 for Hetzner) |
 | `HETZNER_SSH_KEY` | `~/.ssh/id_ed25519` | SSH private key path |
-| `HETZNER_MOUNT_PATH` | `/mnt/hetznerstorage` | Local mount point for SSHFS (no dashes!) |
+| `HETZNER_MOUNT_PATH` | empty (`./data/minio`) | MinIO data path on the box, e.g. `/mnt/hetznerstorage/osint-platform/minio`; the SSHFS mount itself is `/mnt/hetznerstorage` (no dashes!) |
+| `MEDIA_SYNC_MODE` | `filesystem` | media-sync destination: `filesystem` or `minio` |
 | `MEDIA_BUFFER_PATH` | `/var/cache/osint-media-buffer` | Local SSD buffer path |
 
 ## Security Considerations
