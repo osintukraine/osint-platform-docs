@@ -163,9 +163,14 @@ python3 scripts/telegram_auth.py --account ukraine
 # Enter code: 54321
 ```
 
-**Session Files Created**:
-- `telegram_sessions/listener_russia.session`
-- `telegram_sessions/listener_ukraine.session`
+**Session Files Created** (per account: one login, copied for each service that uses the account; names are
+`<role>-<account>`):
+- `telegram_sessions/russia.session` (the seed), `listener-russia`, `discovery-russia` (folder sync and backfill),
+  `enrichment-russia`, `analytics-russia`
+- the same for `ukraine`
+
+Sessions are bound to the server they were created on: create them on the production VM, and never reuse old
+session files from another machine.
 
 #### Step 3: Start Multi-Account Listeners
 
@@ -208,10 +213,13 @@ docker-compose stop listener
 
 ```bash
 telegram_sessions/
-├── osint_platform.session          # Single account (default)
-├── listener_russia.session         # Russia account
-├── listener_ukraine.session        # Ukraine account
-└── enrichment.session              # Enrichment worker (separate to avoid SQLite locks)
+├── osint_platform.session          # Default account: listener (single-account mode)
+├── discovery.session               # Default account: folder sync and backfill
+├── enrichment.session              # Default account: enrichment worker (separate to avoid SQLite locks)
+├── russia.session                  # Russia account seed (telegram_auth.py --account russia)
+├── listener-russia.session         # Russia account: listener
+├── discovery-russia.session        # Russia account: folder sync and backfill
+└── ...-ukraine.session             # the same for the Ukraine account
 ```
 
 **Never delete session files** - they contain authentication state. Losing them requires re-authentication and may trigger security checks.
