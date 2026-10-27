@@ -56,7 +56,7 @@ graph LR
 | **Function** | Telegram monitoring, channel discovery, backfill |
 | **Tech** | Telethon, Redis Streams, asyncio |
 | **Files** | `telegram_listener.py` (~950 lines), `channel_discovery.py` (~820 lines) |
-| **Critical** | Owns Telegram session - never create clients elsewhere. One listener per account (`listener`, or `listener-russia` / `listener-ukraine` with the `multi-account` profile) |
+| **Critical** | Owns Telegram session - never create clients elsewhere. One listener per account (`listener` in single mode, `listener-russia` / `listener-ukraine` in multi mode, `TELEGRAM_MODE`) |
 
 [:octicons-arrow-right-24: Full Documentation](listener.md)
 

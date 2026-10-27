@@ -30,6 +30,7 @@ Production updates use the deploy script, which pulls the code, applies pending 
 ./scripts/deploy.sh --build      # also rebuild all images first
 ./scripts/deploy.sh --build-pytorch                    # rebuild only the PyTorch-based services
 ./scripts/deploy.sh --build-service media-worker       # rebuild only named services (repeatable)
+# --build-pytorch and --build-service can be combined: both sets are built
 ./scripts/deploy.sh --skip-health                      # skip the final health check
 ./scripts/deploy.sh --force-recreate                   # recreate containers even if nothing changed
 ./scripts/deploy.sh --quick      # pull and restart, skip migrations

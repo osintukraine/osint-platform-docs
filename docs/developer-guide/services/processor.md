@@ -50,7 +50,9 @@ graph LR
 | `backlog_worker.py`, `backlog_jobs_worker.py`, `backlog_reclassify.py` | - | Re-classification of the backlog (`backlog-worker`, `llm-gateway` profile) |
 | `message_timeout.py`, `backpressure.py` | - | Per-message time limit; backpressure on the gateway lane |
 
-The same image (`services/processor/Dockerfile`) runs several compose services: `processor-worker` (realtime), `processor-worker-backfill` (profile `backfill`), `media-worker`, `backlog-worker`, `backlog-enrich`, `backlog-reprocess`.
+The same image (`services/processor/Dockerfile`) runs several compose services: `processor-worker` (realtime), `processor-worker-backfill` (profile `backfill`), `media-worker` (plus `media-worker-russia` / `media-worker-ukraine` in multi mode), `backlog-worker`, `backlog-enrich`, `backlog-reprocess`. Processors run in both Telegram modes.
+
+**Media lane per account**: `media_lane.claim()` takes an `account` and filters the claimed rows with `account_filter` on `channels.source_account` inside the claim subquery. The default worker (`SOURCE_ACCOUNT` unset) claims every channel no named account follows; `media-worker-russia` / `-ukraine` claim only their own. Each worker opens its own session slot `media-worker-<account>-N`, copied from the account's seed `<account>.session` (default: `listener.session`; `telegram_session.slot_seed`). `media_to_lane()` in `message_processor.py` always leaves a named-account channel's media to the lane (the processor's session is the default account's), and `account_change()` never changes a channel's `source_account` from a post that carries none (backfill, reprocess and feeder posts).
 
 ### Processing Pipeline
 
@@ -165,7 +167,7 @@ Results stored in `message_entities` junction table for network graph.
 
 **Workflow**:
 
-1. Download media from Telegram
+1. Download media from Telegram (inline in the processor only for default-account channels with the media lane off; otherwise the `media-worker` of the channel's account does it, see below)
 2. Calculate SHA-256 hash
 3. Check if hash exists in `media_files` table
 4. **If exists**: Increment `reference_count`, skip upload (deduplication)

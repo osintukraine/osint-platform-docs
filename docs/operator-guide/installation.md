@@ -258,7 +258,7 @@ python3 scripts/telegram_auth.py --status
 python3 scripts/telegram_auth.py --list
 ```
 
-Named accounts use `TELEGRAM_API_ID_<NAME>` / `TELEGRAM_API_HASH_<NAME>` and per-role session files named `<role>-<account>` (for example `listener-russia.session`). See [Telegram Setup](telegram-setup.md).
+Named accounts use `TELEGRAM_API_ID_<NAME>` / `TELEGRAM_API_HASH_<NAME>` and per-role session files named `<role>-<account>` (for example `listener-russia.session`). Switch to the per-account services with `./scripts/switch-telegram-mode.sh multi` (`TELEGRAM_MODE` in `.env`; unset means single-account). See [Telegram Setup](telegram-setup.md).
 
 ### Step 6: Provision Models
 

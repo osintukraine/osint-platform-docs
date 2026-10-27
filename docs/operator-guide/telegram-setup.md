@@ -175,13 +175,19 @@ session files from another machine.
 **Option A: Using mode switcher script (Recommended)**
 
 ```bash
+# Check the prerequisites without changing anything
+./scripts/switch-telegram-mode.sh ready
+
 # Switch to multi-account mode
 ./scripts/switch-telegram-mode.sh multi
 
 # This automatically:
-# - Stops the single-account listener
-# - Runs `docker-compose --profile multi-account up -d`, which starts every service in that profile
-#   (listener-russia, listener-ukraine and shadow-sync)
+# - Refuses to switch unless both accounts' TELEGRAM_API_ID_/HASH_ values are in .env and their sessions
+#   exist, media_lane_enabled is on in every processor, and no channel of the default account is still active
+# - Writes TELEGRAM_MODE=multi, SINGLE_ACCOUNT_REPLICAS=0 and `multi-account` in COMPOSE_PROFILES to .env
+#   (backup first), which stops the default account's listener, media-worker, enrichment-telegram and analytics
+# - Runs ./scripts/deploy.sh --quick, which starts the per-account services: listener-, media-worker-,
+#   enrichment-telegram- and analytics-<account> for russia and ukraine (shadow-sync is not part of it)
 
 # Check current mode
 ./scripts/switch-telegram-mode.sh status
@@ -190,10 +196,13 @@ session files from another machine.
 ./scripts/switch-telegram-mode.sh single
 ```
 
+`TELEGRAM_MODE` in `.env` (`single` or `multi`, unset means `single`) is the switch; `deploy.sh` stops with an
+error if the `.env` lines disagree with it (`./scripts/switch-telegram-mode.sh check`). Processors run in both modes.
+
 **Option B: Manual docker-compose commands**
 
 ```bash
-# Start both listeners
+# Start both listeners (prefer the mode switcher above: it also scopes the default account's services)
 docker-compose --profile multi-account up -d listener-russia listener-ukraine
 
 # Verify running
@@ -203,13 +212,13 @@ docker-compose ps | grep listener
 # osint-listener-russia    running   8011/tcp
 # osint-listener-ukraine   running   8012/tcp
 
-# (Optional) Stop default single-account listener
+# Stop the default single-account listener (the mode switcher does this with SINGLE_ACCOUNT_REPLICAS=0)
 docker-compose stop listener
 ```
 
 ### Session File Structure
 
-One file per service role and account: `<role>.session` for the default account, `<role>-<account>.session` for a named account. The processor and media-worker also claim numbered copies (`processor-0.session`, `media-worker-0.session`, ...) from `listener.session` at start, so no two processes share a session.
+One file per service role and account: `<role>.session` for the default account, `<role>-<account>.session` for a named account. The processor and media-worker also claim numbered copies (`processor-0.session`, `media-worker-0.session`, ...) at start, so no two processes share a session; a named account's media workers copy from its seed (`russia.session` gives `media-worker-russia-0.session`), the default ones from `listener.session`.
 
 ```bash
 telegram_sessions/

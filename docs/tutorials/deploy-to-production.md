@@ -357,7 +357,7 @@ python3 scripts/telegram_auth.py
 
 The script writes `telegram_sessions/osint_platform.session` and copies it to the per-service session files (listener, discovery, enrichment, analytics). The directory `./telegram_sessions` is mounted into the containers at `/app/sessions`.
 
-For several Telegram accounts, run `python3 scripts/telegram_auth.py --account russia` (and `--account ukraine`) and start the `multi-account` profile; see [Telegram Setup](../operator-guide/telegram-setup.md).
+For several Telegram accounts, run `python3 scripts/telegram_auth.py --account russia` (and `--account ukraine`) then switch with `./scripts/switch-telegram-mode.sh multi` (sets `TELEGRAM_MODE=multi`; unset means single-account); see [Telegram Setup](../operator-guide/telegram-setup.md).
 
 ### 6.3: Start or Restart the Listener
 

@@ -152,7 +152,8 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Healthcheck** | `curl http://localhost:8002/health` every 60s (600s start period) |
 | **Volumes** | `./services/listener:/app/services/listener`<br>`./shared/python:/app/shared/python`<br>`./telegram_sessions:/app/sessions` |
 | **Environment** | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_PHONE`<br>`BACKFILL_ENABLED`: false (default)<br>`FOLDER_SYNC_INTERVAL`: 300<br>`TRANSLATION_ENABLED`: false (translation runs in the processor) |
-| **Notes** | Owns Telegram session - never create standalone clients |
+| **Replicas** | `${SINGLE_ACCOUNT_REPLICAS:-1}`: 0 when `TELEGRAM_MODE=multi` (see [Telegram mode](#telegram-mode-single-or-multi)) |
+| **Notes** | Owns Telegram session - never create standalone clients. The default account's listener (single mode) |
 
 ### listener-russia
 
@@ -160,11 +161,11 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 |-------|-------|
 | **Build** | `services/listener/Dockerfile` |
 | **Container Name** | `osint-listener-russia` |
-| **Purpose** | Multi-account setup - monitors Russia channels |
+| **Purpose** | Multi-account mode - the Russia account; handles only channels whose `source_account` is `russia`. Opens sessions `listener-russia` and `discovery-russia` |
 | **Ports** | `8011:8001` (Prometheus metrics) |
 | **Profile** | `multi-account` |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
-| **Environment** | `TELEGRAM_API_ID_RUSSIA`, `TELEGRAM_API_HASH_RUSSIA`<br>`SOURCE_ACCOUNT`: russia<br>`TELEGRAM_SESSION_NAME`: listener-russia |
+| **Environment** | `TELEGRAM_API_ID_RUSSIA`, `TELEGRAM_API_HASH_RUSSIA`, `TELEGRAM_PHONE_RUSSIA`<br>`SOURCE_ACCOUNT`: russia<br>`TELEGRAM_SESSION_NAME`: listener-russia |
 
 ### listener-ukraine
 
@@ -172,11 +173,11 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 |-------|-------|
 | **Build** | `services/listener/Dockerfile` |
 | **Container Name** | `osint-listener-ukraine` |
-| **Purpose** | Multi-account setup - monitors Ukraine channels |
+| **Purpose** | Multi-account mode - the Ukraine account; handles only channels whose `source_account` is `ukraine`. Opens sessions `listener-ukraine` and `discovery-ukraine` |
 | **Ports** | `8012:8001` (Prometheus metrics) |
 | **Profile** | `multi-account` |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
-| **Environment** | `TELEGRAM_API_ID_UKRAINE`, `TELEGRAM_API_HASH_UKRAINE`<br>`SOURCE_ACCOUNT`: ukraine<br>`TELEGRAM_SESSION_NAME`: listener-ukraine |
+| **Environment** | `TELEGRAM_API_ID_UKRAINE`, `TELEGRAM_API_HASH_UKRAINE`, `TELEGRAM_PHONE_UKRAINE`<br>`SOURCE_ACCOUNT`: ukraine<br>`TELEGRAM_SESSION_NAME`: listener-ukraine |
 
 ### shadow-sync
 
@@ -186,7 +187,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Container Name** | `osint-shadow-sync` |
 | **Purpose** | Disaster recovery: keeps shadow Telegram accounts joined to the same channels as the primary accounts and can fail over (`FAILOVER_AUTO_SWITCH`) |
 | **Ports** | `8013:8001` (Prometheus metrics) |
-| **Profiles** | `dr`, `multi-account` |
+| **Profile** | `dr` (not part of multi-account mode) |
 | **Dependencies** | `postgres` (healthy) |
 | **Environment** | `DR_ENABLED`, `SHADOW_SYNC_INTERVAL`, `SHADOW_JOIN_RATE_LIMIT`, `HEALTH_CHECK_INTERVAL`, `{RUSSIA,UKRAINE}_{PRIMARY,SHADOW}_{API_ID,API_HASH,PHONE}` |
 
@@ -210,8 +211,18 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Build** | `services/processor/Dockerfile` (command `python -m src.media_worker`) |
 | **Purpose** | Downloads media for messages with `media_status` `pending`; idles unless the `media_lane_enabled` admin setting is on. See [Media Lanes](../operator-guide/media-lanes.md) |
 | **Profile** | (none - core) |
-| **Replicas** | 1 (`MEDIA_WORKER_REPLICAS`) |
+| **Replicas** | `${SINGLE_ACCOUNT_REPLICAS:-${MEDIA_WORKER_REPLICAS:-1}}`: 0 in multi mode |
+| **Scope** | The default account: every channel no named account follows (`SOURCE_ACCOUNT` unset) |
 | **Healthcheck** | `curl http://localhost:8003/metrics` |
+
+### media-worker-russia and media-worker-ukraine
+
+| Field | Value |
+|-------|-------|
+| **Build** | `services/processor/Dockerfile` (command `python -m src.media_worker`) |
+| **Purpose** | Media lane of one account: claims only that account's channels, with session slots `media-worker-<account>-N` seeded from `<account>.session` |
+| **Profile** | `multi-account` (1 replica each) |
+| **Environment** | `TELEGRAM_API_ID_{RUSSIA,UKRAINE}`, `TELEGRAM_API_HASH_{RUSSIA,UKRAINE}`, `SOURCE_ACCOUNT` |
 
 ### media-sync
 
@@ -280,6 +291,18 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Dependencies** | `postgres` (healthy), `listener` (healthy) |
 | **Volumes** | `./telegram_sessions:/app/sessions`<br>`./shared/python:/shared/python:ro`<br>`./data/logs/analytics:/var/log/analytics` |
 | **Environment** | `TELEGRAM_SESSION_PATH`: /app/sessions (uses analytics.session) |
+| **Replicas** | `${SINGLE_ACCOUNT_REPLICAS:-1}`: 0 in multi mode |
+
+### analytics-russia and analytics-ukraine
+
+| Field | Value |
+|-------|-------|
+| **Build** | `services/analytics/Dockerfile` |
+| **Container Names** | `osint-analytics-russia`, `osint-analytics-ukraine` |
+| **Purpose** | Analytics of one account: session `analytics-<account>`, engagement and metadata of that account's channels only |
+| **Profile** | `multi-account` |
+| **Dependencies** | `postgres` (healthy), `listener-<account>` (healthy) |
+| **Environment** | `TELEGRAM_API_ID_{RUSSIA,UKRAINE}`, `TELEGRAM_API_HASH_{RUSSIA,UKRAINE}`, `SOURCE_ACCOUNT`<br>`VIEW_REFRESH`: false on `analytics-ukraine` (`analytics-russia` refreshes the materialized views) |
 
 ### nocodb
 
@@ -380,7 +403,19 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Ports** | `9200:9200` (Prometheus metrics) |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
 | **Volumes** | `./telegram_sessions:/app/sessions` |
+| **Replicas** | `${SINGLE_ACCOUNT_REPLICAS:-${ENRICHMENT_WORKER_REPLICAS:-1}}`: 0 in multi mode |
 | **Environment** | `TELEGRAM_SESSION_PATH`: /app/sessions/enrichment.session<br>`BATCH_SIZE`: 20<br>`RATE_LIMIT_PER_SECOND`: 20<br>`CHANNEL_COUNTRY_MODEL`, `SOCIAL_GRAPH_AUTO_JOIN`, `CHANNEL_JOINS_ENABLED` |
+
+### enrichment-telegram-russia and enrichment-telegram-ukraine
+
+| Field | Value |
+|-------|-------|
+| **Build** | `services/enrichment/Dockerfile` (same worker as `enrichment-telegram`) |
+| **Container Names** | `osint-enrichment-telegram-russia`, `osint-enrichment-telegram-ukraine` |
+| **Purpose** | Telegram enrichment of one account: reads its own Redis stream `enrich:telegram:<account>`, session `enrichment-<account>.session`, database scans limited to that account's channels |
+| **Profile** | `multi-account` (1 replica each) |
+| **Ports** | none on the host; Prometheus scrapes over the backend network |
+| **Environment** | `TELEGRAM_API_ID_{RUSSIA,UKRAINE}`, `TELEGRAM_API_HASH_{RUSSIA,UKRAINE}`, `TELEGRAM_SESSION_PATH`: /app/sessions/enrichment-<account>.session, `SOURCE_ACCOUNT` |
 
 ### enrichment-decision
 
@@ -748,7 +783,7 @@ All authentication services use the `auth` profile.
 
 | File | Use |
 |------|-----|
-| `docker-compose.production.yml` | Production overlay (Caddy with CrowdSec, Oathkeeper routing, multi-account listeners). Merge with `COMPOSE_FILE=docker-compose.yml:docker-compose.production.yml` in `.env` |
+| `docker-compose.production.yml` | Production overlay (Caddy with CrowdSec, Oathkeeper routing; the multi-account listeners live in `docker-compose.yml`, selected by `TELEGRAM_MODE`). Merge with `COMPOSE_FILE=docker-compose.yml:docker-compose.production.yml` in `.env` |
 | `docker-compose.security.yml` | CrowdSec stack (CrowdSec, Caddy bouncer, Cloudflare bouncer, dashboard); layer on top of the production file |
 | `docker-compose.development.yml` | Laptop override that trims resources: `-f docker-compose.yml -f docker-compose.development.yml` |
 | `docker-compose.minimal.yml` | Standalone core stack (postgres, redis, minio, ollama, enricher, listener, processor, api, frontend) |
@@ -788,7 +823,7 @@ All authentication services use the `auth` profile.
 
 ## Profiles
 
-Profiles select which service groups start. Set them persistently with `COMPOSE_PROFILES` in `.env` (production uses `enrichment-lite,monitoring,auth,llm-gateway`). Services without a profile (postgres, redis, minio, ollama, listener, processor-worker, media-worker, media-sync, api, frontend, rss-ingestor) always start.
+Profiles select which service groups start. Set them persistently with `COMPOSE_PROFILES` in `.env` (production uses `enrichment-lite,monitoring,auth,llm-gateway`). Services without a profile (postgres, redis, minio, ollama, listener (0 replicas in multi mode), processor-worker, media-worker, media-sync, api, frontend, rss-ingestor) always start.
 
 | Profile | Adds |
 |---------|------|
@@ -802,10 +837,21 @@ Profiles select which service groups start. Set them persistently with `COMPOSE_
 | `auth` | kratos, kratos-migrate, kratos-init, oathkeeper, crowdsec, caddy |
 | `cloudflare` | crowdsec-cloudflare-bouncer |
 | `opensanctions` | yente-index, yente, opensanctions, entity-ingestion |
-| `multi-account` | listener-russia, listener-ukraine, shadow-sync |
+| `multi-account` | Per account (russia, ukraine): listener, media-worker, enrichment-telegram, analytics. See [Telegram mode](#telegram-mode-single-or-multi) |
 | `dr` | shadow-sync (disaster recovery) |
 | `backfill` | processor-worker-backfill |
 | `tools` | nocodb, mkdocs |
+
+### Telegram mode (single or multi)
+
+`TELEGRAM_MODE` in `.env` selects which Telegram services run (unset = `single`):
+
+| Mode | Runs | `.env` lines |
+|------|------|--------------|
+| `single` | The default account: `listener`, `media-worker`, `enrichment-telegram`, `analytics` | `SINGLE_ACCOUNT_REPLICAS` unset, no `multi-account` in `COMPOSE_PROFILES` |
+| `multi` | Per account (russia, ukraine): `listener-<a>`, `media-worker-<a>`, `enrichment-telegram-<a>`, `analytics-<a>`. The four default services have 0 replicas | `TELEGRAM_MODE=multi`, `SINGLE_ACCOUNT_REPLICAS=0`, `multi-account` in `COMPOSE_PROFILES` |
+
+Processors run in both modes (they download media inline only for default-account channels). Do not edit the lines by hand: `./scripts/switch-telegram-mode.sh single|multi` writes them (backing up `.env` first) and runs `deploy.sh`. `multi` refuses unless both accounts' credentials and sessions exist, the processors report `media_lane_enabled` on, and no default-account channel is still active. Other subcommands: `status`, `ready`, `write MODE`, `check`, `listeners`. `deploy.sh` runs `check` first and deploys nothing if the lines disagree with `TELEGRAM_MODE`.
 
 **Start with profiles:**
 ```bash
@@ -838,7 +884,7 @@ Host ports from `docker-compose.yml` (most are overridable in `.env`):
 | ntfy | 127.0.0.1:8090 | Bound to localhost |
 | NocoDB | 8080 | `tools` profile |
 | MkDocs | 8001 (`MKDOCS_PORT`) | `tools` profile |
-| Listener metrics / health | 8001 / 8002 | Multi-account listeners 8011, 8012; shadow-sync 8013 |
+| Listener metrics / health | 8001 / 8002 | Multi-account listeners metrics 8011, 8012; shadow-sync 8013 (`dr`) |
 | Enrichment workers | 9099, 9196 to 9203, 9210 to 9212 | One metrics port per worker |
 | Notifier | 9094 | |
 | Exporters | 9100 (node), 9121 (redis), 9187 (postgres), 8081 (cAdvisor) | |

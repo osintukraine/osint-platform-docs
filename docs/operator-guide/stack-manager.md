@@ -157,7 +157,8 @@ The authoritative list is in [Docker Services](../reference/docker-services.md#p
 | `opensanctions` | Yente, OpenSanctions, entity-ingestion |
 | `auth` | Ory Kratos, Oathkeeper, Caddy, CrowdSec |
 | `tools` | NocoDB, MkDocs |
-| `multi-account`, `dr` | Extra Telegram listeners, shadow-sync |
+| `multi-account` | Per Telegram account (russia, ukraine): listener, media-worker, enrichment-telegram, analytics (use `TELEGRAM_MODE=multi` / `scripts/switch-telegram-mode.sh`) |
+| `dr` | shadow-sync (disaster recovery) |
 
 ## Environment Modes
 

@@ -230,9 +230,16 @@ TELEGRAM_API_ID_UKRAINE=67890
 TELEGRAM_API_HASH_UKRAINE=def456
 TELEGRAM_PHONE_UKRAINE=+0987654321
 
-# Enable multi-account mode (each listener has its own session file)
-docker-compose --profile multi-account up -d listener-russia listener-ukraine
+# Authenticate each account (writes listener-<account>, discovery-<account>, enrichment-<account>, analytics-<account>)
+python3 scripts/telegram_auth.py --account russia
+python3 scripts/telegram_auth.py --account ukraine
+
+# Switch the platform to multi-account mode (writes TELEGRAM_MODE=multi, SINGLE_ACCOUNT_REPLICAS=0 and the
+# multi-account profile into .env, then runs deploy.sh)
+./scripts/switch-telegram-mode.sh multi
 ```
+
+`TELEGRAM_MODE` (unset = `single`) decides which listener runs: `listener` in single mode, `listener-russia` and `listener-ukraine` in multi mode (the default `listener` has 0 replicas). Do not start the per-account listeners by hand with `--profile multi-account`: `deploy.sh` refuses to run when `.env` disagrees with `TELEGRAM_MODE`. Each account's listener also runs its own folder sync and pending backfills under its own `discovery-<account>` session, and the media worker, Telegram enrichment worker and analytics service exist once per account too. See [Docker Services](../../reference/docker-services.md#telegram-mode-single-or-multi).
 
 **Benefits**:
 

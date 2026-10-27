@@ -67,7 +67,7 @@ PostgreSQL Database
 | `src/main.py` | Service entry point, scheduler setup | 322 |
 | `src/engagement_poller.py` | Hourly engagement metric polling | 420 |
 | `src/view_refresher.py` | Daily aggregate rebuild and materialized view refresh | 295 |
-| `src/telethon_client.py` | Shared Telegram client (singleton, dedicated `analytics` session) | 132 |
+| `src/telethon_client.py` | Shared Telegram client (singleton, dedicated `analytics` / `analytics-<account>` session) | 132 |
 | `Dockerfile` | Container image definition | |
 | `requirements.txt` | Python dependencies | |
 
@@ -198,6 +198,8 @@ TELEGRAM_API_HASH=your_api_hash       # From https://my.telegram.org
 TELEGRAM_SESSION_PATH=/app/sessions   # Session file location
 ```
 
+Per-account services (multi mode) also get `SOURCE_ACCOUNT` (`russia` or `ukraine`; unset = default account, which serves every channel no named account follows) and use `TELEGRAM_API_ID_<ACCOUNT>` / `TELEGRAM_API_HASH_<ACCOUNT>` as their API credentials. `VIEW_REFRESH=false` turns off the daily view refresh in a service (compose sets it on `analytics-ukraine`).
+
 **Database:**
 
 ```bash
@@ -278,7 +280,7 @@ The analytics service opens its own dedicated session file, `./telegram_sessions
 python3 scripts/telegram_auth.py
 ```
 
-Session names follow the `role` / `role-account` scheme from `shared/python/telegram/session_names.py`. The analytics container reads a single `analytics` session using `TELEGRAM_API_ID` / `TELEGRAM_API_HASH`; the auth script also creates `analytics-<account>` files for named accounts, but the service does not currently open them.
+Session names follow the `role` / `role-account` scheme from `shared/python/telegram/session_names.py`. The service opens `analytics` for the default account, or `analytics-<account>` when `SOURCE_ACCOUNT` is `russia` or `ukraine` (`python3 scripts/telegram_auth.py --account russia|ukraine` creates them). In multi mode (`TELEGRAM_MODE=multi`) compose runs `analytics-russia` and `analytics-ukraine` instead of `analytics`; each polls engagement and metadata only for the channels of its own account (`account_filter` on `channels.source_account`). The daily materialized-view refresh is database-only, so `analytics-ukraine` sets `VIEW_REFRESH=false` and `analytics-russia` refreshes the views once.
 
 2. **Environment Configuration**
 

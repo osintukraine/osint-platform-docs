@@ -9,7 +9,7 @@ The Media Sync Service handles the asynchronous transfer of media files from the
 **Pipeline Position**: `Processor / media-worker → Local Buffer → Media Sync → Hetzner SSHFS mount` (or MinIO in legacy mode)
 
 !!! note "Media lane"
-    With the `media_lane_enabled` admin setting on, the `media-worker` service (not the processor) downloads media into the buffer in the background. See [Media Lanes](../../operator-guide/media-lanes.md).
+    With the `media_lane_enabled` admin setting on, the `media-worker` service (not the processor) downloads media into the buffer in the background (one `media-worker` per Telegram account in multi mode: `media-worker-russia`, `media-worker-ukraine`). See [Media Lanes](../../operator-guide/media-lanes.md).
 
 **Key Technologies**:
 

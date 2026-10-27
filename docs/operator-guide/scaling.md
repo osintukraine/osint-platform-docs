@@ -90,7 +90,7 @@ docker compose up -d
 | `enrichment-router` | Routes messages to task queues | Routing lag |
 | `enrichment-fast-pool` | Embeddings, translation, entity matching | Large translation backlog |
 | `enrichment-ai-tagging` | LLM topic tagging | Tagging backlog >5K |
-| `enrichment-telegram` | Engagement polling, comments | Comment backlog |
+| `enrichment-telegram` | Engagement polling, comments (in multi-account mode one `enrichment-telegram-<account>` per account) | Comment backlog |
 | `enrichment-rss-validation` | Article validation | RSS correlation backlog |
 | `enrichment-event-detection`, `enrichment-geolocation-llm`, `enrichment-cluster-*` | Events, LLM geolocation, clusters | Matching backlog |
 

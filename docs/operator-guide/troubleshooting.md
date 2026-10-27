@@ -532,7 +532,7 @@ docker compose up -d listener
 Run one listener per Telegram account with the `multi-account` profile (`listener-russia`, `listener-ukraine`; each handles the channels whose `SOURCE_ACCOUNT` matches). Authenticate each account with `python3 scripts/telegram_auth.py --account NAME`. Details in [Telegram Setup](telegram-setup.md).
 
 ```bash
-docker compose --profile multi-account up -d listener-russia listener-ukraine
+./scripts/switch-telegram-mode.sh multi    # TELEGRAM_MODE=multi; checks prerequisites, then starts the per-account services
 ```
 
 ### Issue: Session Expired / Auth Required

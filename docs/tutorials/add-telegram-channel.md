@@ -168,7 +168,7 @@ docker-compose restart listener
 ```
 
 !!! note "Multi-account deployments"
-    With the `multi-account` compose profile, `listener-russia` and `listener-ukraine` run alongside (or instead of) `listener`, each with its own Telegram account and folders. Check the logs of the listener that owns the account you added the folder to, e.g. `docker-compose logs -f listener-ukraine`. Each channel records its account in `channels.source_account`.
+    With `TELEGRAM_MODE=multi` (compose profile `multi-account`), `listener-russia` and `listener-ukraine` run instead of `listener`, each with its own Telegram account and folders. Check the logs of the listener that owns the account you added the folder to, e.g. `docker-compose logs -f listener-ukraine`. Each channel records its account in `channels.source_account`.
 
 ### Or: Check the Database Directly
 

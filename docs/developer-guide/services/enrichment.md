@@ -134,7 +134,7 @@ for msg in messages:
 | **AI Tagging** | `enrich:ai_tagging` | AI tag generation | ✅ | ❌ |
 | **RSS Validation** | `enrich:rss_validation` | Article validation | ✅ | ❌ |
 | **Fast Pool** | `enrich:fast` | Embedding, translation, entity matching, geolocation, RSS correlation | ❌ | ❌ |
-| **Telegram** | `enrich:telegram` | Engagement polling, social graph, comments, forward discovery | ❌ | ✅ (20 req/s) |
+| **Telegram** | `enrich:telegram` (one stream per account in multi mode, see [Telegram Worker](#4-telegram-worker)) | Engagement polling, social graph, comments, forward discovery | ❌ | ✅ (20 req/s) |
 | **Decision** | `enrich:decision` | Decision verification, reprocessing | ❌ | ❌ |
 | **Maintenance** | `enrich:maintenance` | Channel cleanup, quarantine, discovery eval, Wikidata | ❌ | ❌ |
 | **Event Detection** | *Pipeline (DB-scan)* | RSS event creator, Telegram matcher, status updater | ✅ | ❌ |
@@ -542,7 +542,7 @@ TASK_CLASSES = {
 
 **Purpose**: Handle rate-limited Telegram API calls
 
-**Queue**: `enrich:telegram`
+**Queue**: `enrich:telegram` (default account); `enrich:telegram:russia` and `enrich:telegram:ukraine` in multi mode
 **File**: `/services/enrichment/src/workers/telegram_worker.py`
 **Tasks**: `engagement_polling`, `social_graph_extraction`, `comment_fetcher`, `comment_realtime`, `comment_backfill`, `comment_ondemand`, `forward_discovery`
 
@@ -555,10 +555,16 @@ CYCLE_INTERVAL_SECONDS=30
 RATE_LIMIT_PER_SECOND=20  # Prevent FloodWait
 TELEGRAM_API_ID=your-api-id
 TELEGRAM_API_HASH=your-api-hash
-TELEGRAM_SESSION_PATH=/app/sessions/enrichment_telegram
+TELEGRAM_SESSION_PATH=/app/sessions/enrichment.session   # enrichment-<account>.session for a named account
+SOURCE_ACCOUNT=russia                 # multi mode only; unset = default account
 COMMENT_AUTO_TRANSLATE=false  # On-demand translation via API
 METRICS_PORT=9200
 ```
+
+**One worker per Telegram account**: the worker reads `SOURCE_ACCOUNT` (`shared/python/telegram/session_names.py`) and consumes only its own stream. In single mode `enrichment-telegram` serves the default account (every channel no named account follows). With `TELEGRAM_MODE=multi`, compose runs `enrichment-telegram-russia` and `enrichment-telegram-ukraine` instead (profile `multi-account`, sessions `enrichment-russia.session` / `enrichment-ukraine.session`). The router joins `channels` and puts each Telegram task in the queue of its channel's `source_account`; it skips an account's queue when it is over `MAX_QUEUE_DEPTH`. The API's comment fetch follows the same rule, and the admin queue views show every account's stream. The database-scan tasks (`comment_backfill`, `comment_realtime`, `content_backfill`, `forward_discovery`, `social_graph_extraction`, discovery metrics and evaluation) filter on the worker's own account. `TelegramClientPool` no longer falls back to the default account: a channel is only reachable with the session of the account that follows it.
+
+!!! note "Channel joins are paused"
+    Automatic joins (forward discovery, social-graph auto-join, admin channel submissions) are off by default (runtime setting `channel_joins_enabled`, `CHANNEL_JOINS_ENABLED`); while off, the API refuses to accept a channel submission (HTTP 409) and it stays `pending`; nothing is queued. The API reads the same setting, so `CHANNEL_JOINS_ENABLED` is also passed to the `api` service.
 
 **Two Work Modes**:
 

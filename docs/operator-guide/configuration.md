@@ -50,6 +50,8 @@ COMPOSE_PROFILES=enrichment-lite,monitoring,auth,llm-gateway
 
 or pass them per command (`docker compose --profile monitoring up -d`). The full profile table (`enrichment-lite`, `enrichment-standard`, `enrichment-full`, `llm-gateway`, `monitoring`, `auth`, `opensanctions`, `notifications`, `tools`, `multi-account`, `dr`, `backfill`, `cloudflare`) is in [Docker Services](../reference/docker-services.md#profiles).
 
+`TELEGRAM_MODE` (`single` or `multi`, unset means `single`) selects the Telegram services. Do not edit it by hand: `./scripts/switch-telegram-mode.sh single|multi` writes it together with `SINGLE_ACCOUNT_REPLICAS` and the `multi-account` entry in `COMPOSE_PROFILES`, and `deploy.sh` refuses to run if they disagree.
+
 ## Scaling Configuration
 
 Replica counts are `.env` variables read by `docker-compose.yml`:

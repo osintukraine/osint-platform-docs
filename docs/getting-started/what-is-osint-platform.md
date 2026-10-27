@@ -78,7 +78,7 @@ Self-hosted PostgreSQL, MinIO and LLM (Ollama or your own GPU gateway) - no clou
 - **Historical Backfill**: Fetch messages from any date (configurable)
 - **Media Archival**: Content-addressed storage with SHA-256 deduplication
 - **Automatic Discovery**: Platform finds new channels via forward chain analysis
-- **Multi-Account Support**: Optional separate Telegram accounts per source region (`multi-account` profile)
+- **Multi-Account Support**: Optional separate Telegram accounts per source region (`TELEGRAM_MODE=multi`, `multi-account` profile: a listener, media worker, enrichment and analytics per account)
 
 ### AI/ML Enrichment
 

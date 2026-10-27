@@ -14,7 +14,7 @@ The `shared/python/` package contains **80+ Python files** of common code used b
 - **AI Utilities**: Ollama client, OpenAI-compatible gateway client, classification council
 - **Storage**: MinIO media archiver, multi-box selection
 - **Translation**: DeepL integration with allowance handling
-- **Telegram**: client factory and session file names
+- **Telegram**: client factory and session file names (`session_names.py`: `<role>-<account>` names, per-account queue and SQL filters)
 - **Hardware, hashing, utils**: hardware tiers, perceptual hashes, circuit breaker, graceful shutdown
 
 **Location**: `/shared/python/`
@@ -442,6 +442,8 @@ from observability import setup_logging, get_logger, record_message_processed
 from ai import create_ollama_client
 from telegram.session_names import session_name   # '<role>-<account>' session file names
 ```
+
+`telegram.session_names` is pure Python and safe to import in images without Telethon (the API does): `telegram/__init__.py` imports `create_telegram_client` lazily, so only code that actually builds a client needs Telethon. Main helpers: `NAMED_ACCOUNTS` (`russia`, `ukraine`), `account_of()` (any other `source_account`, including `legacy` and NULL, is `default`), `worker_account()` (reads `SOURCE_ACCOUNT`), `session_name(role, account)` (`listener-russia`; the default account keeps the bare role, e.g. `listener`), `telegram_queue(account)` (`telegram` or `telegram:<account>`) and `account_filter(column, account)` (SQL predicate for a worker's channels).
 
 ### FastAPI Dependency
 

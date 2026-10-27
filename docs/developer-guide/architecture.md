@@ -449,6 +449,10 @@ docker-compose --profile monitoring up -d
 # Profiles come from COMPOSE_PROFILES in .env (enrichment-standard, monitoring, auth, llm-gateway, ...)
 # Pull, migrate and restart:
 ./scripts/deploy.sh
+# Flags: --quick (pull and restart only), --build-pytorch, --build-service NAME (repeatable; combined with --build-pytorch both are built)
+
+# Telegram mode (TELEGRAM_MODE in .env, unset = single account): switch with
+./scripts/switch-telegram-mode.sh status|single|multi
 
 # Or by hand:
 docker-compose -f docker-compose.yml -f docker-compose.production.yml up -d

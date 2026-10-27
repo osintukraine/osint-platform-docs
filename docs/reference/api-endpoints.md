@@ -946,6 +946,8 @@ All admin endpoints require authentication.
 | GET | `/admin/comments/stats` | None | Get comment statistics |
 | GET | `/admin/comments/viral` | `active_only`, `limit` | Get viral posts |
 
+`POST /admin/comments/fetch` queues each message on the Telegram enrichment stream of its channel's account (`enrich:telegram`, or `enrich:telegram:<account>` in multi mode).
+
 ### Export
 
 | Method | Path | Query Parameters | Description |
@@ -993,6 +995,8 @@ All admin endpoints require authentication.
 | GET | `/admin/system/cache/stats` | None | Get Redis cache stats |
 | POST | `/admin/system/cache/clear` | `pattern` | Clear cache keys |
 | GET | `/admin/system/enrichment/tasks` | None | Get enrichment task status |
+
+The `enrich:telegram` queue figures in `/admin/system/workers` and the enrichment task status add up the per-account streams.
 
 ### RSS Feeds Management
 
@@ -1765,6 +1769,8 @@ Feeds can be protected by feed tokens (below).
 | DELETE | `/admin/events/{event_id}` | Soft-delete an event |
 | GET | `/admin/events/{event_id}/audit` | Event audit trail |
 | DELETE | `/admin/events/{event_id}/sources/{source_id}` | Remove an event source |
+
+`POST /channel-submissions/{submission_id}/accept` returns `409` while the admin setting `channel_joins_enabled` is off (the default): nothing is queued and the submission stays `pending`. Joins stay paused until the Discovery redesign lets the operator pick the account that joins.
 
 ### Admin: Channels, Entities, Media, Users, Fact-check, Message Actions
 

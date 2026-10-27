@@ -195,7 +195,8 @@ python scripts/dr_failover.py \
 # TELEGRAM_API_HASH_RUSSIA=<new_hash>
 
 # 7. Restart services
-docker-compose --profile multi-account up -d listener-russia shadow-sync
+docker-compose --profile multi-account up -d listener-russia
+docker-compose --profile dr up -d shadow-sync
 ```
 
 **Note**: Private channels without `invite_link` stored cannot be recovered automatically. You'll need to obtain new invite links manually.
@@ -273,7 +274,7 @@ docker-compose restart listener-russia
 5. **Start Shadow Sync Service**
 
    ```bash
-   docker-compose --profile dr up -d shadow-sync      # also started by --profile multi-account
+   docker-compose --profile dr up -d shadow-sync      # only in the dr profile, not in multi-account
    ```
 
 6. **Verify Sync is Working**
