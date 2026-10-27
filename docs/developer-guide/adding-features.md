@@ -70,15 +70,15 @@ class MyNewTask(BaseEnrichmentTask):
 
     def requires_llm(self) -> bool:
         """
-        Return True if task uses Ollama LLM.
+        Return True if task calls the LLM (gateway or Ollama).
 
-        LLM tasks run SEQUENTIALLY to prevent Ollama contention.
+        LLM tasks run SEQUENTIALLY to prevent LLM contention.
         Non-LLM tasks run in PARALLEL with configurable concurrency.
 
         Returns:
-            True if task calls Ollama, False otherwise
+            True if task calls the LLM, False otherwise
         """
-        return False  # Change to True if using Ollama
+        return False  # Change to True if using the LLM
 
     def get_priority(self) -> int:
         """
@@ -178,7 +178,7 @@ class MyNewTask(BaseEnrichmentTask):
 
 ### Step 2: Register Task in main.py
 
-Add your task to `services/enrichment/src/main.py`:
+Add your task to `services/enrichment/src/main.py` (the monolithic coordinator path; see Step 3 for queue workers):
 
 ```python
 # services/enrichment/src/main.py
@@ -197,21 +197,29 @@ if 'my_new_task' in config.enabled_tasks:
 
 ### Step 3: Add Configuration
 
-Add environment variable to `services/enrichment/src/config.py`:
+`EnrichmentConfig` is a dataclass in `services/enrichment/src/enrichment_config.py`. Add the field, then read it in `from_env()`:
 
 ```python
-# In EnrichmentConfig class
-my_task_config: str = os.getenv("MY_TASK_CONFIG", "default")
+# In the EnrichmentConfig dataclass
+my_task_config: str = "default"
+
+# In EnrichmentConfig.from_env(), inside the cls(...) call
+my_task_config=os.getenv("MY_TASK_CONFIG", "default"),
 ```
 
-Add to `docker-compose.yml`:
+`ENRICHMENT_TASKS` (comma-separated, default `translation,entity_matching`) selects which tasks a container registers. In `docker-compose.yml` the work is split across worker services (`enrichment-fast-pool`, `enrichment-telegram`, `enrichment-ai-tagging`, ...), each consuming a Redis queue. To run your task in one of them:
+
+1. Map it to a queue in `TASK_TO_QUEUE` (`services/enrichment/src/redis_queue.py`) so `enrichment-router` enqueues it. Tasks that find their own work by database scans (for example `comment_realtime`) are deliberately not routed.
+2. Set the container environment:
 
 ```yaml
-enrichment:
+enrichment-fast-pool:
   environment:
-    - ENRICHMENT_TASKS=translation,entity_matching,my_new_task
-    - MY_TASK_CONFIG=production_value
+    ENRICHMENT_TASKS: embedding,translation,entity_matching,my_new_task
+    MY_TASK_CONFIG: production_value
 ```
+
+Queue workers live in `services/enrichment/src/workers/` (`fast_worker.py` handles the CPU-bound pool and dispatches on the message's `task` field), so a new task for an existing queue also needs a branch there.
 
 ### Step 4: Database Schema (if needed)
 
@@ -238,11 +246,11 @@ Then rebuild database (see [Database Migrations](database-migrations.md)).
 ### Step 5: Test
 
 ```bash
-# Run enrichment with just your task
-ENRICHMENT_TASKS=my_new_task docker-compose up -d enrichment
+# Run a worker with your task enabled (set ENRICHMENT_TASKS in .env or the compose override)
+docker-compose --profile enrichment up -d enrichment-fast-pool
 
 # Check logs
-docker-compose logs -f enrichment | grep -i "my_new_task"
+docker-compose logs -f enrichment-fast-pool | grep -i "my_new_task"
 
 # Verify database
 docker-compose exec postgres psql -U osint_user -d osint_platform \
@@ -253,11 +261,11 @@ docker-compose exec postgres psql -U osint_user -d osint_platform \
 
 ## LLM Task Example
 
-For tasks that use Ollama:
+For tasks that call the LLM. `create_ollama_client` returns a `GatewayGenerateClient` when `LLM_PROVIDER=openai` and `LLM_GATEWAY_URL` is set (the gateway alias from `LLM_GATEWAY_MODEL` then replaces the model name you pass), otherwise an `OllamaClient`:
 
 ```python
 class MyLLMTask(BaseEnrichmentTask):
-    """Task using Ollama LLM."""
+    """Task using the LLM."""
 
     def requires_llm(self) -> bool:
         """Mark as LLM task - runs sequentially."""
@@ -277,7 +285,7 @@ class MyLLMTask(BaseEnrichmentTask):
         ) as client:
             for msg in messages:
                 response = await client.generate(
-                    model="qwen2.5:3b",
+                    model=self.model,  # Ollama model name; ignored on the gateway (alias used)
                     prompt=f"Analyze: {msg.content}",
                     temperature=0.3,
                     max_tokens=500,
@@ -299,6 +307,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..schemas import MyFeatureResponse
+# Admin-only endpoints: add `admin: AdminUser` (from ..dependencies import AdminUser)
+from models.my_model import MyModel  # ORM model in shared/python/models/
 
 router = APIRouter(prefix="/api/my-feature", tags=["my-feature"])
 
@@ -328,9 +338,9 @@ async def get_my_feature(
 Add to `services/api/src/main.py`:
 
 ```python
-from .routers import my_feature
+from .routers.my_feature import router as my_feature_router
 
-app.include_router(my_feature.router)
+app.include_router(my_feature_router)
 ```
 
 ### Step 3: Add Schema
@@ -342,13 +352,12 @@ class MyFeatureResponse(BaseModel):
     id: int
     data: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)  # from pydantic import ConfigDict
 ```
 
 ### Step 4: Add Frontend API Function
 
-Add to `services/frontend-nextjs/lib/api.ts`:
+Add to `services/frontend-nextjs/lib/api.ts` (see [Frontend API Patterns](frontend-api-patterns.md)):
 
 ```typescript
 export async function getMyFeature(id: number): Promise<MyFeatureType> {
@@ -369,9 +378,10 @@ import { getMyFeature } from '@/lib/api';
 export default async function MyFeaturePage({
   params
 }: {
-  params: { id: string }
+  params: Promise<{ id: string }>  // Next.js 15: params is async
 }) {
-  const data = await getMyFeature(parseInt(params.id));
+  const { id } = await params;
+  const data = await getMyFeature(parseInt(id));
 
   return (
     <div>
@@ -442,15 +452,15 @@ async def process_batch(self, messages, session):
 
 ### Database Schema Changes
 
-Always update `init.sql` after manual ALTER commands:
+Every schema change goes into both `init.sql` and a numbered migration:
 
 ```bash
-# 1. Apply manually to running database
-docker-compose exec postgres psql -U osint_user -d osint_platform \
-  -c "ALTER TABLE messages ADD COLUMN new_field TEXT"
-
-# 2. Update init.sql for future deployments
+# 1. Update init.sql for fresh installs
 # Edit infrastructure/postgres/init.sql
+
+# 2. Add a numbered migration for existing installs, then apply it
+# infrastructure/postgres/migrations/NNN_description.sql
+./scripts/migrate.sh --dry-run && ./scripts/migrate.sh
 
 # 3. Update ORM model
 # Edit shared/python/models/message.py
@@ -495,7 +505,7 @@ class TestMyNewTask:
 
 ```bash
 # Run specific test file
-pytest services/enrichment/tests/test_my_new_task.py -v
+pytest services/enrichment/tests/test_my_new_task.py -v --no-cov
 
 # Run with coverage
 pytest services/enrichment/tests/ --cov=services/enrichment/src
@@ -518,7 +528,7 @@ pytest services/enrichment/tests/ --cov=services/enrichment/src
 
 ## Related Documentation
 
-- [LLM Integration](llm-integration.md) - Working with Ollama prompts
+- [LLM Integration](llm-integration.md) - Working with the LLM gateway and prompts
 - [Frontend API Patterns](frontend-api-patterns.md) - API client usage
 - [Database Migrations](database-migrations.md) - Schema changes
 - [Testing Guide](testing-guide.md) - Test patterns and fixtures

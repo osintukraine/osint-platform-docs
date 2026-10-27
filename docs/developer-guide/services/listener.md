@@ -17,7 +17,7 @@ The Listener Service is the entry point of the OSINT Intelligence Platform pipel
 
 **Core Responsibilities**:
 
-1. Monitor 254+ Telegram channels via single session
+1. Monitor the active channels of its Telegram account (`channels.source_account` = `SOURCE_ACCOUNT`) via a single session
 2. Extract social graph metadata (forwards, replies, authors)
 3. Handle media albums (grouped photos/videos)
 4. Push raw messages to Redis queue
@@ -71,14 +71,14 @@ graph TB
 
 | File | Purpose | Lines |
 |------|---------|-------|
-| `main.py` | Service entry point, initialization, signal handling | 208 |
-| `telegram_listener.py` | Core message monitoring, event handlers | 855 |
-| `channel_discovery.py` | Folder-based channel discovery and sync | 567 |
-| `backfill_service.py` | Historical message fetching | 677 |
-| `redis_queue.py` | Redis Streams client for message queue | 262 |
-| `social_graph_utils.py` | Extract forwards, replies, author metadata | 306 |
-| `media_utils.py` | Media type detection utility | 58 |
-| `metrics.py` | Prometheus metrics definitions | 421 |
+| `main.py` | Service entry point, initialization, signal handling | 512 |
+| `telegram_listener.py` | Core message monitoring, event handlers | 948 |
+| `channel_discovery.py` | Folder-based channel discovery and sync | 817 |
+| `backfill_service.py` | Historical message fetching | 692 |
+| `redis_queue.py` | Redis Streams client for message queue | 305 |
+| `social_graph_utils.py` | Extract forwards, replies, author metadata | 305 |
+| `media_utils.py` | Media type detection utility | 57 |
+| `metrics.py` | Prometheus metrics definitions | 530 |
 
 ### Session Management
 
@@ -199,16 +199,21 @@ async def _periodic_group_flush(self):
 | `TELEGRAM_API_HASH` | Telegram API hash from my.telegram.org | - | Yes |
 | `TELEGRAM_PHONE` | Phone number with country code | - | Yes (first auth) |
 | `TELEGRAM_SESSION_PATH` | Directory for session files | `/data/sessions` | No |
-| `TELEGRAM_SESSION_NAME` | Session file name | `osint_platform` | No |
-| `SOURCE_ACCOUNT` | Multi-account identifier | `default` | No |
-| `REDIS_URL` | Redis connection string | `redis://localhost:6379/0` | Yes |
-| `REDIS_STREAM_NAME` | Redis stream key | `telegram:messages` | No |
-| `REDIS_MAX_STREAM_LENGTH` | Max messages in stream | `10000` | No |
+| `TELEGRAM_SESSION_NAME` | Session file name. Compose sets `listener-<account>` for the multi-account listeners; the discovery session is `discovery` / `discovery-<account>` (see `shared/python/telegram/session_names.py`) | `osint_platform` | No |
+| `SOURCE_ACCOUNT` | Account this listener serves; it only handles channels with the same `source_account` | `default` | No |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | Redis connection (compose sets host `redis`) | - | Yes |
+| `FOLDER_SYNC_INTERVAL` | Seconds between Telegram folder syncs (min 30) | `300` | No |
+| `METRICS_PORT` | Prometheus port inside the container (compose: `LISTENER_METRICS_PORT`, default 8001); health server is fixed on 8002 | `8001` | No |
+| `LISTENER_STALE_THRESHOLD_SECONDS` | `/health` turns 503 after this long without a message | `3600` in compose | No |
 | `BACKFILL_ENABLED` | Enable historical message fetching | `false` | No |
 | `BACKFILL_START_DATE` | Start date for backfill | `2024-01-01` | No (if enabled) |
 | `BACKFILL_MODE` | When to trigger backfill | `manual` | No |
 | `BACKFILL_BATCH_SIZE` | Messages per batch | `100` | No |
 | `BACKFILL_DELAY_MS` | Delay between batches | `1000` | No |
+| `BACKFILL_MAX_CONCURRENT` | Backfills one listener runs at once; others wait | `2` | No |
+| `BACKFILL_MEDIA_STRATEGY` | `download_available`, `skip` or `download_all` | `download_available` | No |
+
+The redis stream names and length are constants in `redis_queue.py`, not environment variables (see [Redis Integration](#redis-integration)).
 
 ### Multi-Account Support
 
@@ -225,7 +230,7 @@ TELEGRAM_API_ID_UKRAINE=67890
 TELEGRAM_API_HASH_UKRAINE=def456
 TELEGRAM_PHONE_UKRAINE=+0987654321
 
-# Enable multi-account mode
+# Enable multi-account mode (each listener has its own session file)
 docker-compose --profile multi-account up -d listener-russia listener-ukraine
 ```
 
@@ -252,15 +257,15 @@ See [Telegram Setup Guide](../../operator-guide/telegram-setup.md) for full mult
 1. Open Telegram app (mobile or desktop)
 2. Find channel you want to monitor
 3. Drag channel to appropriate folder
-4. Done! Platform detects change within 5 minutes
+4. Done! Platform detects change within `FOLDER_SYNC_INTERVAL` (default 5 minutes)
 
 **Folder Rules** (prefix matching):
 
 | Folder Pattern | Rule | Behavior |
 |---------------|------|----------|
 | `Archive*` | `archive_all` | Store all non-spam messages |
-| `Monitor*` | `selective_archive` | Only store high importance+ |
-| `Discover*` | `discovery` | Auto-joined channels (14-day probation) |
+| `Monitor*` | `selective_archive` | Only stores posts at or above the `monitoring_min_importance` admin setting (default `medium`) |
+| `Discover*` | `discovery` | Auto-joined channels (~7-day probation after 30+ messages), same importance floor |
 
 **Examples** (remember 12-char limit):
 
@@ -298,7 +303,7 @@ class ChannelDiscovery:
 
 **Background Sync**:
 
-- Runs every 5 minutes
+- Runs every `FOLDER_SYNC_INTERVAL` seconds (default 300)
 - Detects channel additions/removals
 - Updates database automatically
 - Triggers backfill for new channels (if enabled)
@@ -354,8 +359,8 @@ BACKFILL_MODE=on_discovery  # on_discovery | manual | scheduled
 **Modes**:
 
 - **on_discovery**: Automatic backfill when channel added to folder
-- **manual**: Triggered via API endpoint (`POST /api/admin/channels/{id}/backfill`)
-- **scheduled**: Not yet implemented
+- **manual** (compose default): Triggered via API endpoint (`POST /api/channels/{channel_id}/backfill`, admin only)
+- **scheduled**: accepted by the setting but not implemented
 
 **Features**:
 
@@ -392,7 +397,7 @@ await redis_queue.push_message(
     message_id=message.id,
     channel_id=channel.telegram_id,
     content=content,
-    source_account=settings.SOURCE_ACCOUNT,  # "russia" or "ukraine"
+    source_account=settings.SOURCE_ACCOUNT,  # "default", "russia" or "ukraine"
     # ... other fields
 )
 ```
@@ -409,9 +414,11 @@ await redis_queue.push_message(
 
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
-| Stream Key | `telegram:messages` | Main message stream |
+| Realtime stream | `telegram:messages:realtime` | Live messages, consumed first |
+| Backfill stream | `telegram:messages:backfill` | Historical messages (`is_backfilled`), consumed when idle |
+| Legacy stream | `telegram:messages` | Deprecated, only drained by the processor |
 | Consumer Group | `processor-workers` | Parallel processing |
-| Max Length | `10,000` messages | Prevent unbounded growth |
+| Max Length | `100,000` per stream (`MAXLEN ~`) | Prevent unbounded growth |
 | Encoding | UTF-8 | Text content |
 
 ### Message Format
@@ -478,7 +485,7 @@ healthy = await redis_queue.health_check()
 
 ## Metrics
 
-The Listener exposes Prometheus metrics on **port 8001** (`/metrics` endpoint).
+The Listener exposes Prometheus metrics on **port 8001** (`/metrics`, `METRICS_PORT`) and a health endpoint on **port 8002** (`/health`). Multi-account listeners publish metrics on host ports 8011 (russia) and 8012 (ukraine).
 
 ### Key Metrics
 
@@ -495,24 +502,11 @@ The Listener exposes Prometheus metrics on **port 8001** (`/metrics` endpoint).
 | `redis_queue_pending` | Gauge | Messages pending acknowledgment | - |
 | `backfill_messages_total` | Counter | Backfill messages fetched | `channel_id`, `channel_name`, `status` |
 | `backfill_status` | Gauge | Current backfill status | `channel_id`, `channel_name` |
+| `telegram_last_message_timestamp` | Gauge | Last received message; drives `/health` | - |
 
 ### Grafana Dashboard
 
-Import the pre-configured Listener dashboard:
-
-```bash
-# Dashboard JSON available at:
-# infrastructure/monitoring/grafana/dashboards/listener-overview.json
-```
-
-**Panels**:
-
-- Messages ingested per channel (timeseries)
-- Album vs single message ratio
-- FloodWait errors by severity
-- Redis queue depth
-- Active channels by folder
-- Backfill progress
+Listener series appear in the pipeline dashboards provisioned from `infrastructure/grafana/dashboards/` (`osint-pipeline.json`, `platform-overview.json`); there is no listener-specific dashboard.
 
 ### Example Queries
 
@@ -540,7 +534,7 @@ cp .env.example .env
 # Edit TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE
 
 # 2. Authenticate Telegram session (first time only)
-docker-compose run --rm listener python3 scripts/telegram_auth.py
+python3 scripts/telegram_auth.py            # run from the repo root on the host; add --account <name> for multi-account
 
 # 3. Start listener
 docker-compose up -d listener
@@ -548,8 +542,9 @@ docker-compose up -d listener
 # 4. View logs
 docker-compose logs -f listener
 
-# 5. Check metrics
+# 5. Check metrics and health
 curl http://localhost:8001/metrics
+curl http://localhost:8002/health
 ```
 
 ### Development (Without Docker)
@@ -567,10 +562,10 @@ export TELEGRAM_API_ID=12345
 export TELEGRAM_API_HASH=abc123
 export TELEGRAM_PHONE=+1234567890
 export REDIS_URL=redis://localhost:6379/0
-export POSTGRES_URL=postgresql+asyncpg://user:pass@localhost/osint_platform
+export POSTGRES_HOST=localhost POSTGRES_PASSWORD=pass   # settings read POSTGRES_* variables
 export PYTHONPATH="../../shared/python:$PYTHONPATH"
 
-# 3. Authenticate (first time only)
+# 3. Authenticate (first time only, repo root)
 python3 scripts/telegram_auth.py
 
 # 4. Run listener
@@ -619,12 +614,10 @@ docker-compose logs -f listener | grep -E "Album|fallback"
 
 ```bash
 # Re-authenticate
-docker-compose run --rm listener python3 scripts/telegram_auth.py
+python3 scripts/telegram_auth.py            # repo root, on the host
+python3 scripts/telegram_auth.py --list     # show existing session files
 
-# Or manually:
-python3 scripts/telegram_auth.py --account default
-
-# For multi-account:
+# For multi-account (writes listener-<account> and discovery-<account> sessions):
 python3 scripts/telegram_auth.py --account russia
 python3 scripts/telegram_auth.py --account ukraine
 ```
@@ -747,8 +740,8 @@ listener = TelegramListener(...)
 listener.grouped_messages_cache.clear()
 "
 
-# Reduce Redis max length in .env:
-REDIS_MAX_STREAM_LENGTH=5000  # default: 10000
+# The stream cap (MAX_STREAM_LENGTH = 100000) is a constant in redis_queue.py;
+# a growing queue means the processor is behind: scale processor workers instead
 ```
 
 ### Key Log Messages
@@ -788,8 +781,8 @@ docker-compose ps listener
 # → healthy
 
 # Manual health check
-curl http://localhost:8001/health
-# → {"status": "healthy", "connections": {"telegram": true, "redis": true}}
+curl http://localhost:8002/health
+# → plain text status; HTTP 503 if no message within LISTENER_STALE_THRESHOLD_SECONDS (after a 10 min start grace)
 
 # Metrics endpoint
 curl http://localhost:8001/metrics | head -20

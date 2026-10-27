@@ -4,7 +4,7 @@ Comprehensive documentation of all REST API endpoints in the OSINT Intelligence 
 
 **Base URL**: `http://localhost:8000/api` (development) | `https://your-domain.com/api` (production)
 
-**Authentication**: Most endpoints require Bearer token authentication. See [Authentication](#authentication) section.
+**Authentication**: Depends on `AUTH_PROVIDER` (`none`, `jwt` or `ory`). Admin routes require an admin user; user routes (bookmarks, API keys, feed tokens, preferences) require login. See [Authentication](#authentication). The RSS/Atom feeds under `/rss/*` are served at the site root, not under `/api`. Interactive docs (Swagger/ReDoc) are at `/docs` and `/redoc`, filtered by role.
 
 ---
 
@@ -30,6 +30,7 @@ Comprehensive documentation of all REST API endpoints in the OSINT Intelligence 
 - [Admin Kanban](#admin-kanban)
 - [Admin Configuration](#admin-configuration)
 - [Media Storage](#media-storage)
+- [Additional Endpoints](#additional-endpoints)
 
 ---
 
@@ -1012,13 +1013,13 @@ All admin endpoints require authentication.
 
 ## Channel Network
 
-### GET /channel-network/{channel_id}/network
+### GET /channels/{channel_id}/network
 
 Get entity and content network graph for a specific channel.
 
 | Method | Path | Query Parameters | Description |
 |--------|------|------------------|-------------|
-| GET | `/channel-network/{channel_id}/network` | See below | Get channel content network |
+| GET | `/channels/{channel_id}/network` | See below | Get channel content network |
 
 **Query Parameters**:
 - `min_similarity` (float, 0.0-1.0, default: 0.7): Minimum similarity score for connections
@@ -1034,13 +1035,13 @@ Get entity and content network graph for a specific channel.
 
 ## News Timeline
 
-### GET /news-timeline
+### GET /timeline
 
 Get unified timeline of RSS articles + Telegram messages with correlations.
 
 | Method | Path | Query Parameters | Description |
 |--------|------|------------------|-------------|
-| GET | `/news-timeline` | See below | Get news timeline |
+| GET | `/timeline` | See below | Get news timeline |
 
 **Query Parameters**:
 - `page` (integer, default: 1): Page number
@@ -1079,13 +1080,13 @@ Get unified timeline of RSS articles + Telegram messages with correlations.
 }
 ```
 
-### GET /news-timeline/stats
+### GET /timeline/stats
 
 Get news timeline statistics.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/news-timeline/stats` | Optional | Get timeline statistics |
+| GET | `/timeline/stats` | Optional | Get timeline statistics |
 
 **Response**:
 ```json
@@ -1161,13 +1162,13 @@ Get RSS correlations for a specific Telegram message.
 
 ## Validation (RSS Fact-Checking)
 
-### GET /validation/{message_id}/validation
+### GET /messages/{message_id}/validation
 
 Get LLM-powered validation summary for a message.
 
 | Method | Path | Query Parameters | Description |
 |--------|------|------------------|-------------|
-| GET | `/validation/{message_id}/validation` | `refresh`, `min_similarity` | Get validation summary |
+| GET | `/messages/{message_id}/validation` | `refresh`, `min_similarity` | Get validation summary |
 
 **Query Parameters**:
 - `refresh` (boolean, default: false): Force regenerate validation (ignore cache)
@@ -1675,20 +1676,129 @@ Browser Request: /media/ab/cd/abcd1234.jpg
 
 ---
 
+## Additional Endpoints
+
+Compact listings of routers not detailed above. Paths are relative to `/api` unless noted. Parameters are in the FastAPI routers under `services/api/src/routers/`; the running API serves a current OpenAPI schema at `/openapi.json` (the `openapi.json` committed in the repo is stale).
+
+### Semantic and Similarity Search
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/semantic/search` | Embedding-based semantic message search |
+| GET | `/semantic/similar/{message_id}` | Messages semantically similar to a message |
+| GET | `/semantic/tags` | List tags |
+| GET | `/semantic/tags/search` | Find messages by tag |
+| GET | `/messages/{message_id}/similar` | pgvector similarity for one message |
+| GET | `/messages/{message_id}/timeline` | Temporal context around a message |
+| GET | `/messages/{message_id}/network/export` | Flowsint graph export |
+
+### Analytics, Media, Channels (extra)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/analytics/engagement` | Engagement analytics |
+| GET | `/media/gallery` | Media gallery listing |
+| GET | `/media/stats` | Media statistics |
+| GET | `/channels/by-username/{username}` | Look up a channel by username |
+| GET | `/about/activity` | Recent activity for the About page |
+| GET | `/health` | Public health check |
+| GET | `/health/hardware` | Hardware tier and LLM sizing |
+| GET | `/metrics` | Prometheus scrape endpoint (root path, not under `/api`) |
+
+### Map (extra)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/map/events` | Detected events as GeoJSON |
+| GET | `/map/hot-locations` | Locations with recent activity |
+| GET | `/map/recent-messages` | Recent geolocated messages |
+| GET | `/map/trajectories` | Movement trajectories |
+| GET | `/map/vessels` | Tracked vessels (shadow fleet) |
+
+### Multi-model Registry
+
+Task model registry (`/models/...`): `GET /models/registry`, `/models/registry/verified`, `/models/registry/{model_id}`, `/models/tasks/{task}`, `/models/tasks/{task}/fastest`, `/models/tasks/{task}/best-quality`, `/models/configuration`, `/models/configuration/{task}` (GET, PUT), `DELETE /models/configuration/{task}/{model_id}`, `GET /models/health/{model_id}`, `GET /models/stats`.
+
+### RSS and Atom Feeds (root path `/rss`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/rss/search` | Feed from a search query |
+| GET | `/rss/channel/{username}` | Feed for a channel |
+| GET | `/rss/topic/{topic}` | Feed for a topic |
+| GET | `/rss/formats` | Supported output formats |
+
+Feeds can be protected by feed tokens (below).
+
+### User Features (login required)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/user/me` | Current user |
+| GET, PUT | `/user/preferences` | Read or update preferences |
+| GET | `/bookmarks` | List bookmarks |
+| POST, DELETE | `/bookmarks/{message_id}` | Add or remove a bookmark |
+| POST, GET | `/api-keys` | Create or list API keys |
+| GET | `/api-keys/usage/summary` | Usage summary |
+| GET, DELETE | `/api-keys/{key_id}` | Show or revoke a key |
+| POST, GET | `/feed-tokens` | Create or list feed tokens |
+| GET | `/feed-tokens/auth-status` | Whether feed authentication is enforced |
+| DELETE | `/feed-tokens/{token_id}` | Revoke a token |
+| POST | `/feed-tokens/{token_id}/sign-url` | Sign a feed URL |
+| GET | `/feed-tokens/{token_id}/subscriptions` | List subscriptions |
+| PATCH, DELETE | `/feed-tokens/{token_id}/subscriptions/{subscription_id}` | Update or delete a subscription |
+| POST | `/feed-tokens/{token_id}/subscriptions/{subscription_id}/regenerate-url` | New signed URL |
+| POST | `/feed-tokens/{token_id}/subscriptions/{subscription_id}/clone` | Clone a subscription |
+| POST | `/channel-submissions` | Suggest a channel (public) |
+| GET | `/channel-submissions/my` | Your submissions |
+
+### Admin: Channel Submissions, Spam Actions, System
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/channel-submissions`, `/channel-submissions/{submission_id}` | Review queue |
+| POST | `/channel-submissions/{submission_id}/accept`, `/reject` | Decide a submission |
+| POST | `/spam/messages/{message_id}/mark-not-spam`, `/confirm-spam` | Spam verdict on one message |
+| GET | `/system/health`, `/system/health/llm`, `/system/pipeline` | Service, LLM gateway and pipeline health |
+| GET | `/system/audit`, `/system/audit/stats` | Decision audit log |
+| POST | `/system/audit/{decision_id}/verify` | Verify an audit decision |
+| DELETE | `/admin/events/{event_id}` | Soft-delete an event |
+| GET | `/admin/events/{event_id}/audit` | Event audit trail |
+| DELETE | `/admin/events/{event_id}/sources/{source_id}` | Remove an event source |
+
+### Admin: Channels, Entities, Media, Users, Fact-check, Message Actions
+
+| Group | Endpoints (under `/admin`) |
+|-------|-----------------------------|
+| Channels | `GET /channels`, `/channels/folders`, `/channels/stats`, `GET, PUT /channels/{id}` |
+| Entities | `GET /entities`, `/entities/sources`, `/entities/stats`, `/entities/types`, `/entities/{id}` |
+| Media | `GET /media`, `/media/stats`, `/media/topics` |
+| Users (Kratos) | `GET, POST /users`; `GET, PUT, DELETE /users/{id}`; `POST /users/{id}/recovery-link`; `GET, DELETE /users/{id}/sessions`; `DELETE /users/{id}/sessions/{session_id}` |
+| Fact-check | `GET /fact-check/all`, `/pending`, `/reviewed`, `/stats`; `POST /fact-check/{id}/approve`, `/reject`, `/unhide`; `POST /fact-check/bulk-approve`, `/bulk-delete`; `DELETE /fact-check/{id}` |
+| Message actions | `POST /messages/{id}/hide`, `/unhide`, `/delete`, `/spam`, `/unspam`, `/quarantine`, `/reprocess`, `/importance`, `/topic`, `/note`, `/link-event`, `/mark-original`, `/geolocation`; `GET /messages/{id}/actions`, `/messages/{id}/duplicates`; `GET /messages/audit/actions`, `/messages/audit/actions/stats`; `GET /messages/duplicates/clusters`, `/messages/duplicates/stats`; `POST /messages/duplicates/clusters/{id}/review` |
+| Config (extra) | `GET /config/env` |
+| Auth helper | `POST /admin/check-role` (Oathkeeper role check, no auth) |
+
+---
+
 ## Rate Limiting
 
-Currently no rate limiting is enforced. Future implementations may add:
-- 100 requests/minute for authenticated users
-- 20 requests/minute for unauthenticated users
-- Higher limits for admin endpoints
+Redis sliding-window limiting (fails open if Redis is down) is applied to the map, media and export endpoints, per API key, user or client IP. Limits are requests per minute and depend on the caller tier:
+
+| Tier | default | media | export | map |
+|------|---------|-------|--------|-----|
+| anonymous | 60 | 30 | 10 | 120 |
+| authenticated | 120 | 60 | 30 | 240 |
+| premium | 300 | 150 | 100 | 600 |
+| admin | 1000 | 500 | 500 | 1000 |
+
+Per-endpoint defaults for the map and media-redirect routes are overridable with `MAP_*_RATE_LIMIT` and `MEDIA_REDIRECT_RATE_LIMIT` (see `services/api/src/utils/rate_limit.py`). Over-limit requests receive HTTP 429.
 
 ---
 
 ## CORS
 
-CORS is enabled for `http://localhost:3000` (frontend) in development.
-
-Production requires explicit CORS configuration via environment variables.
+Allowed origins come from `API_CORS_ORIGINS` (comma-separated, default `http://localhost:3000`). Wildcard `*` is rejected. Set it to your public domain in production.
 
 ---
 

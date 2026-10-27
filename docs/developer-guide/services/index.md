@@ -6,13 +6,13 @@ Detailed documentation of each microservice in the platform.
 
 ## Overview
 
-The OSINT Intelligence Platform consists of **15+ application services** organized by function. The canonical service, profile and port list is [Docker Services](../../reference/docker-services.md).
+The OSINT Intelligence Platform consists of **20+ application containers** (one image can back several compose services) organized by function. The canonical service, profile and port list is [Docker Services](../../reference/docker-services.md).
 
 - **Core Pipeline**: Listener → Processor → Enrichment
 - **Data Access**: API → Frontend
 - **Supporting**: RSS Ingestor, OpenSanctions, Notifier
 - **Infrastructure**: PostgreSQL, Redis, MinIO, LLM gateway or Ollama
-- **Background workers**: media-worker, media-sync, backlog-worker
+- **Background workers**: media-worker, [media-sync](media-sync.md), backlog-worker
 
 ```mermaid
 graph LR
@@ -55,8 +55,8 @@ graph LR
 |--------|---------|
 | **Function** | Telegram monitoring, channel discovery, backfill |
 | **Tech** | Telethon, Redis Streams, asyncio |
-| **Files** | `telegram_listener.py` (854 lines), `channel_discovery.py` (566 lines) |
-| **Critical** | Owns Telegram session - never create clients elsewhere |
+| **Files** | `telegram_listener.py` (~950 lines), `channel_discovery.py` (~820 lines) |
+| **Critical** | Owns Telegram session - never create clients elsewhere. One listener per account (`listener`, or `listener-russia` / `listener-ukraine` with the `multi-account` profile) |
 
 [:octicons-arrow-right-24: Full Documentation](listener.md)
 
@@ -71,7 +71,7 @@ graph LR
 | **Function** | Pipeline: embedding spam filter → LLM classification → routing → entities → media → DB |
 | **Tech** | Redis consumer, LLM gateway or Ollama, embedding spam filter, MinIO, PostgreSQL |
 | **Target** | <1s per message latency |
-| **Files** | `message_processor.py` (1278 lines), `llm_classifier.py` (1182 lines) |
+| **Files** | `message_processor.py` (~2,000 lines), `llm_classifier.py` (~1,750 lines) |
 
 [:octicons-arrow-right-24: Full Documentation](processor.md)
 
@@ -83,7 +83,7 @@ graph LR
 
 | Aspect | Details |
 |--------|---------|
-| **Function** | 32 task types across 12 worker pools |
+| **Function** | 38 task modules across 11 worker services plus a router |
 | **Tech** | Coordinator + Router pattern, Redis Streams, LLM gateway / Ollama |
 | **Speed** | Background - can be slow (hours OK) |
 | **LLM Tasks** | Dedicated workers per task; fact-check and RSS validation use the gateway |
@@ -98,9 +98,9 @@ graph LR
 
 | Aspect | Details |
 |--------|---------|
-| **Function** | Re-classifies sampled messages, compares with original |
+| **Function** | Re-classifies sampled messages, compares with original; casts the auditor vote of the classification council |
 | **Tech** | Stratified sampling, LLM gateway audit lane, confidence-based actions |
-| **Actions** | Auto-reclassify, auto-hide off-topic, queue for review |
+| **Actions** | Auto-hide off-topic, auto-reclassify `uncertain` originals, queue the rest for review |
 | **Admin UI** | `/admin/fact-check` for human review |
 
 [:octicons-arrow-right-24: Full Documentation](fact-check.md)
@@ -116,7 +116,7 @@ graph LR
 | **Function** | Search, messages, entities, channels, RSS feeds |
 | **Tech** | FastAPI, SQLAlchemy async, Pydantic |
 | **Auth** | Optional Ory Kratos integration |
-| **Files** | 15+ router modules |
+| **Files** | 40+ router modules (`routers/`, `routers/admin/`) |
 
 [:octicons-arrow-right-24: Full Documentation](api.md)
 
@@ -129,7 +129,7 @@ graph LR
 | Aspect | Details |
 |--------|---------|
 | **Function** | Search, message view, entity explorer, admin |
-| **Tech** | Next.js 14, React, Tailwind CSS |
+| **Tech** | Next.js 15, React 19, Tailwind CSS |
 | **Rendering** | SSR for SEO, client components for interactivity |
 | **API** | Uses `lib/api.ts` centralized client |
 
@@ -195,21 +195,29 @@ Batch translation of historical messages.
 
 ---
 
+### [Media Sync Service](media-sync.md)
+
+Copies media from the local buffer to the Hetzner mount (or MinIO in legacy mode) and marks it synced.
+
+[:octicons-arrow-right-24: Full Documentation](media-sync.md)
+
+---
+
 ## Infrastructure Services
 
 ### PostgreSQL
 
 Primary data store with pgvector for embeddings and full-text search.
 
-- **Schema**: `infrastructure/postgres/init.sql` (~3000 lines)
+- **Schema**: `infrastructure/postgres/init.sql` plus numbered migrations
 - **Extensions**: pgvector, pg_trgm, btree_gin
-- **Vector search**: HNSW index for cosine similarity
+- **Vector search**: HNSW indexes for cosine similarity
 
 ### Redis
 
 Message queue and caching layer.
 
-- **Streams**: `telegram:messages` for Listener→Processor
+- **Streams**: `telegram:messages:realtime` and `telegram:messages:backfill` for Listener→Processor (legacy `telegram:messages` is only drained)
 - **Streams**: `enrich:*` for Enrichment worker pools
 - **Consumer groups**: Reliable delivery with acknowledgment
 
@@ -217,7 +225,7 @@ Message queue and caching layer.
 
 S3-compatible object storage for archived media.
 
-- **Bucket**: `telegram-archive`
+- **Bucket**: `osint-media`
 - **Paths**: Content-addressed `media/{hash[:2]}/{hash[2:4]}/{hash}.{ext}`
 - **Deduplication**: SHA-256 prevents storing duplicates
 
@@ -238,7 +246,7 @@ Production uses an OpenAI-compatible gateway on a GPU host (`LLM_PROVIDER=openai
 ```
 Telegram → Listener → Redis Streams → Processor → PostgreSQL → Enrichment → PostgreSQL
                                           ↓
-                                       MinIO
+                          local buffer → media-sync → Hetzner mount / MinIO
 ```
 
 ### Communication Patterns
@@ -257,22 +265,21 @@ Telegram → Listener → Redis Streams → Processor → PostgreSQL → Enrichm
 ### Horizontal Scaling
 
 ```bash
-# Scale processor workers (2-8 recommended)
+# Scale processor workers (default 2: PROCESSOR_WORKER_REPLICAS)
 docker-compose up -d --scale processor-worker=4
 
-# Scale enrichment fast pool
-docker-compose --profile enrichment up -d --scale enrichment-fast-pool=2
+# Enrichment workers have fixed container names and host metrics ports; scale via ENRICHMENT_WORKER_REPLICAS in .env where compose supports it
 ```
 
 ### Resource Guidelines
 
 | Service | CPU | Memory | Scaling |
 |---------|-----|--------|---------|
-| Listener | Low | 512MB | Single instance |
+| Listener | Low | 512MB | One per Telegram account |
 | Processor | Medium | 1GB | 2-8 workers |
 | Enrichment | High | 2GB | By worker type |
 | API | Low | 512MB | 1-4 instances |
-| Ollama (if used) | High | 8GB+ | Single (CPU inference) |
+| Ollama (non-GPU option) | High | 8GB+ | Single (CPU inference) |
 
 ---
 

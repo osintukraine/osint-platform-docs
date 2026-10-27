@@ -23,6 +23,7 @@ The **Notifier Service** (also called **Aggregator Service**) is a central intel
 - Rich notification formatting with markdown support
 - Media attachment support (MinIO URL integration)
 - Prometheus AlertManager webhook endpoints
+- Admin-controlled event filtering (`filters.py`, via `runtime_config("notifier")`)
 - Comprehensive Prometheus metrics
 - FastAPI health checks
 
@@ -36,6 +37,7 @@ Platform Services (Listener, Processor, API, etc.)
 Redis Pub/Sub (notifications:events channel)
     ↓ subscribe
 Notifier Service (Aggregator)
+    ├─ filters.decide() → Drop / keep / push at once (admin settings)
     ├─ EventRouter → Determine ntfy topic
     ├─ EventBatcher → Buffer or send immediately
     ├─ NotificationFormatter → Create rich notification
@@ -55,7 +57,8 @@ Mobile/Desktop/Web Clients
 | **EventBatcher** | `batcher.py` | Batch low-priority events (5-minute window) |
 | **NotificationFormatter** | `formatter.py` | Format events into rich ntfy notifications |
 | **NtfyPublisher** | `publisher.py` | HTTP client for ntfy server |
-| **Settings** | `config.py` | Configuration with feature flags |
+| **Settings** | `config.py` | Env-based defaults (pydantic-settings) |
+| **decide()** | `filters.py` | Drop or escalate events using the admin-page notification settings |
 
 ### Event Flow Details
 
@@ -68,23 +71,25 @@ Mobile/Desktop/Web Clients
 
 3. **Aggregator receives**: Subscribed to channel, receives JSON event
 
-4. **Router determines topic**:
+4. **Filter decides** (`filters.decide`): the event is dropped (counted as `reason="disabled_by_setting"`), kept, or - for archived posts at or above `notification_min_importance` - escalated to immediate `high` priority
+
+5. **Router determines topic**:
    - `channel.discovered` → `osint_telegram_discovery`
    - Priority override based on event type
 
-5. **Batcher decides**:
+6. **Batcher decides**:
    - Urgent/high (priority 4-5) → Send immediately
    - Default/low/min (priority 1-3) → Buffer for 5 minutes
 
-6. **Formatter creates notification**:
+7. **Formatter creates notification**:
    - Specialized formatters per event type
    - Media attachments, action buttons, emoji, markdown
 
-7. **Publisher sends to ntfy**:
+8. **Publisher sends to ntfy**:
    - HTTP POST to ntfy server
    - Topic, title, message, priority, tags, attachments
 
-8. **ntfy delivers**: Push notifications to subscribed clients
+9. **ntfy delivers**: Push notifications to subscribed clients
 
 ## Key Files
 
@@ -92,11 +97,13 @@ Mobile/Desktop/Web Clients
 services/notifier/
 ├── src/
 │   ├── main.py              # Main service, FastAPI app, event loop
-│   ├── config.py            # Settings with feature flags
+│   ├── config.py            # Env-based settings defaults
+│   ├── filters.py           # Admin-setting event filter (drop / keep / push now)
 │   ├── router.py            # Event → topic routing logic
 │   ├── batcher.py           # Event batching (5-minute window)
 │   ├── formatter.py         # Rich notification formatting
 │   └── publisher.py         # ntfy HTTP client
+├── tests/
 ├── Dockerfile               # Python 3.11-slim container
 └── requirements.txt         # FastAPI, Redis, httpx, prometheus-client
 ```
@@ -109,20 +116,26 @@ The router maps event types to ntfy topics:
 
 | Event Type | Topic | Priority | Batched? |
 |------------|-------|----------|----------|
-| `message.archived` | `osint_data_archived` | default | Yes |
-| `media.downloaded` | `osint_data_media` | low | Yes |
+| `message.archived` / `message.received` | `osint_data_archived` | default (high if importance filter matches) | Yes (unless escalated) |
+| `media.downloaded` / `media.deduplicated` | `osint_data_media` | default | Yes |
 | `media.archival_failed` | `osint_data_errors` | high | No |
-| `entity.extracted` | `osint_processing_entities` | min | Yes |
+| `spam.detected` | `osint_processing_spam` | default | Yes |
+| `message.quarantined` | `osint_data_quarantine` | default | Yes |
+| `entity.extracted` | `osint_processing_entities` | default | Yes |
+| `llm.request` | `osint_processing_llm` | default | Yes |
 | `llm.error` | `osint_processing_llm` | high | No |
 | `channel.discovered` | `osint_telegram_discovery` | default | Yes |
 | `channel.removed` | `osint_telegram_discovery` | default | Yes |
 | `session.disconnected` | `osint_telegram_listener` | urgent | No |
+| `flood_wait.triggered` | `osint_telegram_listener` | high | No |
 | `backfill.started` | `osint_telegram_backfill` | default | Yes |
 | `backfill.failed` | `osint_telegram_backfill` | high | No |
 | `container.unhealthy` | `osint_system_containers` | urgent | No |
 | `api.error_5xx` | `osint_api_errors` | high | No |
-| `db.error` | `osint_data_errors` | urgent | No |
-| `alert.*` | `osint_prometheus_alerts` | varies | varies |
+| `db.error` / `storage.error` / `redis.error` | `osint_data_errors` | urgent | No |
+| `alert.*` | `osint_prometheus_alerts` | by severity (critical urgent, warning high, else default) | varies |
+
+Unrouted event types go to `osint_system_unknown`.
 
 ### Priority Levels
 
@@ -131,11 +144,11 @@ The router maps event types to ntfy topics:
 | `urgent` | 5 | Platform down/broken (db.error, container.unhealthy) | Immediate |
 | `high` | 4 | Significant issues (api.error_5xx, backfill.failed) | Immediate |
 | `default` | 3 | Routine operations (message.archived, channel.discovered) | Batched (5min) |
-| `low` | 2 | Informational (media.downloaded) | Batched (5min) |
-| `min` | 1 | Verbose (entity.extracted) | Batched (5min) |
+| `low` | 2 | Defined in the map but no event type is assigned it | Batched (5min) |
+| `min` | 1 | Defined in the map but no event type is assigned it | Batched (5min) |
 
 !!! note "Priority Override"
-    The router determines priority based on event type, overriding any priority set by the emitting service. This ensures consistent prioritization across the platform.
+    The router determines priority based on event type, overriding any priority set by the emitting service. Event types not in `event_priority_map` are `default` (batched). Batches are always published at ntfy priority 3.
 
 ## ntfy.sh Integration
 
@@ -156,15 +169,18 @@ All topics follow the pattern: `osint_<category>_<subcategory>`
 Data Events:
   osint_data_archived         - Message archival notifications
   osint_data_media            - Media download & deduplication
-  osint_data_errors           - Database, Redis, storage errors
+  osint_data_errors           - Database, Redis, storage errors, media archival failures
+  osint_data_quarantine       - Quarantined messages
+
 
 Processing Events:
   osint_processing_entities   - Extracted entities
+  osint_processing_spam       - Spam detected
   osint_processing_llm        - LLM requests and errors
 
 Telegram Events:
   osint_telegram_discovery    - Channel discovered/removed
-  osint_telegram_listener     - Session connect/disconnect
+  osint_telegram_listener     - Session connect/disconnect, flood waits
   osint_telegram_backfill     - Historical backfill operations
 
 API Events:
@@ -214,6 +230,8 @@ async def publish(
         response = await client.post(ntfy_url, json=payload)
         response.raise_for_status()
 ```
+
+The JSON publish goes to the ntfy base URL (`NTFY_URL`), with the topic in the body. Failures are logged and return `False` (counted as dropped); there is no retry.
 
 ### Rich Notification Features
 
@@ -280,20 +298,22 @@ _Batched at 14:35:00 UTC_
 
 ### Event Filtering
 
-Feature flags in configuration enable/disable notification types:
+`filters.decide(event, settings)` runs before routing. Settings are read per event through `runtime_config("notifier")` (precedence: admin page override, then `.env`, then default; cached about 30 s). The keys are declared in `shared/python/config/runtime_keys.py`:
 
-```python
-# services/notifier/src/config.py
-class Settings(BaseSettings):
-    notify_message_archived: bool = True
-    notify_spam_detected: bool = True
-    notify_osint_high: bool = True
-    notify_osint_critical: bool = True
-    notify_llm_activity: bool = True
-    notify_channel_discovery: bool = True
-    notify_system_health: bool = True
-    notify_api_errors: bool = True
-```
+| Runtime key | Env var | Default | Effect |
+|-------------|---------|---------|--------|
+| `enabled` | `NOTIFICATIONS_ENABLED` | true | Master switch; off drops every event |
+| `notify_message_archived` | `NOTIFY_MESSAGE_ARCHIVED` | true | Routine archived-post stream |
+| `notify_high_importance` | `NOTIFY_OSINT_HIGH` | true | Push posts at or above the minimum importance at once, as `high` |
+| `notification_min_importance` | `NOTIFICATION_MIN_IMPORTANCE` | `high` | `low`, `medium` or `high` |
+| `notify_spam_detected` | `NOTIFY_SPAM_DETECTED` | true | `spam.detected` |
+| `notify_channel_discovery` | `NOTIFY_CHANNEL_DISCOVERY` | true | `channel.discovered` / `channel.removed` |
+| `notify_llm_activity` | `NOTIFY_LLM_ACTIVITY` | false | `llm.*` events (no service emits them at present) |
+| `aggregator_batch_interval` | `AGGREGATOR_BATCH_INTERVAL` | 300 | Read once at start; restart to apply |
+| `aggregator_max_batch_size` | `AGGREGATOR_MAX_BATCH_SIZE` | 50 | Read once at start; restart to apply |
+
+!!! warning "Unused settings"
+    `NOTIFY_OSINT_CRITICAL`, `NOTIFY_SYSTEM_HEALTH`, `NOTIFY_API_ERRORS`, `AGGREGATOR_ENABLED`, `NTFY_TOPIC_PREFIX`, `NTFY_RATE_LIMIT_EVENTS` and `METRICS_PORT` exist in `config.py` and compose but no code reads them.
 
 ### Prometheus AlertManager Integration
 
@@ -312,6 +332,8 @@ async def alertmanager_warning(request: Request):
     # ...
 ```
 
+`/alertmanager/info` and `/alertmanager/default` also exist (priority `default`). The AlertManager receivers in `infrastructure/alertmanager/alertmanager.yml` use all four.
+
 **AlertManager Configuration** (`infrastructure/alertmanager/alertmanager.yml`):
 
 ```yaml
@@ -323,6 +345,7 @@ receivers:
   - name: 'ntfy-warning'
     webhook_configs:
       - url: 'http://notifier:8000/alertmanager/warning'
+  # info and default receivers point to /alertmanager/info and /alertmanager/default
 ```
 
 **Alert Processing**:
@@ -358,19 +381,23 @@ AGGREGATOR_ENABLED=true
 AGGREGATOR_BATCH_INTERVAL=300  # seconds (5 minutes)
 AGGREGATOR_MAX_BATCH_SIZE=50  # notifications per batch
 
-# Feature flags for notification types
+# Feature flags (see Event Filtering; admin-page overrides win)
+NOTIFICATIONS_ENABLED=
+NOTIFICATION_MIN_IMPORTANCE=
 NOTIFY_MESSAGE_ARCHIVED=true
 NOTIFY_SPAM_DETECTED=true
 NOTIFY_OSINT_HIGH=true
-NOTIFY_OSINT_CRITICAL=true
+NOTIFY_OSINT_CRITICAL=true       # unused
 NOTIFY_LLM_ACTIVITY=true
 NOTIFY_CHANNEL_DISCOVERY=true
-NOTIFY_SYSTEM_HEALTH=true
-NOTIFY_API_ERRORS=true
+NOTIFY_SYSTEM_HEALTH=true        # unused
+NOTIFY_API_ERRORS=true           # unused
 
-# Metrics
+# Metrics (unused: metrics are served by the app on port 8000)
 METRICS_PORT=9094
 ```
+
+The service also needs the shared platform settings (`POSTGRES_*`, `REDIS_*`, `MINIO_*`, `JWT_SECRET_KEY`) because `runtime_config` reads the admin page values from the `platform_config` table. Compose refuses to start without `POSTGRES_PASSWORD`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` and `JWT_SECRET_KEY`.
 
 ### Docker Compose Configuration
 
@@ -380,13 +407,15 @@ notifier:
     context: .
     dockerfile: services/notifier/Dockerfile
   container_name: osint-notifier
-  profiles: ["monitoring"]
+  profiles: ["monitoring", "notifications"]
   restart: unless-stopped
 
   depends_on:
     redis:
       condition: service_healthy
     ntfy:
+      condition: service_healthy
+    postgres:
       condition: service_healthy
 
   environment:
@@ -396,7 +425,7 @@ notifier:
     LOG_LEVEL: INFO
 
   ports:
-    - "9094:9094"  # Prometheus metrics
+    - "9094:9094"  # host mapping only: the app listens on 8000, so nothing answers on 9094
 
   networks:
     - backend
@@ -411,7 +440,8 @@ notifier:
 
 ### Service Dependencies
 
-- **Redis**: Event pub/sub and buffering
+- **Redis**: Event pub/sub
+- **PostgreSQL**: Admin-page notification settings (`runtime_config`)
 - **ntfy**: Push notification server
 - **Prometheus** (optional): Metrics collection
 - **AlertManager** (optional): Alert routing
@@ -421,8 +451,8 @@ notifier:
 ### Start with Docker Compose
 
 ```bash
-# Start notifier service (requires monitoring profile)
-docker-compose --profile monitoring up -d notifier
+# Start notifier service (monitoring or notifications profile)
+docker-compose --profile notifications up -d notifier
 
 # View logs
 docker-compose logs -f notifier
@@ -430,9 +460,12 @@ docker-compose logs -f notifier
 # Check health
 curl http://localhost:8000/health
 
-# Check Prometheus metrics
-curl http://localhost:9094/metrics
+# Check Prometheus metrics (served on the app port; note the trailing slash)
+docker-compose exec notifier python -c "import urllib.request as u; print(u.urlopen('http://localhost:8000/metrics/').read().decode()[:500])"
 ```
+
+!!! note "Port 8000 is not published"
+    The `curl http://localhost:8000/...` examples on this page work from inside the container (`docker-compose exec notifier ...`, using Python `urllib` if `curl` is missing) or after you add a `8000:8000` port mapping for local debugging. Prometheus scrapes `notifier:8000` at `/metrics/` (see `infrastructure/prometheus/prometheus.yml`).
 
 ### Standalone Development
 
@@ -487,7 +520,7 @@ docker-compose logs -f notifier
 
 **3. Verify notification in ntfy**:
 
-Open browser: `http://localhost:8090/osint_telegram_discovery`
+Open browser: `http://localhost:8090/osint_telegram_discovery` (ntfy is bound to 127.0.0.1; `NTFY_PORT` defaults to 8090)
 
 **4. Send test alert to AlertManager webhook**:
 
@@ -561,8 +594,7 @@ docker-compose logs notifier | grep -E "ERROR|WARNING"
 ```bash
 docker-compose exec notifier env | grep AGGREGATOR
 
-# Expected:
-# AGGREGATOR_ENABLED=true
+# Expected (admin-page overrides win over these):
 # AGGREGATOR_BATCH_INTERVAL=300
 # AGGREGATOR_MAX_BATCH_SIZE=50
 ```
@@ -581,7 +613,7 @@ docker-compose logs -f notifier | grep "Flushing batch"
 **Check Prometheus metrics**:
 
 ```bash
-curl http://localhost:9094/metrics | grep aggregator_
+docker-compose exec notifier python -c "import urllib.request as u; print(u.urlopen('http://localhost:8000/metrics/').read().decode())" | grep aggregator_
 
 # Key metrics:
 # aggregator_events_received_total
@@ -642,12 +674,13 @@ curl -X POST http://localhost:8000/alertmanager/critical \
 **Check dropped events metric**:
 
 ```bash
-curl http://localhost:9094/metrics | grep aggregator_events_dropped_total
+docker-compose exec notifier python -c "import urllib.request as u; print(u.urlopen('http://localhost:8000/metrics/').read().decode())" | grep aggregator_events_dropped_total
 
 # Shows reasons:
+# - disabled_by_setting (filtered by admin settings; expected)
 # - processing_error
-# - publish_failed
-# - batch_publish_failed
+# - publish_failed / publish_error
+# - batch_publish_failed / batch_publish_error
 ```
 
 **Check notifier logs for errors**:
@@ -665,7 +698,7 @@ docker-compose logs notifier | grep -E "Failed|dropped"
 
 ## Prometheus Metrics
 
-The notifier service exposes comprehensive metrics at `http://localhost:9094/metrics`:
+The notifier service exposes metrics from the FastAPI app at `http://notifier:8000/metrics/` (inside the compose network; the `9094` host mapping does not reach it):
 
 ### Event Metrics
 
@@ -676,7 +709,7 @@ aggregator_events_received_total{service="listener",event_type="channel.discover
 # Events published to ntfy
 aggregator_events_published_total{topic="osint_telegram_discovery",priority="default"} 38
 
-# Events dropped (errors)
+# Events dropped (errors or filtered by settings)
 aggregator_events_dropped_total{service="listener",event_type="channel.discovered",reason="publish_failed"} 4
 ```
 
@@ -702,7 +735,7 @@ curl http://localhost:8000/health
 
 ```json
 {
-  "status": "healthy",
+  "status": "healthy",   // "stopped" when the loop is not running
   "redis_connected": true,
   "batcher_stats": {
     "total_batched": 156,
@@ -798,4 +831,4 @@ self.routing_table = {
 
 ---
 
-**Last Updated**: 2025-12-09
+**Last Updated**: 2026-10-27

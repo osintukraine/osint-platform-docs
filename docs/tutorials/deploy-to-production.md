@@ -26,18 +26,18 @@ Before starting, make sure you have:
 
 - A VPS server (Ubuntu 22.04 LTS or Fedora 38+ recommended)
 - SSH access to your server with sudo privileges
-- A domain name (optional but recommended for SSL)
+- A domain name pointing at the server (required for the HTTPS/Caddy setup below; skip Steps 4-5 and stay on `localhost` ports for a private test)
 - Basic knowledge of:
   - Terminal/command line
   - SSH and connecting to remote servers
   - Copy/pasting commands
 - 30 minutes of uninterrupted time for initial setup
 - About 500GB+ disk space available
-- At least 4GB RAM (8GB recommended)
+- At least 8GB RAM (16GB recommended); see [Installation](../operator-guide/installation.md) for full requirements
 
 **Server Recommendations:**
 - CPU: 2+ cores
-- RAM: 8GB minimum (16GB recommended for 100+ channels)
+- RAM: 8GB minimum (16GB recommended for 100+ channels; local Ollama needs more)
 - Disk: 500GB SSD minimum
 - Network: Stable broadband connection
 
@@ -45,6 +45,7 @@ Before starting, make sure you have:
 - VPS: 15-30 USD/month (DigitalOcean, Hetzner, Linode)
 - Domain: 10-15 USD/year (Namecheap, GoDaddy)
 - SSL: FREE (Let's Encrypt via Caddy)
+- LLM: your own GPU gateway or Ollama hardware (not included in the VPS cost)
 - **Total: ~40-50 USD/month**
 
 ---
@@ -52,15 +53,12 @@ Before starting, make sure you have:
 ## Architecture Overview
 
 ```
-Internet → Caddy (Reverse Proxy + SSL) → Docker Services
-                                          ├─ Telegram Listener
-                                          ├─ Message Processor
-                                          ├─ Enrichment Service
-                                          ├─ API Server
-                                          ├─ Frontend
-                                          ├─ PostgreSQL
-                                          ├─ Redis
-                                          └─ Monitoring (Prometheus/Grafana)
+Internet → Caddy (HTTPS, CrowdSec bouncer)
+             → Oathkeeper (auth proxy, backed by Kratos)
+                 → Frontend (Next.js) / API (FastAPI)
+                       ├─ Telegram Listener(s) → Redis → Processor workers → PostgreSQL + MinIO
+                       ├─ Enrichment workers, RSS ingestor, Notifier (ntfy), Analytics
+                       └─ Monitoring (Prometheus / Grafana / Loki)
 ```
 
 All services run in Docker containers managed by Docker Compose.
@@ -104,12 +102,9 @@ Processing triggers...
 ### 1.3: Install Docker and Docker Compose
 
 ```bash
-# Download and run Docker installer
+# Download and run Docker installer (includes the Compose v2 plugin)
 curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh get-docker.sh
-
-# Install Docker Compose (v2)
-sudo apt install -y docker-compose-plugin
 
 # Add your user to docker group (avoid sudo for docker commands)
 sudo usermod -aG docker $USER
@@ -151,12 +146,12 @@ sudo ufw allow 22/tcp
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 
-# Allow internal Docker network (optional)
-sudo ufw allow from 172.16.0.0/12
-
 # Verify firewall rules
 sudo ufw status
 ```
+
+!!! warning "Docker bypasses UFW"
+    Ports published by `docker-compose.yml` (PostgreSQL 5432, Redis 6379, MinIO 9000/9001, API 8000, metrics ports, ...) are opened by Docker directly in iptables and are **not** blocked by UFW rules. With the production overlay (Step 4) only Caddy publishes 80/443 for the app; still verify from outside with `nmap` or an online port scan. See [Hardening](../security-guide/hardening.md).
 
 **Expected Output:**
 ```
@@ -180,8 +175,7 @@ cd /opt/osint
 # Clone the repository
 git clone https://github.com/osintukraine/osint-intelligence-platform.git .
 
-# Verify we're on master branch (production)
-git branch -a
+# Production runs the master branch
 git checkout master
 ```
 
@@ -195,110 +189,70 @@ Branch 'master' set up to track origin/master
 
 ## Step 3: Set Up Environment Variables
 
-Create a production `.env` file with your configuration:
+Start from the shipped template, which documents every variable:
 
 ```bash
-# Create .env file
-nano /opt/osint/.env
+cd /opt/osint
+cp .env.example .env
+chmod 600 .env
+nano .env
 ```
 
-Paste this configuration (modify values as needed):
+Compose refuses to start if a required secret is missing. Set at least these (generate values with `openssl rand -base64 32`; hex with `openssl rand -hex 32`):
 
 ```bash
-# === Telegram Configuration ===
-TELEGRAM_API_ID=your_api_id_from_my_telegram_org
-TELEGRAM_API_HASH=your_api_hash_from_my_telegram_org
+# === Telegram (from https://my.telegram.org) ===
+TELEGRAM_API_ID=...
+TELEGRAM_API_HASH=...
 TELEGRAM_PHONE=+1234567890
-TELEGRAM_SESSION_NAME=osint-listener
 
-# === Domain and SSL ===
-DOMAIN=your-domain.com
-CADDY_AUTO_HTTPS=on
-
-# === Database ===
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_DB=osint_platform
+# === Secrets (required by docker-compose.yml) ===
 POSTGRES_USER=osint_user
-POSTGRES_PASSWORD=generate_a_strong_password_here_min_32_chars
-DB_ENCRYPTION_KEY=generate_another_strong_password_here
+POSTGRES_PASSWORD=...
+REDIS_PASSWORD=...
+JWT_SECRET_KEY=...            # openssl rand -hex 32
+MINIO_ROOT_USER=...
+MINIO_ROOT_PASSWORD=...
+MINIO_ACCESS_KEY=...
+MINIO_SECRET_KEY=...          # at least 32 characters
+GRAFANA_ADMIN_PASSWORD=...
+GRAFANA_SECRET_KEY=...
+NOCODB_ADMIN_PASSWORD=...
+NOCODB_JWT_SECRET=...
+YENTE_UPDATE_TOKEN=...
 
-# === Redis ===
-REDIS_URL=redis://redis:6379/0
-REDIS_PASSWORD=generate_strong_password_here
+# === Authentication (Ory Kratos) ===
+AUTH_PROVIDER=ory
+AUTH_REQUIRED=true
+KRATOS_SECRET_COOKIE=...      # openssl rand -base64 32
+KRATOS_SECRET_CIPHER=...      # openssl rand -base64 24 (exactly 32 characters)
 
-# === API Configuration ===
-API_PORT=8000
+# === Domain / production mode ===
+DEPLOYMENT_MODE=production
+DOMAIN=your-domain.com
 NEXT_PUBLIC_API_URL=https://your-domain.com
-
-# === MinIO (Media Storage) ===
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=generate_strong_password_here
-MINIO_BUCKET=telegram-media
-MINIO_ENDPOINT=minio:9000
-MINIO_SECURE=false
-
-# === LLM and Models ===
-# Pick one provider (see "LLM Gateway and Providers" in the Operator Guide):
-LLM_PROVIDER=ollama            # or openai (GPU gateway: set LLM_GATEWAY_URL and keys) or none
-OLLAMA_BASE_URL=http://ollama:11434
-EMBEDDING_SPAM_MODEL=/models/paraphrase-multilingual-MiniLM-L12-v2   # fetched in Step 3b
-
-# === Notifications ===
-NTFY_ENABLED=true
-NTFY_TOPIC=osint_alerts
-
-# === Logging ===
-LOG_LEVEL=INFO
-SENTRY_DSN=
-
-# === Security ===
-SECRET_KEY=generate_another_strong_random_key_here
-ALLOWED_HOSTS=your-domain.com,api.your-domain.com
-API_CORS_ORIGINS=https://your-domain.com
-
-# === Production Flags ===
-DEBUG=false
+NEXT_PUBLIC_BASE_URL=https://your-domain.com
+NEXT_PUBLIC_RSS_URL=https://your-domain.com/rss
+NEXT_PUBLIC_MINIO_URL=...        # public media base URL; see Caddy / Media Serving in the Operator Guide
 ENVIRONMENT=production
-POSTGRES_POOL_SIZE=20
+DEBUG=false
+
+# === Compose: production overlay + profiles ===
+COMPOSE_FILE=docker-compose.yml:docker-compose.production.yml
+COMPOSE_PROFILES=enrichment-standard,auth,monitoring,notifications
 ```
+
+Pick your LLM provider (`LLM_PROVIDER=openai` with `LLM_GATEWAY_URL` and keys for a GPU gateway, or `ollama`, or `none`) as described in [LLM Gateway and Providers](../operator-guide/external-llm.md). Add the `llm-gateway` profile if you use a gateway. The remaining variables have working defaults; see [Configuration](../operator-guide/configuration.md).
 
 !!! danger "Critical: Frontend Build Args"
-    **`NEXT_PUBLIC_*` environment variables are baked at BUILD time, not runtime!**
+    **`NEXT_PUBLIC_*` variables are baked into the JavaScript at BUILD time, not runtime.**
 
-    If your frontend calls `localhost:8000` instead of your production URL, you need to add these variables to `build.args` in `docker-compose.yml`:
-
-    ```yaml
-    frontend:
-      build:
-        args:
-          NEXT_PUBLIC_API_URL: https://your-domain.com
-          NEXT_PUBLIC_BASE_URL: https://your-domain.com
-    ```
-
-    Then rebuild: `docker compose build frontend && docker compose up -d frontend`
+    `docker-compose.yml` already passes `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_BASE_URL` and `NEXT_PUBLIC_MINIO_URL` from `.env` as build args, so set them in `.env` **before** the first build. If you change them later, rebuild: `docker compose build frontend && docker compose up -d frontend`.
 
     See [Production Gotchas](../operator-guide/production-gotchas.md#frontend-build-args) for details.
 
 !!! warning "Security: Passwords"
-    Generate strong passwords (min 32 characters). Use: `openssl rand -base64 32`
-
-```bash
-# Generate strong passwords
-openssl rand -base64 32  # Database password
-openssl rand -base64 32  # Redis password
-openssl rand -base64 32  # Secret key
-```
-
-Replace the placeholder values:
-1. Press `Ctrl+X`, then `Y`, then `Enter` to save
-2. Edit the file with your values:
-   - Your Telegram API credentials (from https://my.telegram.org)
-   - Your domain name
-   - Generated passwords from above
-   - Your server IP if not using a domain
-
----
+    Use unique, strong secrets (32+ characters). Never commit `.env`. Rotating `KRATOS_SECRET_CIPHER` later invalidates stored Kratos data, so back it up.
 
 ## Step 3b: Fetch Embedding Models
 
@@ -310,119 +264,71 @@ cd /opt/osint
 ls data/models
 ```
 
-See [Embedding Models](../operator-guide/model-provisioning.md). If you use an LLM gateway instead of Ollama, read [LLM Gateway and Providers](../operator-guide/external-llm.md) now and add `llm-gateway` to `COMPOSE_PROFILES`.
+See [Embedding Models](../operator-guide/model-provisioning.md). The spam filter will not start without them. If you use an LLM gateway instead of Ollama, read [LLM Gateway and Providers](../operator-guide/external-llm.md) now and add `llm-gateway` to `COMPOSE_PROFILES`.
 
 ---
 
 ## Step 4: Set Up Caddy for SSL/TLS
 
-Caddy automatically manages SSL certificates and proxies traffic to your services.
+The production overlay (`docker-compose.production.yml`, enabled by `COMPOSE_FILE` in Step 3) runs Caddy with the CrowdSec bouncer, using `infrastructure/caddy/Caddyfile.security`. Caddy obtains and renews Let's Encrypt certificates for `DOMAIN` automatically; you do not write a Caddyfile.
 
-Create a Caddyfile:
+1. Point your domain's DNS A record at the server and confirm: `nslookup your-domain.com`.
+2. Apply the production URLs to `.env` (the script rewrites `DEPLOYMENT_MODE`, `DOMAIN`, `FRONTEND_URL`, `API_URL`, `PROXY_URL`):
 
-```bash
-nano /opt/osint/Caddyfile
-```
+    ```bash
+    ./scripts/switch-deployment-mode.sh production your-domain.com
+    ```
 
-Paste this configuration:
+3. Generate the CrowdSec API keys that Caddy's bouncer needs (written to `.env`):
 
-```
-# Caddy reverse proxy configuration
-{
-  email admin@your-domain.com
-  acme_dns cloudflare {token}
-}
+    ```bash
+    ./scripts/setup-crowdsec.sh
+    ```
 
-# Main domain
-your-domain.com {
-  encode gzip
+Routing, security headers and the CrowdSec bouncer are described in [Caddy](../operator-guide/caddy.md) and the [CrowdSec guide](../security-guide/crowdsec.md).
 
-  # Proxy to Next.js frontend
-  route / {
-    reverse_proxy frontend:3000
-  }
-
-  # Proxy to FastAPI backend
-  route /api/* {
-    reverse_proxy api:8000
-  }
-
-  # Proxy to n8n workflows
-  route /n8n/* {
-    reverse_proxy n8n:5678
-  }
-
-  # Proxy to Grafana monitoring
-  route /monitoring/* {
-    reverse_proxy grafana:3000
-  }
-}
-
-# API subdomain (optional)
-api.your-domain.com {
-  reverse_proxy api:8000
-}
-```
-
-**If you don't have a domain yet:**
-
-Replace the configuration with:
-
-```
-http://localhost:80 {
-  reverse_proxy frontend:3000
-  reverse_proxy /api/* api:8000
-  reverse_proxy /n8n/* n8n:5678
-}
-```
-
-You can set up SSL later when you have a domain.
+!!! note "No domain yet?"
+    Skip this step, keep `DEPLOYMENT_MODE=development` and `AUTH_PROVIDER=none`, drop `COMPOSE_FILE` and the `auth` profile from `.env`, and use the published ports (`http://SERVER_IP:3000`, `:8000`). Do not leave a server in this state on the public internet.
 
 ---
 
 ## Step 5: Start Docker Services
 
-Now we'll bring up all services in the correct order:
-
 ```bash
-# Navigate to project directory
 cd /opt/osint
 
-# Start all services
+# Create the Telegram session first (Step 6), then start the stack.
+# COMPOSE_FILE and COMPOSE_PROFILES from .env are picked up automatically.
 docker compose up -d
 
-# Wait 30 seconds for services to initialize
-sleep 30
-
-# Check service status
+# Check service status (first start builds images and can take several minutes)
 docker compose ps
 ```
 
-**Expected Output:**
+**Expected Output** (abridged; names depend on your profiles, the processor runs 2 replicas by default):
 ```
-NAME                      STATUS        PORTS
-osint-listener            Up 2 minutes
-osint-processor-worker    Up 2 minutes
-osint-api                 Up 2 minutes   0.0.0.0:8000->8000/tcp
-osint-postgres            Up 2 minutes   5432/tcp
-osint-redis               Up 2 minutes   6379/tcp
-osint-minio               Up 2 minutes   9000/tcp
-caddy                     Up 2 minutes   0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp
+NAME                      STATUS
+osint-postgres            Up (healthy)
+osint-redis               Up (healthy)
+osint-minio               Up (healthy)
+osint-listener            Up (healthy)
+osint-processor-worker-1  Up (healthy)
+osint-api                 Up (healthy)
+osint-frontend            Up (healthy)
+osint-caddy-secured       Up
+osint-kratos              Up (healthy)
+osint-oathkeeper          Up (healthy)
 ```
 
-All services should show "Up".
+!!! tip "Start order"
+    If the stack fails at first start, bring up the infrastructure first: `docker compose up -d postgres redis minio minio-init`, wait until healthy, then `docker compose up -d`.
 
 ### Check Service Logs
 
 ```bash
-# View listener logs
-docker compose logs -f listener | head -20
-
-# View processor logs
-docker compose logs processor | head -20
-
-# View API logs
-docker compose logs api | head -20
+docker compose logs --tail 20 listener
+docker compose logs --tail 20 processor-worker
+docker compose logs --tail 20 api
 ```
 
 You should see initialization messages, no errors.
@@ -431,68 +337,39 @@ You should see initialization messages, no errors.
 
 ## Step 6: First-Time Telegram Authentication
 
-The listener service needs to authenticate with Telegram. On first run, it will wait for authentication.
+The listener needs an authenticated Telegram session. Create it with the interactive script **before** (or while) the listener runs. The listener cannot prompt for a login code itself.
 
-### 6.1: Start Interactive Authentication
-
-```bash
-# Stop the listener
-docker compose stop listener
-
-# Start listener in interactive mode
-docker compose run --rm listener python -c "
-from src.main import setup_telegram_client
-client = setup_telegram_client()
-print('Authentication successful!')
-"
-```
-
-### 6.2: Follow Authentication Prompts
-
-```
-Please enter your phone number (with country code): +1234567890
-Waiting for authentication code...
-```
-
-1. You'll receive a code in your Telegram app
-2. Enter the code when prompted:
-   ```
-   Code: 12345
-   ```
-
-3. If you have 2FA enabled:
-   ```
-   Enter 2FA password: your_password_here
-   ```
-
-4. Once successful:
-   ```
-   Authentication successful!
-   ```
-
-### 6.3: Restart All Services
+### 6.1: Run the Authentication Script
 
 ```bash
-# Restart listener
+cd /opt/osint
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r services/listener/requirements.txt python-dotenv   # telethon + shared settings deps
+
+python3 scripts/telegram_auth.py
+```
+
+### 6.2: Follow the Prompts
+
+1. Enter your phone number if asked (it defaults to `TELEGRAM_PHONE`).
+2. Enter the login code Telegram sends to your app.
+3. Enter your 2FA password if enabled.
+
+The script writes `telegram_sessions/osint_platform.session` and copies it to the per-service session files (listener, discovery, enrichment, analytics). The directory `./telegram_sessions` is mounted into the containers at `/app/sessions`.
+
+For several Telegram accounts, run `python3 scripts/telegram_auth.py --account russia` (and `--account ukraine`) and start the `multi-account` profile; see [Telegram Setup](../operator-guide/telegram-setup.md).
+
+### 6.3: Start or Restart the Listener
+
+```bash
 docker compose up -d listener
-
-# Wait for initialization
-sleep 10
-
-# Verify listener is running
-docker compose logs listener | tail -5
+docker compose logs --tail 20 listener
 ```
 
-**Expected Output:**
-```
-INFO - Telegram client initialized
-INFO - Discovery cycle starting
-INFO - Found 0 Telegram folders
-INFO - Channel discovery complete
-```
+You should see the Telegram client connect and the folder sync start; there will be 0 channels until Step 7.
 
-!!! warning "Session Persistence"
-    The Telegram session is saved in `data/telegram_sessions/`. This persists across restarts, so you only authenticate once.
+!!! warning "Session Persistence and Safety"
+    Sessions persist across restarts, so you authenticate once. Treat `telegram_sessions/` like a password (it grants full access to the account), back it up, and never run the same session file in two places: Telegram revokes it (`AuthKeyDuplicated`).
 
 ---
 
@@ -503,13 +380,13 @@ Now let's add a channel to monitoring. This works the same way as local setup:
 1. Open Telegram app (mobile or desktop)
 2. Create a folder called `Archive` (or `Archive-UA` for Ukraine sources)
 3. Find a public channel and add it to the folder
-4. Wait 5 minutes for discovery (or restart listener)
+4. Wait up to 5 minutes for discovery (or `docker compose restart listener`)
 
 Check if it was discovered:
 
 ```bash
 # Check listener logs
-docker compose logs listener | grep -i "discover\|channel"
+docker compose logs listener | grep -i "folder\|channel"
 
 # Or query the database
 docker compose exec -T postgres psql -U osint_user -d osint_platform -c \
@@ -532,37 +409,39 @@ Let's verify all services are operational:
 ### 8.1: Check API Endpoint
 
 ```bash
-# Check API health
-curl -s http://localhost:8000/health | jq .
-
-# Or on production domain
+# Through Caddy on your domain
 curl -s https://your-domain.com/api/health | jq .
+
+# Or from the server itself (the API container's own health endpoint)
+docker compose exec -T api curl -s http://localhost:8000/health
 ```
 
 **Expected Output:**
 ```json
 {
   "status": "healthy",
-  "version": "1.0",
-  "timestamp": "2025-12-09T15:30:45Z"
+  "service": "api",
+  "version": "..."
 }
 ```
 
 ### 8.2: List Monitored Channels
 
 ```bash
-# Get channels via API
-curl -s http://localhost:8000/api/channels | jq '.channels[0:3]'
+# Get channels via API (returns a JSON array)
+curl -s https://your-domain.com/api/channels | jq '.[0:3]'
 ```
 
 **Expected Output:**
 ```json
-{
-  "id": 1,
-  "name": "Test Channel",
-  "username": "@test_channel",
-  "folder": "Archive"
-}
+[
+  {
+    "id": 1,
+    "name": "Test Channel",
+    "username": "test_channel",
+    "folder": "Archive"
+  }
+]
 ```
 
 ### 8.3: Send a Test Message
@@ -575,7 +454,7 @@ sleep 10
 
 # Count messages from last hour
 docker compose exec -T postgres psql -U osint_user -d osint_platform -c \
-  "SELECT COUNT(*) FROM messages WHERE created_at > NOW() - INTERVAL '1 hour';"
+  "SELECT COUNT(*) FROM messages WHERE telegram_date > NOW() - INTERVAL '1 hour';"
 ```
 
 If your test message appeared, the pipeline is working!
@@ -587,11 +466,10 @@ If your test message appeared, the pipeline is working!
 Your platform is now accessible via the domain (or localhost):
 
 ```
-http://localhost:3000              (local)
-https://your-domain.com            (production)
+https://your-domain.com
 ```
 
-Visit it in your browser. You should see the OSINT platform homepage.
+Visit it in your browser. You should see the OSINT platform homepage. With `AUTH_PROVIDER=ory`, create the first account via the registration page, then see [Authentication](../security-guide/authentication.md) and [Authorization](../security-guide/authorization.md) to grant it the admin role.
 
 ---
 
@@ -601,82 +479,44 @@ Grafana provides dashboards for monitoring platform health.
 
 ### 10.1: Access Grafana
 
+Grafana is part of the `monitoring` profile. It publishes `GRAFANA_PORT` (3001 in `.env.example`, 3000 if unset) on the host, which should stay firewalled; reach it through an SSH tunnel:
+
+```bash
+ssh -L 3001:localhost:3001 user@your-server-ip
+# then open http://localhost:3001
 ```
-http://localhost:3000/monitoring   (if using /monitoring path)
-or
-http://grafana-server:3000         (direct access)
-```
 
-Default credentials: `admin` / `admin`
+Login: `GRAFANA_ADMIN_USER` (default `admin`) with the `GRAFANA_ADMIN_PASSWORD` you set in `.env`.
 
-### 10.2: Import Dashboards
+### 10.2: Dashboards
 
-Pre-configured dashboards are included:
-
-1. Go to **Dashboards** → **Import**
-2. Upload dashboards from `/infrastructure/grafana/dashboards/`:
-   - `platform-overview.json`
-   - `postgres-detailed.json`
-   - `redis-detailed.json`
-   - `application-metrics.json`
+Dashboards and datasources are provisioned automatically from `infrastructure/grafana/` (for example `platform-overview`, `osint-pipeline`, `postgres`, `redis`, `enrichment-performance`, `service-logs`). No manual import is needed.
 
 ### 10.3: Set Up Alerts (Optional)
 
-For production, set up alerts to notify you of issues:
-
-```bash
-# Configure ntfy notifications
-# ntfy sends alerts to https://ntfy.sh/your-topic
-
-# Or use your own ntfy server
-NTFY_SERVER=https://ntfy.your-domain.com
-NTFY_TOPIC=osint-alerts
-```
+Alertmanager routes alerts through the `notifier` service to the bundled ntfy server (profiles `monitoring` / `notifications`). Set `NTFY_TOPIC_PREFIX` in `.env` (default `osint-platform`) and subscribe to the topics with the ntfy app; see [Notifications](../user-guide/notifications.md) and [Monitoring](../operator-guide/monitoring.md).
 
 ---
 
 ## Step 11: Configure Backups
 
-Production deployments should have regular backups.
-
-### 11.1: Database Backups
+Use the shipped backup script. It dumps PostgreSQL, copies the Telegram sessions, a Redis snapshot and the configuration files into `backups/<timestamp>/`:
 
 ```bash
-# Create backup directory
-mkdir -p /opt/osint/backups
-
-# Create backup script
-cat > /opt/osint/backup.sh << 'EOF'
-#!/bin/bash
-BACKUP_DIR="/opt/osint/backups"
-DATE=$(date +%Y%m%d_%H%M%S)
-
-# Backup PostgreSQL
-docker compose exec -T postgres pg_dump -U osint_user osint_platform \
-  | gzip > "${BACKUP_DIR}/postgres_${DATE}.sql.gz"
-
-# Backup MinIO data (optional)
-# docker compose exec -T minio mc mirror alias/bucket local-backup/
-
-echo "Backup completed: ${BACKUP_DIR}/postgres_${DATE}.sql.gz"
-EOF
-
-# Make script executable
-chmod +x /opt/osint/backup.sh
-
-# Test backup
-/opt/osint/backup.sh
+cd /opt/osint
+./scripts/backup.sh --no-ollama      # add --include-media to also rsync media (slow, large)
+ls backups/
 ```
 
-### 11.2: Automate Backups with Cron
+Automate it with cron (daily at 2 AM):
 
 ```bash
-# Edit crontab
 crontab -e
-
-# Add this line to run backup daily at 2 AM:
-0 2 * * * /opt/osint/backup.sh >> /var/log/osint_backup.log 2>&1
+# add:
+0 2 * * * cd /opt/osint && ./scripts/backup.sh --no-ollama >> /var/log/osint_backup.log 2>&1
 ```
+
+Media in MinIO is not part of the default dump; see [Backup & Restore](../operator-guide/backup-restore.md) and [Hetzner Storage](../operator-guide/hetzner-storage.md) for the media strategy and restore procedure.
 
 ---
 
@@ -685,13 +525,14 @@ crontab -e
 Before considering your deployment complete, verify:
 
 - [ ] All Docker services running (`docker compose ps`)
-- [ ] API responding to requests (`curl http://localhost:8000/health`)
+- [ ] API responding to requests (`curl https://your-domain.com/api/health`)
 - [ ] At least one Telegram channel monitored
 - [ ] Messages being archived to database
 - [ ] SSL working (if domain configured)
 - [ ] Monitoring dashboard accessible
 - [ ] Backups running successfully
-- [ ] Firewall rules in place
+- [ ] Firewall rules in place and internal ports (5432, 6379, 9000, 8000, ...) not reachable from outside
+- [ ] Default/placeholder secrets all replaced
 
 ---
 
@@ -724,16 +565,14 @@ Two steps are not part of the script:
 ### "Listener can't authenticate with Telegram"
 
 ```bash
-# Delete corrupted session
-rm -f data/telegram_sessions/*.session
+# Check which session files exist
+python3 scripts/telegram_auth.py --list
 
-# Re-authenticate
+# Recreate the sessions (stop the listener first)
 docker compose stop listener
-docker compose run --rm listener python -c "
-from src.main import setup_telegram_client
-client = setup_telegram_client()
-print('Authentication successful!')
-"
+mkdir -p telegram_sessions/old && mv telegram_sessions/*.session* telegram_sessions/old/
+python3 scripts/telegram_auth.py
+docker compose up -d listener
 ```
 
 ### "Database won't start / connection refused"
@@ -741,31 +580,23 @@ print('Authentication successful!')
 ```bash
 # Check database logs
 docker compose logs postgres | tail -20
-
-# Reinitialize database
-docker compose down
-docker volume rm osint-intelligence-platform_postgres_data
-docker compose up -d postgres
-
-# Wait 30 seconds
-sleep 30
-
-# Check it's up
-docker compose logs postgres | tail -5
 ```
+
+!!! danger "Never delete the database volume on a system with data"
+    Removing the PostgreSQL volume (`docker volume rm ...`) destroys every archived message. Only do that on a brand-new install, and restore from a backup otherwise ([Backup & Restore](../operator-guide/backup-restore.md)). Check `docker volume ls | grep postgres` for the real volume name first.
+
+A password mismatch after editing `POSTGRES_PASSWORD` in `.env` is a common cause: the password is only applied when the volume is first created.
 
 ### "Services crashing repeatedly"
 
 ```bash
 # Check logs for specific service
-docker compose logs processor | tail -50
+docker compose logs processor-worker | tail -50
 
-# If out of memory, increase Docker memory limit or reduce workers
-# In docker-compose.yml, reduce PROCESSOR_WORKER_COUNT
-
-# Restart with logs
-docker compose restart processor
-docker compose logs -f processor
+# If out of memory, increase the server's memory or reduce replicas:
+# set PROCESSOR_WORKER_REPLICAS=1 in .env, then
+docker compose up -d processor-worker
+docker compose logs -f processor-worker
 ```
 
 ### "SSL certificate not working"
@@ -791,17 +622,9 @@ The browser's Network tab shows API calls going to `localhost:8000` instead of y
 **Fix**:
 
 ```bash
-# 1. Add build args to docker-compose.yml (or docker-compose.production.yml)
-# frontend:
-#   build:
-#     args:
-#       NEXT_PUBLIC_API_URL: https://your-domain.com
-#       NEXT_PUBLIC_BASE_URL: https://your-domain.com
-
-# 2. Rebuild the frontend
+# 1. Set NEXT_PUBLIC_API_URL, NEXT_PUBLIC_BASE_URL, NEXT_PUBLIC_MINIO_URL in .env
+# 2. Rebuild and restart the frontend
 docker compose build frontend
-
-# 3. Restart
 docker compose up -d frontend
 ```
 
@@ -829,7 +652,7 @@ Congratulations! You now understand:
 Now that you have a production deployment:
 
 1. **Monitor Daily** - Check Grafana dashboards regularly
-2. **Set Up Team Access** - Share API URLs with your team
+2. **Set Up Team Access** - Create accounts and roles; see the [Security Guide](../security-guide/index.md)
 3. **Create RSS Feeds** - Follow the [Create Custom RSS Feed](create-custom-rss-feed.md) tutorial
 4. **Set Up Discord Alerts** - Follow the [Setup Discord Alerts](setup-discord-alerts.md) tutorial
 5. **Scale as Needed** - Add more channels, adjust resources
@@ -839,11 +662,10 @@ Now that you have a production deployment:
 
 ## Cost Optimization Tips
 
-- **Reduce processor workers:** Change `PROCESSOR_WORKER_COUNT=1` for low-traffic
-- **Enable disk caching:** Use Redis caching for frequently accessed data
-- **Archive old messages:** Move messages older than 1 year to cold storage
-- **Selective archiving:** Use Monitor folders to archive only high-importance messages
-- **Optimize images:** Compress media files before archiving
+- **Reduce processor workers:** set `PROCESSOR_WORKER_REPLICAS=1` for low traffic
+- **Pick a lighter enrichment profile:** `enrichment-lite` (CPU only) instead of `enrichment-standard`
+- **Selective archiving:** use `Monitor-*` folders to archive only medium and high importance messages
+- **Cheaper media storage:** see [Hetzner Storage](../operator-guide/hetzner-storage.md) and [Multi-Storage](../operator-guide/multi-storage-setup.md)
 
 ---
 

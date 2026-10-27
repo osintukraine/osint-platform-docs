@@ -27,6 +27,9 @@ The OSINT Intelligence Platform uses a multi-layered disaster recovery system:
 
 Each cluster (russia, ukraine) has independent primary and shadow accounts. A ban in one cluster does not affect the other.
 
+!!! warning "Failover changes database roles, not listener credentials"
+    A failover (automatic or `dr_failover.py`) marks the old account `banned` and the shadow `active` in `telegram_accounts`. The listeners do not read that table: `listener-russia` / `listener-ukraine` use the credentials `TELEGRAM_API_ID_RUSSIA` / `_HASH_RUSSIA` (or `_UKRAINE`) and the session file `listener-<account>.session` (see [Telegram Setup](telegram-setup.md#session-file-structure)). After a failover the listener keeps using the old account until you point those credentials and session file at the account that is now active, then restart it. Session files are bound to the server that created them; authenticate on the server that will use them.
+
 ## Quick Reference
 
 | Command | Purpose |
@@ -80,16 +83,14 @@ Key panels:
 # 1. Verify failover occurred
 python scripts/dr_status.py
 
-# 2. Check the new primary is healthy
+# 2. Check the new active account is healthy
 docker-compose logs -f shadow-sync | grep "health"
 
-# 3. Restart listener to use new credentials
-# Note: The listener reads from telegram_accounts table,
-# so it should pick up the new active account on restart
-docker-compose restart listener
+# 3. Point the cluster's listener at the active account (see the warning above), then restart it
+docker-compose restart listener-russia      # single-account mode: docker-compose restart listener
 
 # 4. Verify messages are flowing
-docker-compose logs -f listener | head -50
+docker-compose logs -f listener-russia | head -50
 
 # 5. Monitor for 10 minutes
 watch -n 10 'docker-compose exec postgres psql -U osint_user -d osint_platform -c "SELECT COUNT(*) FROM messages WHERE created_at > NOW() - INTERVAL '\''10 minutes'\'';"'
@@ -107,7 +108,7 @@ watch -n 10 'docker-compose exec postgres psql -U osint_user -d osint_platform -
 
 ```bash
 # 1. Verify the ban
-docker-compose logs listener | grep -i "ban\|deactivated" | tail -20
+docker-compose logs listener-russia | grep -i "ban\|deactivated" | tail -20
 
 # 2. Check DR status
 python scripts/dr_status.py
@@ -127,8 +128,8 @@ python scripts/dr_failover.py --cluster russia --dry-run
 # 4. Execute failover
 python scripts/dr_failover.py --cluster russia --force --reason "Manual failover due to ban"
 
-# 5. Restart listener with new account
-docker-compose restart listener
+# 5. Restart the listener (after pointing it at the new account, see the warning above)
+docker-compose restart listener-russia
 
 # 6. Verify
 python scripts/dr_status.py
@@ -147,9 +148,11 @@ python scripts/dr_status.py
 **Steps**:
 
 ```bash
-# 1. Create session for new account
-# Run this interactively - will prompt for phone and code
-python scripts/telegram_auth.py --account new-russia-primary
+# 1. Create a session for the new account (interactive: phone and code).
+# telegram_auth.py knows only the default, russia and ukraine accounts and reads
+# TELEGRAM_API_ID_<ACCOUNT> / TELEGRAM_API_HASH_<ACCOUNT> from .env. Put the new account's
+# credentials in the russia variables and authenticate it as that account:
+python scripts/telegram_auth.py --account russia
 
 # 2. List available backups
 python scripts/dr_restore.py --list
@@ -166,7 +169,7 @@ python scripts/dr_restore.py \
     --cluster russia \
     --dry-run
 
-# 4. Execute restore
+# 4. Execute restore (--account: name of the account that will join the channels)
 python scripts/dr_restore.py \
     --from-minio \
     --latest \
@@ -184,14 +187,15 @@ python scripts/dr_failover.py \
     --cluster russia \
     --role active
 
-# 6. Update environment variables
-# Edit .env file:
+# 6. Update environment variables in .env (shadow-sync reads RUSSIA_PRIMARY_*, the listener TELEGRAM_*_RUSSIA)
 # RUSSIA_PRIMARY_API_ID=<new_id>
 # RUSSIA_PRIMARY_API_HASH=<new_hash>
 # RUSSIA_PRIMARY_PHONE=<new_phone>
+# TELEGRAM_API_ID_RUSSIA=<new_id>
+# TELEGRAM_API_HASH_RUSSIA=<new_hash>
 
 # 7. Restart services
-docker-compose up -d listener
+docker-compose --profile multi-account up -d listener-russia shadow-sync
 ```
 
 **Note**: Private channels without `invite_link` stored cannot be recovered automatically. You'll need to obtain new invite links manually.
@@ -216,8 +220,8 @@ python scripts/dr_failover.py \
 # 3. Verify rollback
 python scripts/dr_status.py
 
-# 4. Restart listener
-docker-compose restart listener
+# 4. Restart the listener
+docker-compose restart listener-russia
 ```
 
 ---
@@ -254,10 +258,7 @@ docker-compose restart listener
 
 3. **Authenticate Shadow Account**
 
-   ```bash
-   python scripts/telegram_auth.py --account russia-shadow
-   # Enter phone number and verification code when prompted
-   ```
+   shadow-sync looks for the session file `telegram_sessions/<cluster>-shadow.session` (for example `russia-shadow.session`) and signs in with the `<CLUSTER>_SHADOW_API_ID` / `_API_HASH` values. `scripts/telegram_auth.py` only supports the `default`, `russia` and `ukraine` accounts, so create the shadow session with a short Telethon script (login with the shadow phone number and code) saved under that name, on the server that runs shadow-sync.
 
 4. **Register Account in Database**
 
@@ -272,7 +273,7 @@ docker-compose restart listener
 5. **Start Shadow Sync Service**
 
    ```bash
-   docker-compose --profile dr up -d shadow-sync
+   docker-compose --profile dr up -d shadow-sync      # also started by --profile multi-account
    ```
 
 6. **Verify Sync is Working**
@@ -313,16 +314,16 @@ python scripts/export_channel_state.py --output /tmp/channel_backup.json
 
 ### Backup Schedule
 
-Backups run automatically via cron (if configured). Default: daily at midnight.
+Backups are not scheduled by the stack; add a cron entry on the host (daily at midnight is the usual choice). It needs Python dependencies and database/MinIO access from the host environment.
 
 ```bash
 # Example cron entry
-0 0 * * * cd /app && python scripts/export_channel_state.py --type scheduled --triggered-by cron
+0 0 * * * cd /path/to/platform && python scripts/export_channel_state.py --type scheduled --triggered-by cron
 ```
 
 ### Backup Retention
 
-Old backups are automatically deleted after `BACKUP_RETENTION_DAYS` (default: 90).
+Each run of `export_channel_state.py` deletes backups older than `BACKUP_RETENTION_DAYS` (default: 90).
 
 ### Verify Backups
 
@@ -451,4 +452,4 @@ SELECT * FROM dr_backup_history ORDER BY started_at DESC LIMIT 5;
 
 ---
 
-*Last updated: 2025-12-20*
+*Last updated: 2026-10-27*

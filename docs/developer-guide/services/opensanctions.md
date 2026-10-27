@@ -6,11 +6,11 @@ The **OpenSanctions Service** enriches Telegram messages with entity intelligenc
 
 **Key Capabilities:**
 
-- **Entity Matching**: Fuzzy matching against OpenSanctions API with configurable confidence thresholds
+- **Entity Matching**: Local-first matching against already-ingested entities (exact, alias, trigram), with fallback to the OpenSanctions API or self-hosted yente
 - **Risk Classification**: Automatic detection of sanctioned entities, PEPs, criminals, and corporate entities
 - **Semantic Search**: Generates 384-dimensional embeddings for entity similarity search
 - **Entity Relationships**: Tracks family, business, and ownership relationships
-- **Batch Processing**: Processes messages in configurable batches with API rate limiting
+- **Batch Processing**: Processes the newest messages in small batches with adaptive 429 backoff
 - **Composable Design**: Feature flag enabled - can be disabled without affecting the platform
 
 !!! tip "Independence"
@@ -36,17 +36,21 @@ Telegram Messages (PostgreSQL)
          ↓
 OpenSanctions Service
          ↓
-    ┌────┴────────────┬──────────────┬───────────────┐
-    ↓                 ↓              ↓               ↓
-NER Extraction    API Matching   Embeddings      Storage
-(spaCy)          (OpenSanctions) (Transformers)  (PostgreSQL)
+    ┌────┴────────────┬──────────────────┬──────────────┬───────────────┐
+    ↓                 ↓                  ↓              ↓               ↓
+NER Extraction    Local matching     API / yente     Embeddings      Storage
+(spaCy)           (PostgreSQL        fallback        (Transformers)  (PostgreSQL)
+                  trigram)
 ```
 
 ### Backend Modes
 
 The service supports two backend modes:
 
-#### 1. API Mode (Default)
+#### 1. API Mode (code default)
+
+!!! note "Defaults differ between code and compose"
+    `shared/python/config/opensanctions_config.py` defaults to `OPENSANCTIONS_BACKEND=api` and `OPENSANCTIONS_MATCH_THRESHOLD=0.7`. `docker-compose.yml` overrides these to `yente` and `0.85`, and sets `OPENSANCTIONS_ENABLED` to `false` unless you enable it.
 
 Uses the public OpenSanctions API at `https://api.opensanctions.org`
 
@@ -56,7 +60,7 @@ Uses the public OpenSanctions API at `https://api.opensanctions.org`
 - Free for non-profit/journalism/academia
 
 **Disadvantages:**
-- Rate limited (100 requests/minute)
+- Rate limited (the client backs off 60 s doubling to 1 h on each HTTP 429)
 - Requires internet connectivity
 - Requires API key
 
@@ -83,7 +87,8 @@ graph TD
     B --> C[NER Extraction]
     C --> D{Entities Found?}
     D -->|No| A
-    D -->|Yes| E[Match vs OpenSanctions API]
+    D -->|Yes| L[Local match in opensanctions_entities]
+    L --> E[API / yente for unmatched names]
     E --> F{Match Found?}
     F -->|No| A
     F -->|Yes| G[Generate Embeddings]
@@ -94,9 +99,9 @@ graph TD
 
 **Processing Steps:**
 
-1. **Message Selection**: Find non-spam messages without OpenSanctions enrichment
-2. **Entity Extraction**: Use spaCy NER to extract person/organization names from Russian/Ukrainian text
-3. **API Matching**: Query OpenSanctions API with extracted entities
+1. **Message Selection**: Take the newest non-spam messages with content (`ORDER BY created_at DESC LIMIT batch_size`). Messages already processed are not filtered out in the query; existing message-entity links are skipped, which allows re-enrichment when new entities or NER improvements arrive
+2. **Entity Extraction**: Use spaCy NER on the content, plus `locations` and `military_units` from the message's `entities` JSONB
+3. **Matching**: Local match first (`LocalEntityMatcher`), then the API/yente client for names not matched locally (skipped while rate limited)
 4. **Risk Classification**: Determine if entity is sanctioned, PEP, or corporate
 5. **Embedding Generation**: Create 384-dim semantic embeddings using sentence-transformers
 6. **Storage**: Store entity in `opensanctions_entities` and link to message via `opensanctions_message_entities`
@@ -107,9 +112,9 @@ graph TD
 
 The service uses spaCy models to extract entity names from message content:
 
-**Models:**
-- `ru_core_news_md`: Russian language NER (40MB)
-- `xx_ent_wiki_sm`: Multilingual fallback for Ukrainian (10MB)
+**Models** (downloaded in `services/opensanctions/Dockerfile`):
+- `ru_core_news_md`: Russian language NER
+- `xx_ent_wiki_sm`: Multilingual fallback for Ukrainian
 
 **Entity Types Extracted:**
 - **PER/PERSON**: Individual names (e.g., "Владимир Путин", "Зеленський")
@@ -122,6 +127,13 @@ The NER extractor automatically detects language based on character frequency:
 - Ukrainian-specific characters: `іїєґ`
 - Cyrillic (Russian or Ukrainian)
 - Falls back to regex patterns if spaCy unavailable
+
+### Local Matching (`local_matcher.py`)
+
+Enabled by `OPENSANCTIONS_LOCAL_MATCHING` (default `true`). Matches names against `opensanctions_entities` in PostgreSQL, in order: exact name (1.0), exact alias (0.95), case-insensitive name (0.90), case-insensitive alias (0.85), then trigram similarity >= 0.6 (score = similarity x 0.8). Scores below `OPENSANCTIONS_MATCH_THRESHOLD` are not accepted. The matched method is recorded in `match_features.method` and `extraction_method` (`local_<method>`; `opensanctions_api` for API hits).
+
+!!! note
+    Local matching can only find entities that were ingested earlier; the entity table is populated from API/yente hits, so the first mention of a new entity always goes to the backend.
 
 ### API Matching Process
 
@@ -147,12 +159,12 @@ matches = await opensanctions_client.match_entities(
 
 | Threshold | Use Case | Expected Results |
 |-----------|----------|------------------|
-| **0.70** | Broad matching | More results, some false positives |
-| **0.85** | Balanced (default) | Good precision/recall balance |
+| **0.70** | Broad matching (code default) | More results, some false positives |
+| **0.85** | Balanced (compose default) | Good precision/recall balance |
 | **0.95** | Strict matching | High precision, may miss variants |
 
 !!! warning "Threshold Tuning"
-    Start with 0.85 and adjust based on your needs. Too low = false positives, too high = missed entities.
+    Compose uses 0.85; adjust based on your needs. Too low = false positives, too high = missed entities.
 
 ## Data Sources
 
@@ -211,10 +223,10 @@ Set these variables in your `.env` file or Docker environment:
 #### Core Settings
 
 ```bash
-# Enable/disable the service
+# Enable/disable the service (code and compose default: false; the process exits 0 when disabled)
 OPENSANCTIONS_ENABLED=true
 
-# Backend mode: "api" or "yente"
+# Backend mode: "api" or "yente" (code default api; compose default yente)
 OPENSANCTIONS_BACKEND=yente
 
 # API key (required for api mode, optional for yente)
@@ -232,18 +244,24 @@ OPENSANCTIONS_BASE_URL=
 # Dataset to query: default, sanctions, or peps
 OPENSANCTIONS_DATASET=default
 
-# Match confidence threshold (0.0-1.0)
+# Match confidence threshold (0.0-1.0). Code default 0.7, compose default 0.85
 OPENSANCTIONS_MATCH_THRESHOLD=0.85
 ```
 
 #### Processing Configuration
 
 ```bash
-# Batch size for message processing
-OPENSANCTIONS_BATCH_SIZE=10
+# Batch size for message processing (code default 10, compose default 5)
+OPENSANCTIONS_BATCH_SIZE=5
 
-# Seconds between processing batches
-OPENSANCTIONS_POLL_INTERVAL=60
+# Seconds between processing batches (code default 60, compose default 300)
+OPENSANCTIONS_POLL_INTERVAL=300
+
+# Minimum seconds between API calls (default 5.0)
+OPENSANCTIONS_MIN_REQUEST_INTERVAL=5.0
+
+# Try the local entity table before the API/yente (default true)
+OPENSANCTIONS_LOCAL_MATCHING=true
 
 # Generate semantic embeddings for entities
 OPENSANCTIONS_GENERATE_EMBEDDINGS=true
@@ -257,6 +275,11 @@ OPENSANCTIONS_EMBEDDING_MODEL=all-MiniLM-L6-v2
 ```bash
 DATABASE_URL=postgresql+asyncpg://osint_user:password@postgres:5432/osint_platform
 ```
+
+Compose builds `DATABASE_URL` from `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`. The container also needs `REDIS_PASSWORD`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` and `JWT_SECRET_KEY` (required by the shared models import), and runs with `HF_HUB_OFFLINE=1`, so the embedding model must already be in the local cache (`./data/huggingface`, see `scripts/fetch-models.sh`).
+
+!!! warning "Settings read but not used by the service loop"
+    `config/opensanctions_config.py` also parses `OPENSANCTIONS_REALTIME_*`, `OPENSANCTIONS_ASYNC_*`, `OPENSANCTIONS_CACHE_*`, `OPENSANCTIONS_RATE_LIMIT_PER_MINUTE` and `OPENSANCTIONS_CLUSTERING_*`; `services/opensanctions/src/main.py` does not use them. Only the variables listed above have an effect.
 
 ### Configuration Object
 
@@ -291,20 +314,22 @@ if opensanctions_config.enabled:
 
 #### Enable OpenSanctions Service
 
-The OpenSanctions service runs under the `opensanctions` Docker Compose profile:
+The `opensanctions` service runs under the `opensanctions`, `enrichment-standard`, `enrichment-full` and `enrichment` profiles. The yente containers (`yente-index`, `yente`) only run under the `opensanctions` profile:
 
 ```bash
-# Start all services including OpenSanctions
+# Start OpenSanctions with yente
 docker-compose --profile opensanctions up -d
 
-# Or start the entire stack (includes all profiles)
-./scripts/stack-manager.sh start
+# Or manage profiles interactively
+./scripts/stack-manager-py.sh
 ```
 
 This starts three containers:
-- `osint-yente-index`: Elasticsearch for entity indexing
-- `osint-yente`: Yente API service
-- `osint-opensanctions`: OpenSanctions enrichment service
+- `osint-yente-index`: Elasticsearch (9.4.2) for entity indexing
+- `osint-yente`: Yente API service (5.5.0), needs `YENTE_UPDATE_TOKEN` set in `.env`
+- `osint-opensanctions`: OpenSanctions enrichment service (set `OPENSANCTIONS_ENABLED=true`)
+
+Its healthcheck only verifies PID 1 is alive.
 
 #### View Logs
 
@@ -375,11 +400,8 @@ docker-compose --profile opensanctions up -d yente-index yente
 2. **Wait for initial data sync** (5-10 minutes):
 
 ```bash
-# Check Yente health
-curl http://localhost:8000/healthz
-
-# Check indexed entities
-curl http://localhost:8000/stats
+# Yente is not published to the host; check from inside the network
+docker-compose exec opensanctions python -c "import urllib.request as u; print(u.urlopen('http://yente:8000/healthz').read())"
 ```
 
 3. **Configure OpenSanctions service:**
@@ -414,12 +436,12 @@ Entity registry with embeddings.
 | `opensanctions_id` | VARCHAR(255) | External OpenSanctions ID (e.g., "ofac-13661") |
 | `entity_type` | VARCHAR(50) | Entity type (Person, Company, etc.) |
 | `schema_type` | VARCHAR(50) | OpenSanctions schema type |
-| `name` | TEXT | Entity name |
+| `name` | VARCHAR(500) | Entity name |
 | `description` | TEXT | Full bio from OpenSanctions |
 | `properties` | JSONB | Entity properties (nationality, birth date, etc.) |
 | `aliases` | TEXT[] | Alternative names |
 | `datasets` | TEXT[] | Source datasets (e.g., ["us_ofac_sdn"]) |
-| `risk_classification` | VARCHAR(50) | Risk level: sanctioned, pep, corporate |
+| `risk_classification` | VARCHAR(20) | `sanctioned`, `pep`, `criminal`, `corporate` (CHECK constraint; the service itself only assigns sanctioned, pep or corporate) |
 | `entity_embedding` | VECTOR(384) | Semantic embedding for similarity search |
 | `embedding_model` | VARCHAR(100) | Model used (all-MiniLM-L6-v2) |
 | `first_seen` | TIMESTAMP | First mention |
@@ -440,7 +462,7 @@ CREATE INDEX idx_opensanctions_name_trgm
 -- Vector similarity search
 CREATE INDEX idx_opensanctions_entities_embedding
     ON opensanctions_entities
-    USING ivfflat (entity_embedding vector_cosine_ops);
+    USING hnsw (entity_embedding vector_cosine_ops);
 
 -- GIN indexes for JSONB
 CREATE INDEX idx_opensanctions_entities_datasets_gin
@@ -458,11 +480,11 @@ Junction table linking messages to OpenSanctions entities.
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | SERIAL | Primary key |
-| `message_id` | INTEGER | Foreign key to `messages` |
+| `message_id` | BIGINT | Foreign key to `messages` |
 | `entity_id` | INTEGER | Foreign key to `opensanctions_entities` |
-| `match_score` | FLOAT | API match confidence (0.0-1.0) |
-| `match_method` | VARCHAR(50) | How matched: async_enrichment, real_time, manual |
-| `extraction_method` | VARCHAR(50) | Source: opensanctions_api |
+| `match_score` | NUMERIC(3,2) | Match confidence (0.0-1.0) |
+| `match_method` | VARCHAR(20) | How matched: async_enrichment, real_time, manual (this service writes `async_enrichment`) |
+| `extraction_method` | VARCHAR(50) | `local_db`, `local_<method>` (exact_name, alias, trigram) or `opensanctions_api` |
 | `context_snippet` | TEXT | Message excerpt mentioning entity |
 | `match_features` | JSONB | API response features |
 | `matched_at` | TIMESTAMP | When match occurred |
@@ -486,18 +508,19 @@ Entity relationship graph (family, business, ownership).
 | `from_entity_id` | INTEGER | Source entity (opensanctions_entities) |
 | `to_entity_id` | INTEGER | Target entity (opensanctions_entities) |
 | `relationship_type` | VARCHAR(50) | Type: family, business, ownership, associate |
-| `properties` | JSONB | Relationship metadata |
-| `source` | VARCHAR(100) | Data source |
-| `confidence` | FLOAT | Relationship confidence |
-| `discovered_at` | TIMESTAMP | Discovery timestamp |
+| `relationship_subtype` | VARCHAR(50) | spouse, child, director, shareholder, ... |
+| `relationship_properties` | JSONB | Relationship metadata |
+| `source_datasets` | TEXT[] | Data source datasets |
+| `confidence` | NUMERIC(3,2) | Relationship confidence |
+
+See `infrastructure/postgres/init.sql` for the remaining timestamp columns. This service does not write to this table at present.
 
 ### Materialized View: `unified_message_entities`
 
 Combines both curated entities and OpenSanctions entities for fast unified queries:
 
 ```sql
--- Refresh periodically
-REFRESH MATERIALIZED VIEW unified_message_entities;
+-- Refreshed nightly by the analytics service (view_refresher.py)
 
 -- Query example
 SELECT * FROM unified_message_entities
@@ -512,14 +535,16 @@ The OpenSanctions service exposes endpoints through the main API service.
 ### Entity Search
 
 ```http
-GET /api/entities/search?query=Putin&source=opensanctions
+GET /api/entities/search?q=Putin&source=opensanctions
 ```
 
 **Parameters:**
-- `query` (required): Entity name or partial name
-- `source` (optional): Filter by source (opensanctions, curated, all)
+- `q` (required): Entity name or partial name
+- `source` (optional): `curated` or `opensanctions` (omit for both)
 - `entity_type` (optional): Filter by type (Person, Company, etc.)
-- `limit` (optional): Results limit (default: 50)
+- `limit` (optional): Results limit (default 20, max 100)
+
+OpenSanctions results come from both the local table and the yente API (flagged `in_local_db`); the response shape below is illustrative. See `services/api/src/routers/entities.py` for the exact model.
 
 **Response:**
 
@@ -575,54 +600,41 @@ GET /api/entities/opensanctions/ofac-13661
 GET /api/entities/opensanctions/ofac-13661/messages?limit=20&offset=0
 ```
 
-**Response:**
+**Response:** a JSON array of `LinkedMessage` objects (no wrapper object), `limit` 1-100 (default 20).
 
 ```json
-{
-  "messages": [
-    {
-      "id": 12345,
-      "content": "...",
-      "match_score": 0.92,
-      "context_snippet": "Putin announced...",
-      "matched_at": "2024-11-28T14:22:00Z"
-    }
-  ],
-  "total": 42,
-  "offset": 0,
-  "limit": 20
-}
+[
+  {
+    "id": 12345,
+    "content": "...",
+    "match_score": 0.92,
+    "context_snippet": "Putin announced...",
+    "matched_at": "2024-11-28T14:22:00Z"
+  }
+]
 ```
+
+The router also serves `GET /api/entities/{source}/{entity_id}/relationships`.
 
 ## Performance
 
 ### Benchmarks
 
 **Processing Speed:**
-- Batch processing: 10 messages per batch (configurable)
+- Batch processing: 5 messages per batch in compose (code default 10)
 - NER extraction: ~50ms per message (spaCy)
 - API matching: ~200-500ms per batch (depends on entity count)
 - Embedding generation: ~100ms per entity (sentence-transformers)
 
 **Throughput:**
-- API mode: ~60 messages/minute (rate limit: 100 req/min)
-- Yente mode: ~200-300 messages/minute (no rate limit)
+- Compose defaults (5 messages every 300 s, 5 s between API calls) are deliberately slow and meant for progressive enrichment; raise `OPENSANCTIONS_BATCH_SIZE` / lower `OPENSANCTIONS_POLL_INTERVAL` for faster backfill, especially in yente mode (no rate limit)
+- After a 429 the poll interval doubles per consecutive 429 (capped at 1 h) and the loop waits out the client backoff
 
 ### Optimization Strategies
 
-#### 1. Entity Caching
+#### 1. Local-first matching
 
-Entities are cached in the database to avoid duplicate API calls:
-
-```python
-# Check if entity exists before querying API
-existing = await session.execute(
-    select(OpenSanctionsEntity).where(
-        OpenSanctionsEntity.opensanctions_id == match.opensanctions_id
-    )
-)
-entity = existing.scalar_one_or_none()
-```
+Names are matched against `opensanctions_entities` first (`LocalEntityMatcher`), so only names unseen locally cost an API/yente call. Disable with `OPENSANCTIONS_LOCAL_MATCHING=false`.
 
 #### 2. Batch Processing
 
@@ -630,7 +642,7 @@ Messages are processed in batches to reduce API overhead:
 
 ```python
 # Configure batch size
-OPENSANCTIONS_BATCH_SIZE=20  # Larger batches = faster processing
+OPENSANCTIONS_BATCH_SIZE=20  # Larger batches = faster processing (compose default 5)
 ```
 
 #### 3. Disable Embeddings (Optional)
@@ -648,7 +660,7 @@ This reduces processing time by ~50%.
 For lower-priority enrichment, increase the poll interval:
 
 ```bash
-OPENSANCTIONS_POLL_INTERVAL=300  # Check every 5 minutes
+OPENSANCTIONS_POLL_INTERVAL=600  # Check every 10 minutes (compose default 300)
 ```
 
 ### Resource Usage
@@ -688,8 +700,8 @@ docker-compose logs -f opensanctions
 
 # Look for:
 # - "OpenSanctions service initialized"
-# - "Processing batch of X messages"
-# - "OpenSanctions matched Y/Z entities"
+# - "Processed batch of X messages"
+# - "Local matching: X/Y matched, Z need API fallback"
 ```
 
 #### Database Checks
@@ -712,18 +724,7 @@ docker-compose exec postgres psql -U osint_user -d osint_platform \
 
 ### Metrics
 
-The service exposes Prometheus metrics (if observability is configured):
-
-```
-# Entity matching metrics
-opensanctions_entities_matched_total
-opensanctions_api_calls_total
-opensanctions_processing_duration_seconds
-
-# Entity counts
-opensanctions_entities_total{risk_classification="sanctioned"}
-opensanctions_entities_total{risk_classification="pep"}
-```
+The service does not export Prometheus metrics (no `/metrics` endpoint, no `prometheus_client` use in `services/opensanctions/src`). Use the SQL checks above and the structured logs (Loki). Log lines to look for: `Local matching: X/Y matched`, `Linked message ... to entity`, `Rate limited, waiting`, `Adaptive polling`.
 
 ### Alerts
 
@@ -772,6 +773,14 @@ Could not connect to database
 
 **Solution:** Verify `DATABASE_URL` and ensure PostgreSQL is running
 
+4. **Service disabled:**
+
+```
+OpenSanctions service is DISABLED (OPENSANCTIONS_ENABLED=false)
+```
+
+**Solution:** Set `OPENSANCTIONS_ENABLED=true`. The process exits with code 0 when disabled, so with `restart: unless-stopped` the container restarts in a loop until you enable it or stop it.
+
 ### No Entities Being Matched
 
 **Symptom:** Service running but no entities stored in database
@@ -787,7 +796,7 @@ docker-compose exec postgres psql -U osint_user -d osint_platform \
 docker-compose logs opensanctions | grep "NER extracted"
 
 # Verify API connectivity
-docker-compose logs opensanctions | grep "OpenSanctions matched"
+docker-compose logs opensanctions | grep "Local matching"
 ```
 
 **Common issues:**
@@ -811,7 +820,7 @@ OpenSanctions API error: 401 - Unauthorized
 3. **Threshold too strict:**
 
 ```
-OpenSanctions matched 0/5 entities
+Message 12345: No matches above threshold
 ```
 
 **Solution:** Lower match threshold:
@@ -823,10 +832,10 @@ OPENSANCTIONS_MATCH_THRESHOLD=0.70  # Try 0.70 instead of 0.85
 4. **Rate limit exceeded (API mode):**
 
 ```
-OpenSanctions API rate limit exceeded - waiting before retry
+Rate limit hit (429 #1), backing off for 60s
 ```
 
-**Solution:** Switch to Yente mode or increase `OPENSANCTIONS_POLL_INTERVAL`
+**Solution:** The client backs off automatically (60 s doubling to 1 h). To avoid it, switch to Yente mode or increase `OPENSANCTIONS_POLL_INTERVAL` / `OPENSANCTIONS_MIN_REQUEST_INTERVAL`.
 
 ### Slow Processing
 
@@ -873,14 +882,9 @@ OPENSANCTIONS_POLL_INTERVAL=30  # Check more frequently
 **Check Yente health:**
 
 ```bash
-# Yente status
-curl http://localhost:8000/healthz
-
-# Elasticsearch status
-curl http://localhost:9200/_cluster/health
-
-# Indexed entity count
-curl http://localhost:8000/stats
+# Neither port is published to the host; run from inside the network
+docker-compose exec opensanctions python -c "import urllib.request as u; print(u.urlopen('http://yente:8000/healthz').read())"
+docker-compose exec yente-index curl -s http://localhost:9200/_cluster/health
 ```
 
 **Common issues:**
@@ -1048,8 +1052,7 @@ sanctioned_entities = result.scalars().all()
 
 Planned improvements for the OpenSanctions service:
 
-- [ ] **Redis Caching**: Cache frequently matched entities in Redis for faster lookups
-- [ ] **Retry Logic**: Exponential backoff for API failures
+- [ ] **Retry Logic**: Backoff exists for HTTP 429 only; other API failures are not retried
 - [ ] **Relationship Extraction**: Parse entity relationships from OpenSanctions API
 - [ ] **Entity Clustering**: Use HDBSCAN to discover entity networks
 - [ ] **Real-time Enrichment**: Webhook integration for immediate enrichment

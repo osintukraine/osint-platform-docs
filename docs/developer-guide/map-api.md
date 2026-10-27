@@ -94,7 +94,7 @@ All Map API endpoints use Redis caching with configurable TTLs:
 | /locations/reverse | 600s | MAP_CACHE_TTL_SUGGESTIONS | Static gazetteer data |
 
 **Cache Invalidation:**
-- Messages endpoint: Auto-invalidated when new locations published to Redis `map:new_location`
+- Messages endpoint: invalidated when a location is published through `publish_new_location()` (`utils/map_cache.py`). The enrichment geolocation task publishes to `map:new_location` directly (WebSocket only), so in practice `/messages` waits for its 60 s TTL
 - Clusters/Events: Manual invalidation or TTL expiry
 - Heatmap: TTL expiry only
 
@@ -103,17 +103,9 @@ All Map API endpoints use Redis caching with configurable TTLs:
 When `zoom < 12` and `cluster=true`, the API performs grid-based aggregation:
 
 ```python
-# Calculate grid size based on zoom level
-def calculate_grid_size(zoom: int) -> float:
-    # Zoom 0-5: 1.0° cells (~111km)
-    # Zoom 6-8: 0.5° cells (~55km)
-    # Zoom 9-11: 0.1° cells (~11km)
-    if zoom <= 5:
-        return 1.0
-    elif zoom <= 8:
-        return 0.5
-    else:
-        return 0.1
+# utils/map_cache.py: calculate_grid_size(zoom) is a lookup table (degrees)
+# zoom 0: 10.0 | 1-2: 5.0 | 3-4: 2.0 | 5-6: 1.0 | 7-8: 0.5 | 9: 0.25
+# zoom 10: 0.1 | 11: 0.05 | 12: 0.02 | 13: 0.01 | 14: 0.005 | 15: 0.002 | 16+: 0.001
 ```
 
 **Benefits:**
@@ -140,37 +132,36 @@ LIMIT 1000
 
 ### Rate Limiting
 
-Redis-backed sliding window rate limiter (per IP):
+Redis-backed sliding window rate limiter (per client key: IP, user or API key; details in [Rate Limiting](rate-limiting.md)). `/hot-locations` and `/recent-messages` are not rate limited.
 
 | Endpoint | Default Limit | Env Variable | Status Code |
 |----------|---------------|--------------|-------------|
-| /messages | 30/min | MAP_MESSAGES_RATE_LIMIT | 429 |
-| /clusters | 30/min | MAP_CLUSTERS_RATE_LIMIT | 429 |
-| /events | 30/min | MAP_EVENTS_RATE_LIMIT | 429 |
-| /heatmap | 20/min | MAP_HEATMAP_RATE_LIMIT | 429 |
+| /messages | 120/min | MAP_MESSAGES_RATE_LIMIT | 429 |
+| /trajectories | 120/min (shares MAP_MESSAGES_RATE_LIMIT) | MAP_MESSAGES_RATE_LIMIT | 429 |
+| /clusters | 120/min | MAP_CLUSTERS_RATE_LIMIT | 429 |
+| /events | 60/min | MAP_EVENTS_RATE_LIMIT | 429 |
+| /heatmap | 60/min | MAP_HEATMAP_RATE_LIMIT | 429 |
 | /locations/suggest | 60/min | MAP_SUGGEST_RATE_LIMIT | 429 |
 | /locations/reverse | 60/min | MAP_REVERSE_RATE_LIMIT | 429 |
 | /clusters/{id}/messages | 60/min | MAP_CLUSTER_MESSAGES_RATE_LIMIT | 429 |
 
 **Response Headers (on success):**
 ```
-X-RateLimit-Limit: 30
-X-RateLimit-Remaining: 28
+X-RateLimit-Limit: 120
+X-RateLimit-Remaining: 118
 X-RateLimit-Reset: 1702992000
 ```
 
 **429 Response:**
 ```json
 {
-  "detail": "Rate limit exceeded: 30 requests per minute"
+  "detail": "Rate limit exceeded. Please try again later."
 }
 ```
 
 ## Authentication
 
-**Current Status:** No authentication required (public read-only endpoints)
-
-**Future Consideration:** Optional API key authentication for high-volume integrations.
+**Current Status:** The router adds no authentication dependency (read-only endpoints). In a deployment with the auth stack, Oathkeeper decides what is public; callers are keyed for rate limiting by IP, user or API key.
 
 ## Endpoints Reference
 
@@ -291,7 +282,7 @@ curl "http://localhost:8000/api/map/messages?south=44.0&west=22.0&north=53.0&eas
 
 // 429 Too Many Requests
 {
-  "detail": "Rate limit exceeded: 30 requests per minute"
+  "detail": "Rate limit exceeded. Please try again later."
 }
 ```
 
@@ -315,7 +306,7 @@ Get Telegram event clusters within a bounding box as GeoJSON.
 | east | float | Yes | -180 to 180 | East boundary longitude |
 | limit | int | No | 1 to 1000 | Maximum clusters to return (default: 200) |
 | tier | string | No | - | Filter by tier: rumor, unconfirmed, confirmed, verified |
-| status | string | No | - | Filter by status: detected, validated, archived |
+| status | string | No | - | Filter by cluster status: detected, validated, promoted, archived |
 | start_date | datetime | No | ISO 8601 | Start date for timeline filter |
 | end_date | datetime | No | ISO 8601 | End date for timeline filter |
 | polygon | string | No | JSON array | Polygon filter as JSON array of [lng, lat] pairs |
@@ -352,10 +343,12 @@ Get Telegram event clusters within a bounding box as GeoJSON.
 
 | Tier | Criteria | Color |
 |------|----------|-------|
-| rumor | 1 channel | Red |
-| unconfirmed | 2-3 channels, same affiliation | Yellow |
-| confirmed | 3+ channels, cross-affiliation | Orange |
-| verified | 2+ independent RSS sources (automatic) or human verification | Green |
+| rumor | New cluster | Red |
+| unconfirmed | 3+ channels, or channels of different affiliations (`cross_affiliation_met`) | Yellow |
+| confirmed | Corroborated by 1+ independent RSS outlet | Orange |
+| verified | Corroborated by 2+ independent RSS outlets (automatic) or human verification | Green |
+
+Only `validated` and `promoted` clusters progress. The trigger `auto_upgrade_cluster_tier()` and `recalculate_cluster_tiers()` (run every cluster-detection cycle) implement the rules; outlets are counted as distinct `source_id` / `source_domain` over all of an event's articles (migration 043).
 
 **Examples:**
 
@@ -435,7 +428,7 @@ curl "http://localhost:8000/api/map/clusters/456/messages"
 
 ### GET /api/map/events
 
-Get curated events within a bounding box as GeoJSON.
+Get timeline events within a bounding box as GeoJSON.
 
 **URL:** `/api/map/events`
 
@@ -450,7 +443,7 @@ Get curated events within a bounding box as GeoJSON.
 | north | float | Yes | -90 to 90 | North boundary latitude |
 | east | float | Yes | -180 to 180 | East boundary longitude |
 | limit | int | No | 1 to 1000 | Maximum events to return (default: 200) |
-| tier | string | No | - | Filter by tier: rumor, unconfirmed, confirmed, verified |
+| tier | string | No | - | Filter by `events.tier_status`: breaking, developing, confirmed, verified |
 | start_date | datetime | No | ISO 8601 | Start date for timeline filter |
 | end_date | datetime | No | ISO 8601 | End date for timeline filter |
 | polygon | string | No | JSON array | Polygon filter as JSON array of [lng, lat] pairs |
@@ -482,8 +475,8 @@ Get curated events within a bounding box as GeoJSON.
 ```
 
 **Difference from Clusters:**
-- **Events:** Manually curated by analysts, higher quality
-- **Clusters:** Automatically detected by velocity-based algorithm
+- **Events:** Timeline events created from RSS articles and matched Telegram posts (`events` table, tiers breaking, developing, confirmed, verified). Analysts can pin (`is_major`), archive or soft-delete them.
+- **Clusters:** Telegram-only groups detected by the velocity-based algorithm (`telegram_event_clusters`, tiers rumor, unconfirmed, confirmed, verified)
 
 **Examples:**
 
@@ -491,7 +484,7 @@ Get curated events within a bounding box as GeoJSON.
 # All events in bounding box
 curl "http://localhost:8000/api/map/events?south=48.0&west=35.0&north=50.0&east=40.0"
 
-# Only verified events
+# Only verified events (events tiers: breaking, developing, confirmed, verified)
 curl "http://localhost:8000/api/map/events?south=48.0&west=35.0&north=50.0&east=40.0&tier=verified"
 ```
 
@@ -1126,11 +1119,13 @@ WHERE ST_Contains(
 
 **Endpoints:** `/clusters`, `/events`
 
-**Values:**
-- `rumor` - Single channel report
-- `unconfirmed` - 2-3 channels, same affiliation
-- `confirmed` - 3+ channels, cross-affiliation
-- `verified` - 2+ independent RSS sources (automatic) or human verification
+**Values for `/clusters`** (`telegram_event_clusters.tier`):
+- `rumor` - New cluster
+- `unconfirmed` - 3+ channels or cross-affiliation
+- `confirmed` - 1+ independent RSS outlet corroborates
+- `verified` - 2+ independent RSS outlets (automatic) or human verification
+
+**Values for `/events`** (`events.tier_status`): `breaking`, `developing`, `confirmed`, `verified`.
 
 **Example:**
 
@@ -1358,7 +1353,7 @@ function onSuggestionClick(suggestion) {
 
 // 429 Too Many Requests
 {
-  "detail": "Rate limit exceeded: 30 requests per minute"
+  "detail": "Rate limit exceeded. Please try again later."
 }
 ```
 
@@ -1366,14 +1361,14 @@ function onSuggestionClick(suggestion) {
 
 **On Success (200 OK):**
 ```
-X-RateLimit-Limit: 30
-X-RateLimit-Remaining: 28
+X-RateLimit-Limit: 120
+X-RateLimit-Remaining: 118
 X-RateLimit-Reset: 1702992000
 ```
 
 **On Rate Limit (429):**
 ```
-X-RateLimit-Limit: 30
+X-RateLimit-Limit: 120
 X-RateLimit-Remaining: 0
 X-RateLimit-Reset: 1702992060
 Retry-After: 60
@@ -1470,7 +1465,7 @@ curl "/api/map/messages?south=40&west=20&north=60&east=50&zoom=8&cluster=true"
 
 ### 2025-12-19
 - Initial comprehensive documentation
-- All 12 endpoints documented with examples
+- All 10 HTTP endpoints plus the WebSocket documented with examples
 - WebSocket security features documented
 - Performance optimization guide added
 - Common use cases with code examples
@@ -1491,5 +1486,4 @@ curl "/api/map/messages?south=40&west=20&north=60&east=50&zoom=8&cluster=true"
 
 **File Locations:**
 
-- **Source Code:** `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/map.py` (1951 lines)
-- **Documentation:** `~/code/osintukraine/osint-platform-docs/docs/developer-guide/map-api.md` (this file)
+- **Source Code:** `services/api/src/routers/map.py`, `services/api/src/utils/map_cache.py`, `services/api/src/utils/rate_limit.py` in the platform repository

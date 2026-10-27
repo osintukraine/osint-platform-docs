@@ -5,7 +5,7 @@
 The Translation Backfill Service is a **standalone batch processor** that translates historical messages in bulk. It was designed to backfill translations for messages archived before translation support was added to the platform, or to retry failed translations.
 
 !!! info "Service Status: Legacy"
-    This service has been **superseded by the Enrichment Service's TranslationTask** (`services/enrichment/src/tasks/translation.py`). The standalone service remains available for one-time bulk operations, but ongoing translation is now handled by the unified enrichment worker.
+    This service has been **superseded by the Enrichment Service's TranslationTask** (`services/enrichment/src/tasks/translation.py`, run by the fast-pool worker). The standalone code remains in the repository for one-time bulk operations, but **it is not defined in `docker-compose.yml`** (only a `replicas: 0` stub in `docker-compose.development.yml` mentions it), so `docker-compose run translation-backfill` does not work as written. Build and run it from its own directory (see Running Locally).
 
 ### Purpose
 
@@ -21,9 +21,9 @@ The Translation Backfill Service is a **standalone batch processor** that transl
 | **DeepL Integration** | High-quality translations using DeepL Pro API (superior to Google Translate) |
 | **Google Fallback** | Automatic fallback to Google Translate if DeepL unavailable |
 | **Batch Processing** | Configurable batch sizes for efficient API usage |
-| **Progress Tracking** | Resume capability via database checkpoints |
-| **Rate Limiting** | Respects DeepL API quotas to prevent throttling |
-| **Language Detection** | Auto-detects source language, skips English messages |
+| **Progress Tracking** | None; each run re-selects `content_translated IS NULL`, so reruns resume naturally |
+| **Rate Limiting** | None built in; a failed DeepL call falls back to Google, and failures are counted as errors |
+| **Language Detection** | Optional `--skip-english` skips messages detected as English; otherwise everything is sent to the translator |
 
 ---
 
@@ -69,10 +69,10 @@ The Translation Backfill Service is a **standalone batch processor** that transl
 
 | File | Purpose | Lines |
 |------|---------|-------|
-| `translate_backfilled_messages_standalone.py` | Main translation script | 340 |
-| `requirements.txt` | Dependencies (DeepL, langdetect, etc.) | 7 |
-| `Dockerfile` | Container with continuous mode support | 35 |
-| `README.md` | Service documentation | 502 |
+| `translate_backfilled_messages_standalone.py` | Main translation script (no `src/` dir, no shared-library imports) | 339 |
+| `requirements.txt` | Dependencies (deepl, deep-translator, langdetect, asyncpg, psycopg2, sqlalchemy) | |
+| `Dockerfile` | `python:3.11-slim`; loops the script every `TRANSLATION_INTERVAL` seconds (default 3600) | |
+| `README.md` | Service documentation | |
 
 ---
 
@@ -93,10 +93,9 @@ def detect_language(text: str) -> Optional[str]:
 ```
 
 **Supported Languages:**
-- Russian (`ru`)
-- Ukrainian (`uk`)
-- English (`en`) - skipped, no translation needed
-- All other DeepL-supported languages
+- Russian (`ru`) and Ukrainian (`uk`) are the target use case
+- English (`en`) - skipped only with `--skip-english`
+- Any other language the provider supports (`GoogleTranslator` uses `source="auto"`)
 
 ### 2. DeepL Translation (Primary)
 
@@ -142,8 +141,7 @@ translated = translator.translate(text)
 
 **When Fallback Triggers:**
 - No `DEEPL_API_KEY` configured
-- DeepL API error (500, 503)
-- DeepL rate limit exceeded (429)
+- Any DeepL exception (the client catches all errors, including 429/456 quota errors)
 - User passes `--google-only` flag
 
 ### 4. Database Update
@@ -157,7 +155,7 @@ SET content_translated = 'Translated text...',
     translation_target = 'en',               -- Target language
     translation_provider = 'deepl',          -- 'deepl' or 'google'
     translation_timestamp = NOW(),           -- When translated
-    translation_cost_usd = 0.0               -- Cost tracking
+    translation_cost_usd = 0.0               -- Always 0.0 (hard-coded for both providers)
 WHERE id = 12345;
 ```
 
@@ -169,11 +167,13 @@ ALTER TABLE messages ADD COLUMN
     language_detected VARCHAR(10),           -- Auto-detected language
     content_translated TEXT,                 -- English translation
     translation_target VARCHAR(10),          -- Always 'en'
-    translation_provider VARCHAR(50);        -- 'deepl', 'google', etc.
+    translation_provider VARCHAR(50),        -- 'deepl', 'google', etc.
+    translation_timestamp TIMESTAMP WITH TIME ZONE,
+    translation_cost_usd NUMERIC(10, 6);
 
 -- Index for finding untranslated messages
-CREATE INDEX idx_messages_translation_pending
-ON messages(created_at)
+CREATE INDEX idx_messages_pending_translation
+ON messages(id)
 WHERE content_translated IS NULL AND is_spam = false;
 ```
 
@@ -184,7 +184,7 @@ WHERE content_translated IS NULL AND is_spam = false;
 ### Message Selection Query
 
 ```python
-# Fetch untranslated messages
+# get_untranslated_messages(): the whole result set is loaded, then processed in --batch-size chunks
 query = """
     SELECT id, content
     FROM messages
@@ -192,9 +192,7 @@ query = """
       AND content_translated IS NULL    -- No translation yet
       AND content IS NOT NULL
       AND content != ''
-      AND is_spam = false               -- Skip spam
-    ORDER BY id ASC
-    LIMIT :batch_size
+    -- No is_spam filter, no ORDER BY; LIMIT only when --limit is given
 """
 ```
 
@@ -206,10 +204,9 @@ async def process_batch(messages, batch_size=10):
         batch = messages[i:i + batch_size]
 
         for msg_id, content in batch:
-            # 1. Detect language
-            lang = detect_language(content)
-            if lang == 'en':
-                continue  # Skip English
+            # 1. Detect language (only with --skip-english)
+            if skip_english and detect_language(content) == 'en':
+                continue
 
             # 2. Translate
             translation = await translate(content)
@@ -263,19 +260,19 @@ ORDER BY pending DESC;
 ### Environment Variables
 
 ```bash
-# PostgreSQL connection
-POSTGRES_HOST=localhost              # Database host
-POSTGRES_DB=osint_platform          # Database name
-POSTGRES_USER=osint_user            # Database user
-POSTGRES_PASSWORD=your_password     # Database password
+# PostgreSQL connection (read by the script; no port variable, default 5432)
+POSTGRES_HOST=localhost              # default localhost
+POSTGRES_DB=osint_platform          # default osint_platform
+POSTGRES_USER=osint_user            # default osint_user
+POSTGRES_PASSWORD=your_password     # default empty
 
 # DeepL API (optional)
-DEEPL_API_KEY=your_deepl_key_here  # Leave empty to use Google only
+DEEPL_API_KEY=your_deepl_key_here  # Leave empty to use Google only. The script always uses deepl.Translator's default endpoint selection; DEEPL_API_URL from shared settings is not read
 
-# Batch processing
-TRANSLATION_BATCH_SIZE=20           # Messages per batch (default: 10)
-TRANSLATION_SKIP_ENGLISH=true       # Skip English detection (default: false)
-TRANSLATION_INTERVAL=3600           # Seconds between runs in daemon mode
+# Read only by the Dockerfile CMD loop (not by the Python script)
+TRANSLATION_BATCH_SIZE=20           # passed as --batch-size (script default 10)
+TRANSLATION_SKIP_ENGLISH=true       # any non-empty value adds --skip-english
+TRANSLATION_INTERVAL=3600           # seconds between runs
 ```
 
 ### Command-Line Arguments
@@ -303,52 +300,33 @@ python3 translate_backfilled_messages_standalone.py --skip-english
 Process all untranslated messages once:
 
 ```bash
-# Via Docker (recommended)
-cd ~/code/osintukraine/osint-intelligence-platform
-docker-compose run translation-backfill
-
-# Via Python directly
+# Via Python directly (recommended; the service is not in docker-compose.yml)
 cd services/translation-backfill
-DEEPL_API_KEY=your_key python3 translate_backfilled_messages_standalone.py
+pip install -r requirements.txt
+POSTGRES_HOST=localhost POSTGRES_PASSWORD=... DEEPL_API_KEY=your_key \
+  python3 translate_backfilled_messages_standalone.py
+
+# Or build the image from the service directory (its Dockerfile copies requirements.txt from the context root)
+docker build -t osint-translation-backfill services/translation-backfill
+docker run --rm --network <compose_network> -e POSTGRES_HOST=postgres -e POSTGRES_PASSWORD=... osint-translation-backfill
 ```
 
 ### Testing with Limited Messages
 
 ```bash
 # Translate only 10 messages (for testing)
-docker-compose run translation-backfill \
-  python3 translate_backfilled_messages_standalone.py --limit 10
+python3 translate_backfilled_messages_standalone.py --limit 10
 
 # Test Google Translate fallback
-docker-compose run translation-backfill \
-  python3 translate_backfilled_messages_standalone.py --google-only --limit 5
+python3 translate_backfilled_messages_standalone.py --google-only --limit 5
 ```
 
 ### Continuous Mode (Daemon)
 
 Run as background service that checks periodically:
 
-!!! warning "Continuous Mode Disabled by Default"
-    The service is set to `replicas: 0` in `docker-compose.development.yml`. This is intentional - continuous translation is now handled by the enrichment service.
-
-To enable continuous mode for testing:
-
-```bash
-# Edit docker-compose.yml (or create docker-compose.override.yml)
-translation-backfill:
-  deploy:
-    replicas: 1  # Enable service
-  environment:
-    TRANSLATION_INTERVAL: 3600  # Check every hour
-```
-
-```bash
-# Start daemon
-docker-compose up -d translation-backfill
-
-# View logs
-docker-compose logs -f translation-backfill
-```
+!!! warning "No compose service"
+    The image's CMD loops forever (script, then sleep `TRANSLATION_INTERVAL`), but there is no `translation-backfill` entry in `docker-compose.yml`; `docker-compose.development.yml` only sets `replicas: 0` for that name. To use daemon mode you would have to add a service definition yourself (build context `services/translation-backfill`, `POSTGRES_*` and `DEEPL_API_KEY` env). Continuous translation is handled by the enrichment `translation` task.
 
 ### Scheduled Backfill (Cron)
 
@@ -359,7 +337,7 @@ For production, run as scheduled job:
 crontab -e
 
 # Run backfill daily at 2 AM
-0 2 * * * cd /path/to/platform && docker-compose run translation-backfill
+0 2 * * * cd /path/to/platform/services/translation-backfill && python3 translate_backfilled_messages_standalone.py >> /var/log/translation-backfill.log 2>&1
 ```
 
 ---
@@ -387,8 +365,7 @@ curl -X POST https://api-free.deepl.com/v2/usage \
 # Update .env file
 DEEPL_API_KEY=your_new_key_here
 
-# Restart service
-docker-compose restart translation-backfill
+# Re-run the script / restart your container
 ```
 
 ### Quota Exceeded (456)
@@ -415,8 +392,7 @@ curl -X POST https://api-free.deepl.com/v2/usage \
 2. **Upgrade to Pro tier** (€20/million chars, no hard limit)
 3. **Use Google Translate fallback**:
    ```bash
-   docker-compose run translation-backfill \
-     python3 translate_backfilled_messages_standalone.py --google-only
+   python3 translate_backfilled_messages_standalone.py --google-only
    ```
 
 ### Slow Processing
@@ -425,8 +401,8 @@ curl -X POST https://api-free.deepl.com/v2/usage \
 
 **Diagnose:**
 ```bash
-# Check logs for rate limiting
-docker-compose logs translation-backfill | grep -i "rate\|limit\|quota"
+# Check the script output for provider failures
+grep -i "failed\|fall" translation-backfill.log
 
 # Check database connection
 docker-compose exec postgres psql -U osint_user -d osint_platform \
@@ -437,7 +413,7 @@ docker-compose exec postgres psql -U osint_user -d osint_platform \
 
 1. **Increase batch size** (uses more memory):
    ```bash
-   TRANSLATION_BATCH_SIZE=50 docker-compose run translation-backfill
+   python3 translate_backfilled_messages_standalone.py --batch-size 50
    ```
 
 2. **Check network latency** to DeepL API:
@@ -453,9 +429,7 @@ docker-compose exec postgres psql -U osint_user -d osint_platform \
 
 **Check connectivity:**
 ```bash
-docker-compose exec translation-backfill \
-  psql postgresql://osint_user:password@postgres:5432/osint_platform \
-  -c "SELECT 1;"
+psql "postgresql://osint_user:password@<host>:5432/osint_platform" -c "SELECT 1;"
 ```
 
 **Common Causes:**
@@ -481,7 +455,7 @@ docker-compose restart postgres
 
 **Check logs:**
 ```bash
-docker-compose logs translation-backfill | grep "❌"
+grep "❌" translation-backfill.log
 ```
 
 **Common Causes:**
@@ -521,17 +495,9 @@ The standalone service was replaced to:
 
 ### Enrichment Service Equivalent
 
-**Old (translation-backfill):**
-```bash
-docker-compose run translation-backfill
-```
+**Old (translation-backfill):** run the standalone script as above.
 
-**New (enrichment):**
-```bash
-# Translation is now a task in enrichment service
-docker-compose exec enrichment-worker \
-  python -m src.cli run-task translation
-```
+**New (enrichment):** `TranslationTask` is registered in `services/enrichment/src/workers/fast_worker.py` (task key `translation`) and runs inside the `enrichment-fast-pool` container; there is no per-task CLI. It uses DeepL with Google fallback and pauses on DeepL quota or rate-limit signals (`translation.deepl_limits`) instead of failing the batch.
 
 **Code Location:**
 - **Old:** `/services/translation-backfill/translate_backfilled_messages_standalone.py`
@@ -552,9 +518,9 @@ The standalone service is still useful for:
 |---------|-----------------------------------|-------------------|
 | **Architecture** | Single-purpose script | Multi-task worker |
 | **Deployment** | Separate container | Shared worker pool |
-| **Progress tracking** | Logs only | Database checkpoints |
-| **Monitoring** | None | Prometheus metrics |
-| **Task scheduling** | Cron or manual | Coordinator-driven |
+| **Progress tracking** | Logs only | Cursor-based (`id > :last_id`) |
+| **Monitoring** | None (no Prometheus metrics) | Worker metrics |
+| **Task scheduling** | Cron or manual | Worker loop |
 | **Resource usage** | Dedicated resources | Shared with other tasks |
 | **Use case** | Bulk one-time backfill | Continuous enrichment |
 
@@ -593,9 +559,9 @@ WHERE content_translated IS NULL
 Ensure these indexes exist for optimal performance:
 
 ```sql
--- Index for finding untranslated messages
-CREATE INDEX IF NOT EXISTS idx_messages_translation_pending
-ON messages(created_at)
+-- Index for finding untranslated messages (already in init.sql)
+CREATE INDEX IF NOT EXISTS idx_messages_pending_translation
+ON messages(id)
 WHERE content_translated IS NULL AND is_spam = false;
 
 -- Index for language filtering
@@ -647,6 +613,12 @@ WHERE is_backfilled = true;
 
 ---
 
+## Metrics
+
+None. The script exports no Prometheus metrics; it logs per-message results and a final summary (translated, skipped, errors). The Dockerfile healthcheck only opens a psycopg2 connection.
+
+---
+
 ## Related Documentation
 
 ### Internal Documentation
@@ -677,9 +649,9 @@ The Translation Backfill Service is a **standalone batch processor** designed fo
 **Key Takeaways:**
 
 - Uses **DeepL Pro API** (high quality) with **Google Translate fallback**
-- Processes messages in **configurable batches** (default: 20 messages)
+- Processes messages in **configurable batches** (script default 10; Dockerfile loop default 20)
 - Supports **language detection** to skip English messages
-- Tracks progress via **database state** (content_translated field)
+- Tracks progress via **database state** (`content_translated IS NULL`); only `is_backfilled = true` messages are selected
 - **Free tier provides 500,000 chars/month** (~2,500 messages)
 - **Pro tier costs €20/million chars** (€0.004/message)
 

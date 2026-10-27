@@ -10,38 +10,33 @@ Tests are organized by service:
 
 ```
 osint-intelligence-platform/
-├── tests/                          # Root-level shared tests
-│   ├── conftest.py                 # Shared fixtures (db_session, sample_message, etc.)
+├── tests/                          # Root-level model/schema tests
+│   ├── conftest.py                 # Shared fixtures (db_session on in-memory SQLite, sample_message, ...)
 │   ├── test_rss_schema.py
 │   ├── test_entity_relationship_model.py
-│   └── test_message_entity_model.py
+│   └── test_message_entity_model.py ...
 ├── services/
-│   ├── api/tests/                  # API service tests
-│   │   ├── test_api_messages.py
-│   │   ├── test_api_channels.py
-│   │   └── test_rss_feeds.py
-│   ├── processor/tests/            # Processor service tests
-│   │   ├── test_llm_classifier.py
-│   │   ├── test_spam_filter.py
-│   │   ├── test_rule_engine.py
-│   │   ├── test_message_router.py
-│   │   ├── test_entity_extractor.py
-│   │   ├── test_entity_matcher.py
-│   │   └── test_integration_processor_pipeline.py
-│   ├── notifier/tests/             # Notifier service tests
-│   │   ├── test_batcher.py
-│   │   ├── test_formatter.py
-│   │   ├── test_publisher.py
-│   │   └── test_router.py
-│   ├── rss-ingestor/tests/         # RSS ingestor tests
-│   │   ├── test_correlation_engine.py
-│   │   └── test_feed_poller.py
-│   └── opensanctions/tests/        # OpenSanctions tests
-│       ├── test_entity_embedding_generator.py
-│       └── test_opensanctions_client.py
+│   ├── api/tests/                  # ~30 files: admin routes, config, health, search SQL, pagination, ...
+│   ├── processor/tests/            # ~28 files: llm_classifier, llm_guard, openai_compat, media_lane,
+│   │                               #   backlog_reclassify, council, entity_extractor/matcher, message_router, ...
+│   ├── enrichment/tests/           # ~30 files: geolocation, fact_check_gateway, cluster_detection,
+│   │                               #   redis_queue, council_vote, rss_validation_gateway, ...
+│   ├── listener/tests/             # session names, channel sync per account, backfill queues
+│   ├── notifier/tests/             # batcher, filters, formatter, publisher, router
+│   ├── rss-ingestor/tests/         # correlation_engine, feed_poller
+│   ├── opensanctions/tests/        # client, entity embeddings
+│   └── migration/tests/
+├── shared/python/
+│   ├── config/tests/               # runtime config
+│   ├── models/tests/               # gazetteer, locations, clusters (need a database)
+│   └── hardware/tests/
+└── services/frontend-nextjs/       # Vitest: lib/__tests__, components/__tests__ (npm run test:run)
 ```
 
-**Note:** The enrichment service does not currently have a tests directory.
+Most unit tests need no database, Redis or MinIO: each service `conftest.py` sets dummy secrets so `settings` imports, and the processor and enrichment conftests replace `config.runtime` loaders so no database is contacted.
+
+!!! note "Tests that need PostgreSQL"
+    Tests named `*_db.py` and anything using the `db_session` fixture of `services/api/tests`, `services/processor/tests` or `shared/python/models/tests` run against a real PostgreSQL with `infrastructure/postgres/init.sql` applied. Set `TEST_DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname`; without it they are skipped with that reason.
 
 ---
 
@@ -69,9 +64,15 @@ pytest services/api/tests/ -v
 # Processor tests
 pytest services/processor/tests/ -v
 
-# Single test file
-pytest services/processor/tests/test_llm_classifier.py -v
+# Single test file (the 80% coverage gate applies to whole runs: add --no-cov)
+pytest services/processor/tests/test_llm_classifier.py -v --no-cov
+
+# Frontend (Vitest)
+cd services/frontend-nextjs && npm run test:run
 ```
+
+!!! tip "Import paths"
+    API tests import the service as `services.api.src...` (never also as `src...`): loading it twice registers the Prometheus metrics twice (`ValueError: Duplicated timeseries`). Run each service's tests from the repo root.
 
 ### Run Tests by Marker
 
@@ -88,13 +89,7 @@ pytest -m "not slow"
 
 ### Run in Docker
 
-```bash
-# API tests in container
-docker-compose exec api pytest services/api/tests/ -v
-
-# Processor tests in container
-docker-compose exec processor pytest services/processor/tests/ -v
-```
+Run from the host with the repository's Python environment where possible. The service images (for example `api`) copy the service source and shared code but are not guaranteed to include `tests/` or the dev dependencies; if you do run inside a container, mount the repository or install `requirements.txt` first.
 
 ---
 
@@ -129,7 +124,7 @@ markers =
     slow: Slow-running tests
     requires_db: Tests that require database
     requires_redis: Tests that require Redis
-    requires_ollama: Tests that require Ollama
+    requires_ollama: Tests that require Ollama (legacy marker; the LLM is mocked)
 ```
 
 ---
@@ -145,7 +140,7 @@ Root-level fixtures in `tests/conftest.py`:
 
 @pytest_asyncio.fixture
 async def db_engine():
-    """Create in-memory SQLite engine for testing."""
+    """Create in-memory SQLite engine for testing (root tests; tables from the ORM metadata)."""
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -317,14 +312,16 @@ class TestProcessorPipeline:
 
 ## Mocking External Services
 
-### Mocking Ollama
+### Mocking the LLM
+
+The classifier talks to a chat client that mirrors `ollama.AsyncClient`, so one mock covers both the Ollama and gateway providers:
 
 ```python
 from unittest.mock import AsyncMock, patch
 
 @pytest.fixture
-def mock_ollama():
-    """Mock Ollama client for testing."""
+def mock_llm():
+    """Mock the chat client used by LLMClassifier."""
     with patch('src.llm_classifier.AsyncClient') as mock:
         client = AsyncMock()
         client.chat.return_value = {
@@ -334,13 +331,9 @@ def mock_ollama():
         }
         mock.return_value = client
         yield client
-
-
-async def test_classification_with_mock(mock_ollama):
-    classifier = LLMClassifier()
-    result = await classifier.classify("Test content")
-    assert result.topic == "combat"
 ```
+
+For gateway behaviour (429, lane pause on 401/403) see `services/processor/tests/test_openai_compat.py` and the `*_gateway.py` tests in `services/enrichment/tests/`. Tests that exercise the real prompt/parse path do not need a model: build the classifier with `LLMClassifier.__new__(LLMClassifier)` as in `test_llm_classifier.py`.
 
 ### Mocking Database
 
@@ -385,10 +378,21 @@ pytest --cov=services --cov-report=html
 # Open htmlcov/index.html in browser
 ```
 
-### Current Test Coverage
+### Where tests live
 
-| Service | Test Files | Notes |
-|---------|------------|-------|
+| Area | Test files | Notes |
+|------|------------|-------|
+| **api** | ~30 | Admin routes require admin, runtime config, pagination, search SQL, health; DB-backed tests need `TEST_DATABASE_URL` |
+| **processor** | ~28 | Classifier parsing and guards, gateway client, media lane, backlog/council, routing, entities |
+| **enrichment** | ~30 | Geolocation, fact-check and RSS-validation gateway paths, queues, clusters, council vote |
+| **listener** | 7 | Multi-account session names, channel sync, backfill queues |
+| **notifier** | 5 | Batching, filters, formatting, publishing, routing |
+| **rss-ingestor** | 2 | Correlation, polling |
+| **opensanctions** | 2 | Client, embeddings |
+| **shared** | 5 | Runtime config, hardware detection, model schema tests |
+| **frontend** | 2 | Vitest: `metrics-client`, `ErrorBoundary` |
+
+---------|------------|-------|
 | **api** | 3 files | Messages, channels, RSS |
 | **processor** | 7 files | LLM classifier, spam, routing, entities |
 | **notifier** | 4 files | Batching, formatting, publishing |

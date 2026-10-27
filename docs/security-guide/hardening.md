@@ -17,22 +17,22 @@ Use this checklist before deploying to production:
 - [ ] **HTTPS enabled** - Configure TLS with valid certificates
 - [ ] **Strong passwords** - All database and service passwords are random 256-bit secrets
 - [ ] **Secrets not in git** - Verify `.env` is gitignored and never committed
-- [ ] **Firewall configured** - Block direct access to PostgreSQL, Redis, MinIO
+- [ ] **Published ports closed** - `docker-compose.yml` publishes PostgreSQL, Redis, MinIO, Kratos admin (4434) and Caddy admin (2019) on all interfaces; Docker bypasses UFW (see Port Exposure)
 - [ ] **CrowdSec deployed** - Intrusion prevention enabled (production)
-- [ ] **Docker security** - Containers run as non-root users
-- [ ] **Backup encryption** - Database backups are GPG-encrypted
+- [ ] **Docker security** - Only the frontend image drops root today; review the others
+- [ ] **Backup encryption** - `scripts/backup.sh` output is unencrypted; encrypt before off-site copy
 - [ ] **Monitoring enabled** - Prometheus + Grafana monitoring security events
 
 ### Environment Variable Security
 
 - [ ] `POSTGRES_PASSWORD` - Random 32+ character password
-- [ ] `REDIS_PASSWORD` - Random 32+ character password
+- [ ] `REDIS_PASSWORD` - must be set (compose requires it) but the shipped Redis service does **not** enforce a password, so Redis must never be reachable from outside
 - [ ] `JWT_SECRET_KEY` - Random 256-bit key (`openssl rand -hex 32`)
 - [ ] `KRATOS_SECRET_COOKIE` - Random base64 secret
 - [ ] `KRATOS_SECRET_CIPHER` - Exactly 32 characters
 - [ ] `MINIO_ACCESS_KEY` - Strong random string
 - [ ] `MINIO_SECRET_KEY` - Minimum 32 characters
-- [ ] `SECRET_KEY` - Random 256-bit key for general encryption
+- [ ] `MINIO_ROOT_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, `NOCODB_ADMIN_PASSWORD` - strong, unique
 
 ### Network Security
 
@@ -53,7 +53,7 @@ Use this checklist before deploying to production:
 ### Container Security
 
 - [ ] **Image scanning** - Vulnerability scanning enabled
-- [ ] **Non-root users** - All containers run as unprivileged users
+- [ ] **Non-root users** - Only `frontend-nextjs` sets `USER`; other service Dockerfiles run as root
 - [ ] **Resource limits** - CPU/memory limits configured
 - [ ] **Read-only filesystems** - Where applicable
 - [ ] **Minimal images** - Using slim/alpine base images
@@ -80,18 +80,15 @@ sudo ufw allow 22/tcp
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 
-# Block direct database access from internet
-sudo ufw deny 5432/tcp  # PostgreSQL
-sudo ufw deny 6379/tcp  # Redis
-sudo ufw deny 9000/tcp  # MinIO API
-sudo ufw deny 9001/tcp  # MinIO Console
-
 # Enable firewall
 sudo ufw enable
 
 # Verify rules
 sudo ufw status verbose
 ```
+
+!!! danger "Docker bypasses UFW"
+    Ports published by Compose (`ports:`) are added to iptables by Docker ahead of UFW's rules, so `ufw deny 5432` does **not** protect a published PostgreSQL. Either do not publish the port (bind it to `127.0.0.1`), or filter in the `DOCKER-USER` iptables chain. Verify from a different machine with a port scan.
 
 **iptables (Advanced):**
 
@@ -118,10 +115,9 @@ sudo iptables -A INPUT -p tcp --dport 22 -j ACCEPT
 sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT
 sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT
 
-# Block database ports from internet
-sudo iptables -A INPUT -p tcp --dport 5432 -j DROP  # PostgreSQL
-sudo iptables -A INPUT -p tcp --dport 6379 -j DROP  # Redis
-sudo iptables -A INPUT -p tcp --dport 9000 -j DROP  # MinIO
+# Docker-published ports are filtered in the DOCKER-USER chain, not INPUT:
+sudo iptables -I DOCKER-USER -i eth0 -p tcp -m multiport --dports 5432,6379,9000,9001,4433,4434,4455,4456,2019,3000,8000 -j DROP
+# (replace eth0 with your public interface; allow 80/443 only to Caddy)
 
 # Save rules
 sudo apt-get install iptables-persistent
@@ -132,71 +128,56 @@ sudo netfilter-persistent save
 
 **Docker Networks:**
 
-The platform uses isolated Docker networks:
-
-```yaml
-# docker-compose.yml
-networks:
-  frontend:
-    driver: bridge
-  backend:
-    driver: bridge
-```
-
-**Network Isolation:**
-
-- **Frontend network** - Public-facing services (Caddy, Frontend)
-- **Backend network** - Internal services (PostgreSQL, Redis, API)
-- **Monitoring network** - Prometheus, Grafana (isolated)
-
-**Service Placement:**
-
-```yaml
-# Caddy - both networks (reverse proxy)
-networks:
-  - frontend
-  - backend
-
-# API - backend only
-networks:
-  - backend
-
-# PostgreSQL - backend only
-networks:
-  - backend
-```
+`docker-compose.yml` defines a single `backend` bridge network. `docker-compose.production.yml` adds a `frontend` network that Caddy, CrowdSec and the frontend join; the API is moved to `backend` only and loses its published port.
 
 ### Port Exposure
 
-**Production Port Mapping:**
+With only `docker-compose.yml`, these services publish ports on **all host interfaces**:
 
-Only expose essential ports to the internet:
+| Ports | Service | Risk |
+|-------|---------|------|
+| 5432 | PostgreSQL | database access |
+| 6379 | Redis | **no password configured** by the shipped service |
+| 9000/9001 | MinIO API/console | object store |
+| 4433/4434 | Kratos public/**admin** | admin API controls identities |
+| 4455/4456 | Oathkeeper proxy/API | |
+| 2019 | Caddy admin API (`auth` profile base file) | reconfigure proxy |
+| 3000, 8000/8003 | Frontend, API/metrics | bypass Caddy and CrowdSec |
+| 11434/11435 | Ollama | unauthenticated LLM |
+| 9xxx, 8001-8013 | service metrics | information disclosure |
+| 8080 | NocoDB (`tools` profile) | |
+
+Only `ntfy` is bound to `127.0.0.1` by default. For production, reduce this surface with a `docker-compose.override.yml` (Compose 2.24+ supports `!reset`/`!override`):
 
 ```yaml
-# EXPOSE TO INTERNET
-ports:
-  - "80:80"      # HTTP (redirects to HTTPS)
-  - "443:443"    # HTTPS
-
-# DO NOT EXPOSE TO INTERNET
-# Remove these from production docker-compose:
-#   - "5432:5432"  # PostgreSQL
-#   - "6379:6379"  # Redis
-#   - "9000:9000"  # MinIO API
-#   - "8000:8000"  # API (use Caddy reverse proxy)
-#   - "3000:3000"  # Frontend (use Caddy reverse proxy)
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:5432:5432"
+  redis:
+    ports: !override
+      - "127.0.0.1:6379:6379"
+  minio:
+    ports: !override
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+  kratos:
+    ports: !override
+      - "127.0.0.1:4433:4433"
+      - "127.0.0.1:4434:4434"
+  caddy:
+    ports: !override
+      - "80:80"
+      - "443:443"
 ```
 
-**Access Internal Services:**
+Repeat for every other service whose port you do not need from outside, then confirm with `ss -tlnp` on the host and an external scan.
 
-Use SSH tunneling or VPN to access internal services:
+**Access internal services:** use SSH tunnels or a VPN:
 
 ```bash
-# SSH tunnel to PostgreSQL
 ssh -L 5432:localhost:5432 user@your-server
-
-# SSH tunnel to Grafana
-ssh -L 3001:localhost:3001 user@your-server
+ssh -L 3001:localhost:3001 user@your-server   # Grafana (GRAFANA_PORT)
 ```
 
 ## TLS/SSL Configuration
@@ -218,68 +199,15 @@ DOMAIN=osint.example.com
 # 4. Enable HSTS
 ```
 
-**Caddyfile Example:**
-
-```caddyfile
-{
-    email admin@osint.example.com
-}
-
-osint.example.com {
-    # Automatic HTTPS
-    tls {
-        protocols tls1.2 tls1.3
-    }
-
-    # Security headers
-    header {
-        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
-        X-Content-Type-Options "nosniff"
-        X-Frame-Options "SAMEORIGIN"
-        X-XSS-Protection "1; mode=block"
-        Referrer-Policy "strict-origin-when-cross-origin"
-    }
-
-    # Reverse proxy to frontend
-    reverse_proxy frontend:3000
-}
-```
+**Shipped configuration:** `infrastructure/caddy/Caddyfile.security` (used by the production overlay) already sets HSTS (`max-age=63072000; includeSubDomains; preload`), `X-Frame-Options`, a Content-Security-Policy, rate limits and the CrowdSec bouncer. Caddy's defaults negotiate TLS 1.2+ with modern ciphers. Review the CSP (it allows `'unsafe-inline'` and `'unsafe-eval'` scripts) if your threat model requires stricter rules.
 
 ### Manual TLS Certificates
 
-**Using Commercial Certificates:**
-
-```bash
-# Place certificates in infrastructure/caddy/certs/
-mkdir -p infrastructure/caddy/certs
-cp your-domain.crt infrastructure/caddy/certs/
-cp your-domain.key infrastructure/caddy/certs/
-
-# Update Caddyfile
-osint.example.com {
-    tls /etc/caddy/certs/your-domain.crt /etc/caddy/certs/your-domain.key
-}
-```
+Caddy can use your own certificate with a `tls /path/cert /path/key` directive in the site block. The shipped compose files do not mount a certificate directory, so add a volume for it in an override file and edit the Caddyfile accordingly.
 
 ### TLS Best Practices
 
-**Strong Cipher Suites:**
-
-```caddyfile
-tls {
-    protocols tls1.2 tls1.3
-    ciphers TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 \
-            TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 \
-            TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 \
-            TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
-}
-```
-
-**HSTS Configuration:**
-
-```caddyfile
-header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
-```
+Leave Caddy's default cipher and protocol selection unless you have a compliance requirement; restricting ciphers by hand is easy to get wrong.
 
 **Test TLS Configuration:**
 
@@ -315,8 +243,6 @@ KRATOS_SECRET_CIPHER=$(openssl rand -base64 24)  # Exactly 32 chars
 MINIO_ACCESS_KEY=$(openssl rand -hex 16)
 MINIO_SECRET_KEY=$(openssl rand -base64 32)
 
-# General secret key
-SECRET_KEY=$(openssl rand -hex 32)
 ```
 
 **Store in .env:**
@@ -331,7 +257,6 @@ KRATOS_SECRET_COOKIE=$KRATOS_SECRET_COOKIE
 KRATOS_SECRET_CIPHER=$KRATOS_SECRET_CIPHER
 MINIO_ACCESS_KEY=$MINIO_ACCESS_KEY
 MINIO_SECRET_KEY=$MINIO_SECRET_KEY
-SECRET_KEY=$SECRET_KEY
 EOF
 
 # Secure .env file permissions
@@ -350,47 +275,24 @@ git status --ignored | grep .env
 # Should show: .env (ignored)
 ```
 
-### Docker Secrets (Production)
+### Docker Secrets
 
-For enhanced security, use Docker secrets instead of environment variables:
-
-```bash
-# Create secret files
-echo "your-postgres-password" | docker secret create postgres_password -
-echo "your-redis-password" | docker secret create redis_password -
-
-# Update docker-compose.yml
-services:
-  postgres:
-    secrets:
-      - postgres_password
-    environment:
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-
-secrets:
-  postgres_password:
-    external: true
-  redis_password:
-    external: true
-```
+`docker secret` requires Swarm mode and the compose files do not use `*_FILE` variables, so secrets live in `.env` (mode 600, owner-only, excluded from backups sent off-site unencrypted).
 
 ### Secrets Rotation
 
-**Rotate Credentials Quarterly:**
+**Rotate credentials quarterly** (example: database password):
 
 ```bash
-# 1. Generate new password
-NEW_PASSWORD=$(openssl rand -base64 32)
+# 1. Change the role password (POSTGRES_USER is the superuser, osint_user by default)
+docker compose exec postgres psql -U osint_user -d osint_platform -c "ALTER USER osint_user PASSWORD '<new>';"
 
-# 2. Update database password
-docker-compose exec postgres psql -U postgres -c "ALTER USER osint_user PASSWORD '$NEW_PASSWORD';"
-
-# 3. Update .env
-sed -i "s/POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$NEW_PASSWORD/" .env
-
-# 4. Restart services
-docker-compose restart api processor-worker enrichment-*
+# 2. Update POSTGRES_PASSWORD in .env
+# 3. Recreate services so they read the new .env (restart does NOT re-read .env)
+docker compose up -d
 ```
+
+Kratos also builds its DSN from `POSTGRES_PASSWORD`; recreate `kratos` too (the `up -d` above does). Do not rotate `KRATOS_SECRET_CIPHER` casually: it invalidates data Kratos has encrypted.
 
 ## Container Security
 
@@ -437,16 +339,7 @@ docker-compose up -d
 
 **Non-Root Containers:**
 
-```dockerfile
-# Create unprivileged user
-RUN useradd --system --create-home --shell /bin/bash osint
-
-# Switch to non-root user
-USER osint
-
-# Set working directory
-WORKDIR /home/osint
-```
+Only the frontend image (`services/frontend-nextjs/Dockerfile`) creates and uses an unprivileged user. Other service images run as root inside the container. Adding `USER` to a Dockerfile is straightforward but must be tested per service (bind-mounted `./telegram_sessions`, `./data/models` and log directories need matching ownership).
 
 **Resource Limits:**
 
@@ -497,19 +390,14 @@ services:
 # docker-compose.yml
 postgres:
   environment:
-    # Require password authentication
-    POSTGRES_HOST_AUTH_METHOD: md5
-  command:
-    - postgres
-    - -c
-    - ssl=on
-    - -c
-    - ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
-    - -c
-    - ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+    POSTGRES_HOST_AUTH_METHOD: scram-sha-256
 ```
 
+Traffic between containers stays on the Docker network; enable PostgreSQL TLS only if the database is reached across hosts (supply your own certificate files).
+
 **User Permissions:**
+
+All services connect as `POSTGRES_USER` (a superuser created by the image), and migrations need DDL rights. A least-privilege role is possible but must be configured per service and kept out of the migration path:
 
 ```sql
 -- Create limited user for application
@@ -546,52 +434,21 @@ SELECT pg_reload_conf();
 
 ### Backup Encryption
 
-**Encrypted Backups with GPG:**
+**Encrypted backups:** `./scripts/backup.sh` writes an unencrypted directory `backups/<timestamp>/` containing the PostgreSQL dump, Telegram sessions (full account access), a Redis snapshot and configuration. Encrypt it before it leaves the server:
 
 ```bash
-#!/bin/bash
-# backup-encrypted.sh
-
-# Configuration
-BACKUP_DIR="/backups"
-DATE=$(date +%Y-%m-%d)
-GPG_RECIPIENT="admin@osint.example.com"
-
-# Create backup
-docker-compose exec -T postgres pg_dump \
-  -U osint_user \
-  -d osint_platform \
-  --format=custom \
-  | gpg --encrypt --recipient "$GPG_RECIPIENT" \
-  > "$BACKUP_DIR/osint-platform-$DATE.pgdump.gpg"
-
-# Verify backup
-gpg --list-packets "$BACKUP_DIR/osint-platform-$DATE.pgdump.gpg"
-
-# Retention (keep 30 days)
-find "$BACKUP_DIR" -name "*.pgdump.gpg" -mtime +30 -delete
-
-echo "Encrypted backup created: $BACKUP_DIR/osint-platform-$DATE.pgdump.gpg"
+tar -C backups -c <timestamp> | gpg --encrypt --recipient admin@example.com > backups/<timestamp>.tar.gpg
 ```
 
-**Restore Encrypted Backup:**
+**Restore:**
 
 ```bash
-# Decrypt and restore
-gpg --decrypt /backups/osint-platform-2025-01-01.pgdump.gpg \
-  | docker-compose exec -T postgres pg_restore \
-    -U osint_user \
-    -d osint_platform \
-    --clean \
-    --if-exists
+gpg --decrypt backups/<timestamp>.tar.gpg | tar -C backups -x
+./scripts/restore.sh backups/<timestamp> --dry-run   # preview first
+./scripts/restore.sh backups/<timestamp>
 ```
 
-**Automated Backups:**
-
-```bash
-# /etc/cron.d/osint-backup
-0 2 * * * root /usr/local/bin/backup-encrypted.sh >> /var/log/osint-backup.log 2>&1
-```
+`restore.sh` overwrites existing data. Schedule `backup.sh` with cron (see [Backup & Restore](../operator-guide/backup-restore.md)).
 
 ## Media Storage Security (MinIO/S3)
 
@@ -601,7 +458,7 @@ The platform stores archived media files (photos, videos, documents) in MinIO, a
 
 ### Pre-Signed URL Security
 
-Pre-signed URLs provide secure, time-limited access to media files without exposing MinIO directly.
+Pre-signed URLs provide time-limited access to media files. They are **off by default** (`USE_PRESIGNED_URLS=false`); without them media URLs are plain public URLs (`MINIO_PUBLIC_URL`).
 
 **Benefits:**
 
@@ -651,100 +508,22 @@ Internet → Caddy (443) → /media/* → MinIO (internal:9000)
                     Pre-signed validation
 ```
 
-**Docker Compose Configuration:**
-
-```yaml
-services:
-  minio:
-    # ❌ WRONG - exposes to internet
-    # ports:
-    #   - "9000:9000"
-
-    # ✅ CORRECT - internal only
-    expose:
-      - "9000"
-    networks:
-      - backend  # Internal network only
-```
-
-**Caddy Proxy Configuration:**
-
-```caddyfile
-# Media endpoint with rate limiting
-handle /media/* {
-    # Rate limit: 60 requests per minute per IP
-    rate_limit {
-        zone media_zone {
-            key {remote_host}
-            events 60
-            window 1m
-        }
-    }
-
-    # Proxy to internal MinIO
-    reverse_proxy minio:9000 {
-        header_up Host {upstream_hostport}
-    }
-}
-```
+**Compose:** the base file publishes MinIO on `9000/9001` (all interfaces). Rebind to `127.0.0.1` or remove the mapping with an override (see Port Exposure); Caddy and the services reach it as `minio:9000` on the `backend` network. Media is served to browsers by Caddy (local buffer / storage routes with an API redirect fallback); see [Caddy](../operator-guide/caddy.md).
 
 ### Bucket Access Control
 
-**Default Bucket Policy (Private):**
+!!! warning "The media bucket is anonymously readable by default"
+    `minio-init` runs `mc anonymous set download` on the bucket (`MINIO_BUCKET_NAME`, default `osint-media`). Anyone who can reach MinIO and knows or guesses an object key can download it. Keys are content hashes (`media/ab/cd/<sha256>.ext`), so they are unguessable but not secret. Pre-signed URLs only add expiry if you also make the bucket private.
 
-```bash
-# Create bucket with private access
-docker-compose exec minio mc mb local/osint-media
+To make the bucket private (then `USE_PRESIGNED_URLS=true` is required for direct access), change the `minio-init` command in your override file to `mc anonymous set none`, apply it once, and verify media still loads in the UI. Test on a staging copy first, because Caddy's media routes may rely on anonymous reads.
 
-# Verify bucket is private (no public access)
-docker-compose exec minio mc policy get local/osint-media
-# Should output: none
-```
-
-**Never Use Public Buckets:**
-
-```bash
-# ❌ NEVER do this in production
-mc policy set public local/osint-media
-
-# ✅ CORRECT - keep private, use pre-signed URLs
-mc policy set none local/osint-media
-```
+Never expose the MinIO console (9001) publicly; the root credentials (`MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`) grant full control.
 
 ### MinIO Credentials
 
-**Strong Credentials:**
+**Strong credentials:** generate with `openssl rand -hex 16` / `openssl rand -base64 48` and store in `.env` (`MINIO_ROOT_PASSWORD`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`).
 
-```bash
-# Generate strong MinIO credentials
-MINIO_ACCESS_KEY=$(openssl rand -hex 16)
-MINIO_SECRET_KEY=$(openssl rand -base64 48)
-
-# Add to .env
-echo "MINIO_ACCESS_KEY=$MINIO_ACCESS_KEY" >> .env
-echo "MINIO_SECRET_KEY=$MINIO_SECRET_KEY" >> .env
-```
-
-**Credential Rotation:**
-
-```bash
-# 1. Generate new credentials
-NEW_ACCESS_KEY=$(openssl rand -hex 16)
-NEW_SECRET_KEY=$(openssl rand -base64 48)
-
-# 2. Add new credentials to MinIO
-docker-compose exec minio mc admin user add local $NEW_ACCESS_KEY $NEW_SECRET_KEY
-
-# 3. Update services to use new credentials
-sed -i "s/MINIO_ACCESS_KEY=.*/MINIO_ACCESS_KEY=$NEW_ACCESS_KEY/" .env
-sed -i "s/MINIO_SECRET_KEY=.*/MINIO_SECRET_KEY=$NEW_SECRET_KEY/" .env
-
-# 4. Restart services
-docker-compose restart api processor-worker
-
-# 5. Remove old credentials from MinIO
-docker-compose exec minio mc admin user remove local $OLD_ACCESS_KEY
-```
+**Credential rotation:** the services use `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`; MinIO itself uses `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`. Create the new user via the MinIO console or `mc admin user add` from a temporary `mc` container, update `.env`, run `docker compose up -d` (recreate, not restart) and then remove the old user.
 
 ### RSS Feed Media URLs
 
@@ -768,7 +547,7 @@ USE_PRESIGNED_URLS=true
 
 - [ ] **MinIO not exposed to internet** - Internal Docker network only
 - [ ] **Pre-signed URLs enabled** - `USE_PRESIGNED_URLS=true`
-- [ ] **Bucket is private** - No public access policy
+- [ ] **Bucket policy reviewed** - default is anonymous download (see above)
 - [ ] **Strong credentials** - Random 32+ character secrets
 - [ ] **Caddy proxy configured** - Rate limiting enabled
 - [ ] **HTTPS only** - All media accessed via HTTPS
@@ -784,8 +563,8 @@ USE_PRESIGNED_URLS=true
 # View authentication logs
 docker-compose logs -f api | grep -E "(login|logout|auth)"
 
-# View failed login attempts
-docker-compose logs api | grep "401 Unauthorized"
+# View failed login attempts (Kratos flows are in the kratos log)
+docker-compose logs api | grep " 401 "
 ```
 
 **Authorization Failures:**
@@ -801,46 +580,13 @@ docker-compose logs api | grep "/api/admin"
 **Database Access:**
 
 ```bash
-# View PostgreSQL connection logs
-docker-compose exec postgres cat /var/lib/postgresql/data/log/postgresql-*.log | grep "connection"
+# View PostgreSQL logs
+docker-compose logs postgres | grep -i "connection"
 ```
 
 ### Prometheus Alerts
 
-**Security Alert Rules:**
-
-Create `infrastructure/prometheus/rules/security.yml`:
-
-```yaml
-groups:
-  - name: security_alerts
-    interval: 1m
-    rules:
-      - alert: HighFailedLoginRate
-        expr: rate(http_requests_total{status="401",endpoint="/api/auth/login"}[5m]) > 10
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High rate of failed login attempts"
-          description: "{{ $value }} failed logins per second"
-
-      - alert: UnauthorizedAdminAccess
-        expr: rate(http_requests_total{status="403",path=~"/api/admin.*"}[5m]) > 5
-        for: 5m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Unauthorized admin access attempts"
-
-      - alert: DatabaseConnectionSpike
-        expr: pg_stat_activity_count > 100
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Unusual number of database connections"
-```
+**Security alert rules:** Prometheus loads `infrastructure/prometheus/alerts.yml` and `infrastructure/prometheus/rules/*.yml` (service down, queue depth, spam rate, Telegram flood waits, resource usage). Add security-specific rules (for example on CrowdSec metrics from port 6060) to a new file under `rules/` and reload Prometheus. Alerts are delivered through Alertmanager, the notifier and ntfy; see [Monitoring](../operator-guide/monitoring.md).
 
 ### Log Retention
 
@@ -990,9 +736,10 @@ docker-compose exec crowdsec cscli decisions add \
   --duration 24h \
   --reason "Security incident investigation"
 
-# Disable compromised user
-docker-compose exec postgres psql -U osint_user -d osint_platform \
-  -c "UPDATE users SET is_active = false WHERE email = 'compromised@example.com';"
+# Revoke a compromised user's sessions and demote/delete them (admin API; user ids come from GET /api/admin/users)
+#   DELETE /api/admin/users/<user_id>/sessions
+#   PUT    /api/admin/users/<user_id>   {"role": "viewer"}
+#   DELETE /api/admin/users/<user_id>
 ```
 
 **3. Investigate:**
@@ -1003,17 +750,18 @@ docker-compose logs api | grep <suspicious-ip>
 
 # Check database for unauthorized changes
 docker-compose exec postgres psql -U osint_user -d osint_platform \
-  -c "SELECT * FROM audit_log WHERE user_id = <compromised-user-id> ORDER BY created_at DESC LIMIT 100;"
+  -c "SELECT * FROM admin_audit_log WHERE kratos_identity_id = '<compromised-identity-uuid>' ORDER BY created_at DESC LIMIT 100;"
 ```
 
 **4. Recover:**
 
 ```bash
 # Restore from backup if needed
-./scripts/restore-backup.sh /backups/osint-platform-2025-01-01.pgdump.gpg
+./scripts/restore.sh backups/<timestamp>
 
-# Rotate all credentials
-./scripts/rotate-secrets.sh
+# Rotate all credentials by hand (no helper script exists): .env secrets,
+# Kratos cookie secret (invalidates sessions), MinIO and database passwords,
+# then recreate services with `docker compose up -d`
 ```
 
 **5. Document:**

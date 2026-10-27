@@ -12,9 +12,9 @@ The RSS-Ingestor Service monitors external RSS feeds (news outlets, think tanks,
 
 - **feedparser**: RSS/Atom feed parsing
 - **sentence-transformers**: 384-dim embeddings (all-MiniLM-L6-v2, CPU-only)
-- **httpx**: Async HTTP client with rate limiting
+- **httpx** + **asyncio-throttle**: Async HTTP client with rate limiting
 - **pgvector**: Semantic similarity search
-- **asyncio**: Concurrent feed polling
+- **asyncio**: Async I/O (feeds are polled sequentially)
 
 **Core Responsibilities**:
 
@@ -71,12 +71,12 @@ graph TB
 
 | File | Purpose | Lines |
 |------|---------|-------|
-| `main.py` | Service orchestrator, polling cycle, configuration | 394 |
-| `feed_poller.py` | RSS fetch with rate limiting and parsing | 120 |
-| `article_processor.py` | Deduplication, embedding generation, storage | 106 |
-| `correlation_engine.py` | Correlation logic (legacy, moved to enrichment) | 342 |
-| `requirements.txt` | Dependencies (feedparser, sentence-transformers) | 42 |
-| `Dockerfile` | Uses `osint-platform-pytorch-cpu` base image | 24 |
+| `src/main.py` | Service orchestrator, polling cycle, configuration | 393 |
+| `src/feed_poller.py` | RSS fetch with rate limiting and parsing | 119 |
+| `src/article_processor.py` | Deduplication, embedding generation, storage | 105 |
+| `src/correlation_engine.py` | Legacy correlation logic; not imported by `main.py` (moved to enrichment `RSSCorrelationTask`) | 341 |
+| `requirements.txt` | Dependencies (feedparser, sentence-transformers) | |
+| `Dockerfile` | Uses `osint-platform-pytorch-cpu` base image | |
 
 ### Data Flow
 
@@ -329,16 +329,14 @@ CREATE INDEX idx_external_news_category ON external_news(source_category, publis
 
 1. **Semantic Similarity**:
    - Use pgvector `<=>` operator (cosine distance)
-   - Query: `1 - (message.embedding <=> article.embedding) >= threshold`
-   - Default threshold: 0.75 (configurable via `platform_config`)
+   - Query: `1 - (message.content_embedding <=> article.embedding) >= threshold`
+   - Default threshold: 0.40 (`correlation_similarity_threshold` in `platform_config`; low on purpose for cross-lingual RU/UK to EN matching)
 
 2. **Time Window Filtering**:
-   - Match messages within ±6 hours of article publication (configurable)
-   - Accounts for time zone differences and publication delays
+   - Match articles within ±24 hours of the message date (`correlation_time_window_hours`; news often lags Telegram by 12-24 h)
 
 3. **Entity Overlap Scoring**:
-   - Compare extracted entities (locations, units, equipment, people)
-   - Calculate overlap percentage: `matched / total_unique * 100`
+   - Currently stored as `0` by `RSSCorrelationTask` (column reserved; not calculated)
 
 4. **Perspective Detection**:
    - Detect opposing viewpoints (Ukraine vs Russia sources)
@@ -347,7 +345,8 @@ CREATE INDEX idx_external_news_category ON external_news(source_category, publis
 5. **Create Correlation Record**:
    - Store in `message_news_correlations` table
    - Include similarity score, entity overlap, matched entities
-   - Set correlation type: `same_event` (>0.85) or `related_topic`
+   - Set correlation type: `same_event` (>= 0.85), `related_topic` (>= 0.75) or `possibly_related` (below that)
+   - Validation columns (`validation_type`, `relevance_explanation`, `confidence`) are filled later by the `rss_validation` enrichment task
 
 **Correlation Schema**:
 
@@ -360,13 +359,13 @@ CREATE TABLE IF NOT EXISTS message_news_correlations (
     similarity_score NUMERIC NOT NULL,          -- 0-1 (pgvector cosine)
     entity_overlap_score INTEGER,               -- 0-100%
     time_proximity_hours NUMERIC,
-    correlation_type VARCHAR(50),               -- same_event, related_topic
+    correlation_type VARCHAR(50),               -- same_event, related_topic, possibly_related
     telegram_source_category VARCHAR(50),
     rss_source_category VARCHAR(50),
     perspective_difference BOOLEAN,             -- Opposing viewpoints
     matched_entities JSONB,                     -- {locations: [...], units: [...]}
 
-    validation_type VARCHAR(50),                -- confirms, contradicts, context
+    validation_type VARCHAR(50),                -- confirms, contradicts, context, alternative
     relevance_explanation TEXT,
     confidence FLOAT,
 
@@ -379,86 +378,23 @@ CREATE TABLE IF NOT EXISTS message_news_correlations (
 
 ### Environment Variables
 
-**File**: `.env` (root of repository)
+!!! warning "The `RSS_*` variables in `.env.example` are not read by any service"
+    The ingestor reads no `RSS_*` environment variables. Behaviour is controlled by the `platform_config` keys in the next section (editable on the admin page or in NocoDB). `RSS_INGESTION_ENABLED`, `RSS_CORRELATION_*`, `RSS_FACT_CHECK_*`, `RSS_RETENTION_DAYS` etc. in `.env.example` have no effect, and `RSS_CORRELATION_TIME_WINDOW_HOURS=6` there contradicts the real default of 24 h. `RSS_MAX_ARTICLES_PER_POLL` is likewise unused: `FeedPoller()` is built with its default of 50 articles per feed.
+
+What the container does need (from `docker-compose.yml`, no profile, always started):
 
 ```bash
-# ============================================================================
-# RSS INGESTION SERVICE
-# ============================================================================
-
-# Enable/disable RSS ingestion globally
-RSS_INGESTION_ENABLED=true
-
-# Polling interval in minutes (default: 5)
-# Shorter intervals = faster updates, higher load
-RSS_INGESTION_INTERVAL_MINUTES=5
-
-# Maximum feeds to poll per cycle (default: 50)
-RSS_MAX_FEEDS=50
-
-# Maximum articles to fetch per feed per poll (default: 50)
-RSS_MAX_ARTICLES_PER_POLL=50
-
-# Article retention in days (cleanup via enrichment maintenance worker)
-RSS_RETENTION_DAYS=90
-
-# ============================================================================
-# RSS CORRELATION (Enrichment Service)
-# ============================================================================
-
-# Enable/disable correlation between RSS and Telegram
-RSS_CORRELATION_ENABLED=true
-
-# Minimum cosine similarity to create correlation (0.0-1.0)
-# Higher = stricter matching, fewer correlations
-RSS_CORRELATION_SIMILARITY_THRESHOLD=0.40
-
-# Time window for message matching (±N hours from article publication)
-RSS_CORRELATION_TIME_WINDOW_HOURS=6
-
-# Maximum correlations to create per message
-RSS_CORRELATION_MAX_PER_MESSAGE=10
-
-# ============================================================================
-# RSS VALIDATION LAYER (LLM-based, enrichment-rss-validation on the gateway batch lane;
-# model alias RSS_VALIDATION_MODEL; see the LLM Gateway page)
-# ============================================================================
-
-# Enable LLM fact-checking of correlations
-RSS_FACT_CHECK_ENABLED=true
-
-# Minimum importance threshold for fact-check (legacy env var name)
-RSS_FACT_CHECK_MIN_OSINT_SCORE=75
-
-# Minimum correlation similarity to trigger fact-check (0-100)
-RSS_FACT_CHECK_MIN_CORRELATION=80
-
-# Show alternative viewpoints in frontend (perspective_difference=true)
-RSS_SHOW_ALTERNATIVE_VIEWPOINTS=true
-
-# ============================================================================
-# RSS PERFORMANCE
-# ============================================================================
-
-# Worker threads for concurrent feed polling (default: 2)
-RSS_WORKER_THREADS=2
-
-# Embedding batch size for sentence-transformers (default: 10)
-RSS_EMBEDDING_BATCH_SIZE=10
-
-# Enable RSS feed outbound proxy (if behind firewall)
-RSS_OUTBOUND_ENABLED=true
-
-# Cache RSS feed content (minutes)
-RSS_CACHE_MINUTES=10
-
-# ============================================================================
-# PYTORCH CPU (Shared Base Image)
-# ============================================================================
-
-# PyTorch is in base image (osint-platform-pytorch-cpu:latest)
-# Do NOT add torch to requirements.txt
+# Database (DATABASE_URL is derived from these by shared/python/config/settings.py)
+POSTGRES_HOST=postgres  POSTGRES_PORT=5432  POSTGRES_DB  POSTGRES_USER  POSTGRES_PASSWORD
+# Required by shared settings validation
+REDIS_HOST=redis  MINIO_ENDPOINT  MINIO_ACCESS_KEY  MINIO_SECRET_KEY  JWT_SECRET_KEY
+LOG_LEVEL=INFO
+# Embedding model comes from the local cache only
+HF_HOME=/app/.cache/huggingface
+HF_HUB_OFFLINE=1
 ```
+
+`HF_HUB_OFFLINE=1` means `all-MiniLM-L6-v2` must already be in `./data/huggingface` (shared cache) or pinned under `./data/models` (see `scripts/fetch-models.sh`); the container never downloads it.
 
 ### Database Configuration
 
@@ -471,14 +407,14 @@ RSS_CACHE_MINUTES=10
 | `max_feeds` | `50` | Feeds per cycle |
 | `correlation_enabled` | `true` | Enable correlation |
 | `correlation_similarity_threshold` | `0.40` | Min similarity (0-1) |
-| `correlation_time_window_hours` | `24` | Time window (±hours) |
+| `correlation_time_window_hours` | `24` | Time window (±hours); read by enrichment |
 | `correlation_max_per_message` | `10` | Most similar articles kept per message |
 | `fact_check_enabled` | `true` | Queue correlated messages for LLM validation |
 | `fact_check_min_importance` | `low` | Minimum message importance to validate |
 | `validation_min_similarity` | `0.5` | Similarity floor for validation |
 | `retention_days` | `90` | RSS retention (uncorrelated articles only) |
 
-These are admin settings (category `rss`, migration 035) and are listed with defaults in [`runtime_keys.py`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/shared/python/config/runtime_keys.py); they apply without a restart.
+These are admin settings (category `rss`, migration 035) and are listed with defaults in [`runtime_keys.py`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/shared/python/config/runtime_keys.py). The ingestor itself only reads `ingestion_enabled`, `ingestion_interval_minutes` and `max_feeds` (every cycle, so no restart needed); the others are consumed by the enrichment service and API. A NULL value means no override and the current value is kept.
 
 **Loading Configuration** (from `main.py`):
 
@@ -488,10 +424,10 @@ async def load_config(self, db: AsyncSession):
         text("SELECT key, value FROM platform_config WHERE category = 'rss'")
     )
     config_rows = result.fetchall()
-    config_dict = {row[0]: row[1] for row in config_rows}
+    config_dict = {row[0]: row[1] for row in config_rows if row[1] is not None}
 
     if 'ingestion_enabled' in config_dict:
-        self.enabled = config_dict['ingestion_enabled'].lower() in ('true', '1', 'yes')
+        self.enabled = config_dict['ingestion_enabled'].lower() in ('true', '1', 'yes', 't')
 
     if 'ingestion_interval_minutes' in config_dict:
         self.interval_minutes = int(config_dict['ingestion_interval_minutes'])
@@ -501,7 +437,7 @@ async def load_config(self, db: AsyncSession):
 
 ### Prometheus Metrics
 
-**Endpoint**: `http://rss-ingestor:9095/metrics` (planned, not yet implemented)
+**Endpoint**: none. The service does not expose a metrics endpoint (`prometheus-client` is in `requirements.txt` but unused); the metrics below are proposed only.
 
 **Proposed Metrics**:
 
@@ -618,7 +554,9 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Set environment variables
-export DATABASE_URL="postgresql+asyncpg://osint_user:password@localhost:5432/osint_platform"
+export POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_DB=osint_platform
+export POSTGRES_USER=osint_user POSTGRES_PASSWORD=password
+export PYTHONPATH="$PWD/../..:$PWD/../../shared/python"  # imports use both shared.python.* and observability
 
 # Run service
 python -m src.main
@@ -665,8 +603,8 @@ pytest -v tests/
 
 **Test Coverage**:
 
-- `test_feed_poller.py`: 28 tests (feed parsing, deduplication, date handling)
-- `test_correlation_engine.py`: 19 tests (entity overlap, perspective detection)
+- `test_feed_poller.py`: feed parsing, deduplication, date handling
+- `test_correlation_engine.py`: entity overlap, perspective detection (covers the legacy engine, not what runs in production)
 
 ## Troubleshooting
 
@@ -688,7 +626,7 @@ curl https://www.defense.gov/News/Releases/rss.xml | xmllint --format - | head -
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| `403 Forbidden` | Missing/blocked User-Agent | Set proper User-Agent in httpx client |
+| `403 Forbidden` | Missing/blocked User-Agent (the poller sends httpx's default) | Set a `User-Agent` header on the `httpx.AsyncClient` in `feed_poller.py` |
 | `SSL: CERTIFICATE_VERIFY_FAILED` | Invalid SSL cert | Update CA certificates or add exception |
 | `Timeout` | Slow feed server | Increase `httpx.AsyncClient(timeout=60.0)` |
 | `404 Not Found` | Feed URL changed | Update `url` in `rss_feeds` table |
@@ -766,9 +704,9 @@ docker-compose logs rss-ingestor | grep "sentence-transformers model"
    - Model requires ~400MB RAM
    - Check Docker memory limits: `docker stats rss-ingestor`
 
-3. **Network issues downloading model**:
-   - sentence-transformers downloads from HuggingFace on first run
-   - Check internet connectivity: `docker-compose exec rss-ingestor curl -I https://huggingface.co`
+3. **Model not in the local cache**:
+   - The container runs with `HF_HUB_OFFLINE=1` and never downloads the model
+   - Check `./data/huggingface` (mounted at `/app/.cache/huggingface`) contains `all-MiniLM-L6-v2`, or run `scripts/fetch-models.sh`
 
 **Fallback Behavior**:
 
@@ -803,11 +741,8 @@ docker-compose exec postgres psql -U osint_user -d osint_platform -c "SELECT COU
 **Check Configuration**:
 
 ```bash
-# Verify DATABASE_URL
-docker-compose exec rss-ingestor env | grep DATABASE_URL
-
-# Should be:
-# DATABASE_URL=postgresql+asyncpg://osint_user:password@postgres:5432/osint_platform
+# DATABASE_URL is built from the POSTGRES_* variables
+docker-compose exec rss-ingestor env | grep POSTGRES_
 ```
 
 **Check pgvector Extension**:
@@ -839,7 +774,7 @@ docker stats rss-ingestor
 **Common Causes**:
 
 1. **Too many feeds polled concurrently**:
-   - Reduce `RSS_MAX_FEEDS` in `.env`
+   - Reduce `max_feeds` (`platform_config`, category `rss`)
    - Sequential polling (current implementation) prevents this
 
 2. **Large article content**:
@@ -854,7 +789,8 @@ docker stats rss-ingestor
 
 ```bash
 # Limit Docker container memory
-docker-compose up -d --scale rss-ingestor=1 --memory="1g" rss-ingestor
+# Set mem_limit on the rss-ingestor service in docker-compose, then:
+docker-compose up -d rss-ingestor
 
 # Monitor memory after limit
 docker stats rss-ingestor
@@ -870,10 +806,10 @@ docker stats rss-ingestor
 
 ```bash
 # Verify enrichment service is running
-docker-compose ps enrichment
+docker-compose ps | grep enrichment
 
-# Check enrichment logs for RSSCorrelationTask
-docker-compose logs enrichment | grep "RSSCorrelation"
+# RSSCorrelationTask runs in the fast-pool worker (enrichment-fast-pool)
+docker-compose logs enrichment-fast-pool | grep "RSSCorrelation"
 
 # Check correlation records
 docker-compose exec postgres psql -U osint_user -d osint_platform -c \
@@ -883,10 +819,7 @@ docker-compose exec postgres psql -U osint_user -d osint_platform -c \
 **Manual Backfill** (if correlations missing):
 
 ```bash
-# Run backfill script (enrichment service)
-docker-compose exec enrichment python /app/scripts/backfill_rss_correlations.py
-
-# Or from host
+# Run the backfill script from the repo root on the host
 python scripts/backfill_rss_correlations.py
 ```
 
@@ -920,8 +853,7 @@ For time-sensitive feeds (breaking news, military briefings):
 **Reduce Polling Interval**:
 
 ```bash
-# In .env
-RSS_INGESTION_INTERVAL_MINUTES=1  # Poll every 60 seconds
+# platform_config (admin page, category rss): ingestion_interval_minutes = 1
 ```
 
 **Disable Embeddings** (faster ingestion):
@@ -939,8 +871,7 @@ For VPS with limited CPU/memory (e.g., 2GB RAM):
 **Reduce Concurrent Feeds**:
 
 ```bash
-# In .env
-RSS_MAX_FEEDS=10  # Poll only 10 feeds per cycle
+# platform_config (admin page, category rss): max_feeds = 10
 ```
 
 **Sequential Polling** (already implemented):
@@ -979,8 +910,8 @@ services/rss-ingestor/
 │   └── correlation_engine.py    # Legacy correlation (moved to enrichment)
 ├── tests/
 │   ├── __init__.py
-│   ├── test_feed_poller.py      # 28 tests
-│   └── test_correlation_engine.py  # 19 tests
+│   ├── test_feed_poller.py
+│   └── test_correlation_engine.py
 ├── requirements.txt             # Dependencies
 ├── Dockerfile                   # Uses pytorch-cpu base
 └── README.md                    # Service overview

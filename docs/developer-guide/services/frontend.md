@@ -1,13 +1,13 @@
 # Frontend Service
 
-> Next.js 14 web application providing OSINT analyst interface for searching, browsing, and analyzing archived intelligence
+> Next.js 15 web application providing OSINT analyst interface for searching, browsing, and analyzing archived intelligence
 
 ## Overview
 
-The Frontend Service is a modern React-based web application built with Next.js 14, serving as the primary user interface for the OSINT Intelligence Platform. It provides a rich, responsive experience for analysts to search, filter, visualize, and interact with archived Telegram data.
+The Frontend Service is a modern React-based web application built with Next.js 15 (React 19), serving as the primary user interface for the OSINT Intelligence Platform. It provides a rich, responsive experience for analysts to search, filter, visualize, and interact with archived Telegram data.
 
 **Key Capabilities:**
-- Full-text and semantic search across 254+ channels
+- Full-text and semantic search across all archived channels
 - AI-enriched message cards with 3 density modes (compact, detailed, immersive)
 - Interactive graph visualizations (Sigma.js + graphology, ReactFlow)
 - Real-time data fetching with React Query
@@ -16,13 +16,13 @@ The Frontend Service is a modern React-based web application built with Next.js 
 
 **Technology Stack:**
 - **Framework**: Next.js 15.5 (App Router architecture), React 19
-- **Runtime**: Bun 1.0 (faster than Node.js)
+- **Runtime**: Node.js 24 (Docker image `node:24.21.0-bookworm-slim`, npm lockfile)
 - **Language**: TypeScript 5
 - **Styling**: TailwindCSS 3.4 with custom CSS variables
 - **State Management**: TanStack Query (React Query) v5
 - **Graph Visualization**: Sigma.js 3 + graphology (ForceAtlas2 layout) for entity and social graphs; ReactFlow 11 for the News timeline (Cytoscape.js was replaced in January 2026)
 - **Charts**: Recharts 3
-- **Authentication**: Ory Kratos integration (placeholder)
+- **Authentication**: Ory Kratos session cookie (`middleware.ts`, `contexts/AuthContext.tsx`, `app/auth/*`)
 - **Icons**: Lucide React
 
 ## Architecture
@@ -39,13 +39,17 @@ services/frontend-nextjs/
 │   ├── channels/               # Channel browser
 │   ├── entities/               # Entity profiles
 │   ├── events/                 # Event timeline
+│   ├── map/                    # Map view (MapLibre)
+│   ├── auth/                   # Kratos login, registration, recovery, verification
+│   ├── profile/                # Account, API keys, feeds, usage
 │   ├── admin/                  # Admin panel
 │   │   ├── page.tsx            # Dashboard
 │   │   ├── channels/           # Channel management
 │   │   ├── stats/              # Platform statistics
 │   │   ├── spam/               # Spam review
 │   │   ├── prompts/            # LLM prompt editor
-│   │   └── ...
+│   │   ├── fact-check/         # Fact-check review queue
+│   │   └── ...  (also audit, config, entities, export, feeds, kanban, media, system, users)
 │   ├── about/                  # Architecture visualization
 │   ├── settings/               # User settings
 │   └── unified/                # Unified search (semantic)
@@ -58,16 +62,16 @@ services/frontend-nextjs/
 │   ├── social-graph/           # Social network viz
 │   └── about/                  # Architecture diagram
 ├── lib/                        # Utilities and API client
-│   ├── api.ts                  # API client (60+ functions)
+│   ├── api.ts                  # API client (core functions; admin-api.ts, api-unified.ts, api/ for the rest)
 │   ├── types.ts                # TypeScript types
 │   ├── query-provider.tsx      # React Query setup
 │   └── utils.ts                # Helpers
-├── contexts/                   # React contexts
-│   └── AuthContext.tsx         # Auth (placeholder)
+├── contexts/                   # React contexts (AuthContext, ContentWarningContext, ImmersiveContext)
+├── middleware.ts               # Redirects /admin, /settings, /bookmarks to login without a Kratos session
 ├── public/                     # Static assets
 ├── next.config.js              # Next.js configuration
 ├── tailwind.config.ts          # TailwindCSS config
-├── Dockerfile                  # Multi-stage build with Bun
+├── Dockerfile                  # Multi-stage build on Node 24 (standalone output)
 └── package.json                # Dependencies
 ```
 
@@ -170,18 +174,18 @@ PostCard component adapts to three viewing modes:
 
 | Route | Description | Auth Required |
 |-------|-------------|---------------|
-| `/admin` | **Dashboard** | Future (Ory Kratos) |
-| `/admin/channels` | **Channel Management** | Future |
-| `/admin/stats` | **Platform Statistics** | Future |
-| `/admin/spam` | **Spam Review Queue** | Future |
-| `/admin/prompts` | **LLM Prompt Editor** | Future |
-| `/admin/entities` | **Entity Curation** | Future |
-| `/admin/config` | **System Configuration** | Future |
-| `/admin/export` | **Data Export** | Future |
-| `/admin/audit` | **Audit Logs** | Future |
-| `/settings/feed-tokens` | **Feed Token Management** | Future |
+| `/admin` | **Dashboard** | Kratos session (middleware) + admin role (API) |
+| `/admin/channels` | **Channel Management** | Admin |
+| `/admin/stats` | **Platform Statistics** | Admin |
+| `/admin/spam` | **Spam Review Queue** | Admin |
+| `/admin/prompts` | **LLM Prompt Editor** | Admin |
+| `/admin/entities` | **Entity Curation** | Admin |
+| `/admin/config` | **System Configuration** | Admin |
+| `/admin/export` | **Data Export** | Admin |
+| `/admin/audit` | **Audit Logs** | Admin |
+| `/settings/feed-tokens` | **Feed Token Management** | Admin |
 
-> **Note:** Authentication is currently a placeholder. Ory Kratos is deployed but not integrated. All routes are publicly accessible.
+> **Note:** `middleware.ts` redirects `/admin`, `/settings` and `/bookmarks` to `/auth/login` when there is no `ory_kratos_session` cookie. It only checks that the cookie exists; admin role enforcement happens in the API. Further routes (`/map`, `/profile`, `/admin/fact-check`, `/admin/kanban`, `/admin/media`, `/admin/system`, `/admin/users`, `/admin/feeds`) exist beyond the table. With `AUTH_PROVIDER=none` the UI runs without login.
 
 ## Key Components
 
@@ -251,7 +255,7 @@ import { MediaLightbox } from '@/components/MediaLightbox';
 - Text search (original + translated)
 - Semantic search toggle (AI embeddings)
 - Country filter (Ukraine 🇺🇦, Russia 🇷🇺)
-- Channel dropdown (254+ channels)
+- Channel dropdown (all active channels)
 - Media type filters
 - Importance level (high/medium/low)
 - Topic classification (12 categories)
@@ -317,7 +321,7 @@ comes from.
 
 ### API Client (`lib/api.ts`)
 
-The API client provides 60+ typed functions for interacting with the backend.
+The API client (`lib/api.ts`, plus `lib/admin-api.ts` and `lib/api-unified.ts`) provides typed functions for interacting with the backend.
 
 **Core Pattern:**
 
@@ -505,10 +509,16 @@ TailwindCSS breakpoints:
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `NEXT_PUBLIC_API_URL` | API base URL (client-side) | `http://localhost:8000` | Yes |
-| `NEXT_PUBLIC_MINIO_URL` | MinIO media URL (client-side) | `http://localhost:9000/telegram-archive` | Yes |
+| `NEXT_PUBLIC_MINIO_URL` | MinIO media URL (client-side) | `http://localhost:9000/osint-media` | Yes |
 | `NEXT_PUBLIC_BASE_URL` | Frontend base URL (OpenGraph) | `http://localhost:3000` | No |
 | `API_URL` | API URL (server-side) | `http://api:8000` | No |
-| `MINIO_URL` | MinIO URL (server-side) | `http://minio:9000/telegram-archive` | No |
+| `MINIO_URL` | MinIO URL (server-side) | `http://minio:9000/osint-media` | No |
+| `INTERNAL_API_URL` | API URL for the `/media/*` rewrite in `next.config.js` | `http://api:8000` | No |
+| `NEXT_PUBLIC_PLATFORM_NAME` | Platform name (compose: `PLATFORM_NAME`) | `OSINT Intelligence Platform` | No |
+| `NEXT_PUBLIC_AUTH_PROVIDER` | Compose: `AUTH_PROVIDER`; `none` disables login UI | `none` | No |
+| `NEXT_PUBLIC_ORY_URL` | Kratos public URL (default: same-origin `/kratos`) | - | No |
+| `NEXT_PUBLIC_KOFI_USERNAME` | Optional support link | - | No |
+| `NEXT_PUBLIC_CONTENT_WARNING_ENABLED` / `_THEME` / `_DURATION_DAYS` | Content warning modal settings | - | No |
 | `NEXT_PUBLIC_BASE_PATH` | Base path for subpath deployments | `` | No |
 
 > **Critical:** `NEXT_PUBLIC_*` variables are baked into the bundle at **build time**. If you change them, you must rebuild the Docker image.
@@ -518,7 +528,7 @@ TailwindCSS breakpoints:
 ```dockerfile
 # Dockerfile
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
-ARG NEXT_PUBLIC_MINIO_URL=http://localhost:9000/telegram-archive
+ARG NEXT_PUBLIC_MINIO_URL=http://localhost:9000/osint-media
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV NEXT_PUBLIC_MINIO_URL=${NEXT_PUBLIC_MINIO_URL}
 ```
@@ -527,7 +537,7 @@ ENV NEXT_PUBLIC_MINIO_URL=${NEXT_PUBLIC_MINIO_URL}
 ```bash
 docker build \
   --build-arg NEXT_PUBLIC_API_URL=https://api.example.com \
-  --build-arg NEXT_PUBLIC_MINIO_URL=https://media.example.com/telegram-archive \
+  --build-arg NEXT_PUBLIC_MINIO_URL=https://media.example.com/osint-media \
   -t osint-frontend:latest \
   .
 ```
@@ -546,7 +556,7 @@ const nextConfig = {
         protocol: 'http',
         hostname: 'minio',
         port: '9000',
-        pathname: '/telegram-archive/**',
+        pathname: '/osint-media/**',
       },
     ],
   },
@@ -555,12 +565,16 @@ const nextConfig = {
 };
 ```
 
+## Metrics
+
+The frontend exposes no Prometheus endpoint; monitor it through the container healthcheck (`GET /` on port 3000) and Caddy/Loki logs. The admin dashboards read pipeline metrics from the API via `lib/metrics-client.ts` (WebSocket with polling fallback).
+
 ## Development
 
 ### Local Development
 
 **Prerequisites:**
-- Bun 1.0+ (or Node.js 18+)
+- Node.js 20+ (the image uses Node 24)
 - Running API service at `http://localhost:8000`
 - Running MinIO at `http://localhost:9000`
 
@@ -570,26 +584,26 @@ const nextConfig = {
 cd services/frontend-nextjs
 
 # Install dependencies
-bun install
+npm install
 
 # Create .env.local
 cp .env.example .env.local
 # Edit .env.local with your API URLs
 
 # Run development server
-bun run dev
+npm run dev
 # Open http://localhost:3000
 ```
 
 **Available Scripts:**
 
 ```bash
-bun run dev          # Development server with hot reload
-bun run build        # Production build
-bun run start        # Start production server
-bun run lint         # ESLint
-bun run type-check   # TypeScript type checking
-bun run test         # Vitest unit tests
+npm run dev          # Development server with hot reload
+npm run build        # Production build
+npm run start        # Start production server
+npm run lint         # ESLint
+npm run type-check   # TypeScript type checking
+npm run test         # Vitest unit tests
 ```
 
 ### Hot Reload
@@ -616,10 +630,10 @@ Access at bottom of page to inspect query cache, refetch queries, and debug.
 
 ```bash
 # Build with default env vars
-bun run build
+npm run build
 
 # Build with custom API URL (for Docker)
-NEXT_PUBLIC_API_URL=https://api.example.com bun run build
+NEXT_PUBLIC_API_URL=https://api.example.com npm run build
 ```
 
 **Output:**
@@ -687,7 +701,7 @@ useEffect(() => {
 
 ```bash
 # Test MinIO access
-curl http://localhost:9000/telegram-archive/media/test.jpg
+curl http://localhost:9000/osint-media/media/test.jpg
 ```
 
 ### Build Fails with "Module not found"
@@ -760,9 +774,9 @@ queryClient.invalidateQueries({ queryKey: ['messages'] });
 **Unit Tests (Vitest):**
 
 ```bash
-bun run test              # Run tests
-bun run test:run          # Run once (CI)
-bun run test:coverage     # Coverage report
+npm run test              # Run tests
+npm run test:run          # Run once (CI)
+npm run test:coverage     # Coverage report
 ```
 
 **Example test:**

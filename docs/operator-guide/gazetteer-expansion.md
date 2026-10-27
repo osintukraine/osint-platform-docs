@@ -31,6 +31,7 @@ export POSTGRES_USER=osint_user
 export POSTGRES_PASSWORD=your_password
 
 # Download country data (e.g., Poland)
+mkdir -p data/geonames
 curl -sL "https://download.geonames.org/export/dump/PL.zip" -o data/geonames/PL.zip
 unzip data/geonames/PL.zip -d data/geonames/
 
@@ -118,5 +119,6 @@ unzip /tmp/{CC}.zip -d data/geonames/
 
 ## Related
 
-- [Event Detection V3](../architecture/event-detection-v3.md) - Geolocation pipeline architecture
-- [Off-Topic Detection](../features/off-topic-detection.md) - How off-topic content is handled
+- [Enrichment Service](../developer-guide/services/enrichment.md) - Geolocation pipeline
+- [Map API](../developer-guide/map-api.md) - Where geolocated messages are served
+- [Database Tables](../reference/database-tables.md) - `location_gazetteer`

@@ -131,80 +131,21 @@ These are Telegram's premium reactions that cost money.
 
 ### Graph Controls
 
-**Layout Selector:**
-
-Available layouts (sorted by usefulness):
-
-**Force-Directed (fCoSE)** - Default, recommended
-- Physics-based organic clustering
-- Nodes repel and edges attract
-- Best for complex graphs
-- Quality: Default (can be "proof" for precision)
-
-**Concentric Circles**
-- Message at center
-- Author/forward sources in inner ring
-- Comments in outer ring
-- Good for hierarchical view
-
-**Breadth-First Tree**
-- Hierarchical tree layout
-- Message as root
-- Good for reply chains
-
-**CoSE-Bilkent**
-- Advanced force-directed
-- Better for large graphs (50+ nodes)
-- More computational cost
-
-**Grid**
-- Organized grid pattern
-- Good for even distribution
-- Less semantic meaning
-
-**Circle**
-- All nodes in circle
-- Message placement varies
-- Simple, predictable
-
-**CoSE (simpler)**
-- Basic force-directed
-- Faster than fCoSE
-- Less refined
+The graph is laid out automatically with a force-directed layout (connected nodes pull together, others push apart) and drawn in your browser.
 
 **View Controls:**
 
-Zoom In (🔍+)
-- Click to zoom 30% closer
-- Maximum: 3x zoom
-
-Zoom Out (🔍-)
-- Click to zoom 30% further
-- Minimum: 0.3x zoom
-
-Reset View
-- Fits entire graph to canvas
-- Centers graph
-- Resets zoom to 1x
-
-Re-run Layout (🔄)
-- Recomputes current layout
-- Useful after manual node dragging
-- Refreshes positions
-
-**Export:**
-
-Download as PNG (📥)
-- 2x resolution for quality
-- Includes background color (theme-aware)
-- Filename: `social-graph-message-{id}.png`
+- **Zoom In / Zoom Out** - Step the zoom in or out
+- **Reset View** - Fits the entire graph to the canvas
+- **Re-run Layout** (🔄) - Recomputes node positions
+- **Export as PNG** (📥) - Saves the graph as an image (theme-aware background), useful for reports
 
 ### Interacting with the Graph
 
 **Navigation:**
 - **Drag canvas** - Pan around the graph
 - **Scroll wheel** - Zoom in/out
-- **Drag nodes** - Reposition manually
+- **Hover node** - Highlights it
 - **Click node** - View detailed info panel
 
 **Node Selection:**
@@ -242,10 +183,6 @@ When you click a node, a detail panel appears showing:
 - Click anywhere on canvas
 - Click another node
 
-**Hover Effects:**
-- Node border thickens on hover
-- Indicates interactivity
-
 ### Empty States
 
 **No Relationships:**
@@ -267,31 +204,11 @@ Message has none of:
 - Message is standalone (no forwards/replies)
 - Channel doesn't expose author info
 - No linked discussion group
-- Too old (pre-social graph feature)
+- Older messages archived before relationship tracking was added
 
 ## Channel Social Graph (Coming Soon)
 
-**Planned Features:**
-
-**Forward Chains:**
-- Visualize which channels forward from which
-- Identify primary sources vs. aggregators
-- Detect coordination patterns
-
-**Temporal Analysis:**
-- Time-based graph evolution
-- Peak activity periods
-- Coordination timing
-
-**Community Detection:**
-- Algorithmic clustering of related channels
-- Identify echo chambers
-- Find bridge channels
-
-**Influence Metrics:**
-- PageRank-style scoring
-- Betweenness centrality
-- In-degree vs. out-degree
+Channel-level analysis (which channels forward from which, communities of related channels, influence ranking) is not yet available in the web interface.
 
 ## Use Cases
 
@@ -362,22 +279,9 @@ Message has none of:
 
 ## Performance & Limitations
 
-### Graph Size Limits
+### Graph Size
 
-**Comfortable:**
-- Up to 50 nodes
-- Up to 100 edges
-- Renders in <1 second
-
-**Large:**
-- 50-200 nodes
-- Slower layout computation (2-5 seconds)
-- May need simplified layout (grid/circle)
-
-**Very Large:**
-- 200+ nodes (rare for per-message graphs)
-- Consider filtering or aggregation
-- Use breadth-first or grid layout
+Per-message graphs are normally small (a handful of nodes up to a few dozen) and render instantly. Messages with very many comments or reactions produce larger graphs that take a few seconds to lay out.
 
 ### Browser Performance
 
@@ -387,25 +291,14 @@ Message has none of:
 - Hardware acceleration enabled
 
 **Slow performance:**
-- Try simpler layout (grid, circle)
 - Close other tabs
 - Reduce window size
-- Disable animations
+- Use a browser with hardware acceleration enabled (the graph uses WebGL)
 
 ### Data Freshness
 
-**Real-time:**
-- Message metadata (views, forwards)
-- Author information
-- Forward sources
-
-**Near real-time (1-5 minutes):**
-- New comments
-- Reaction updates
-
-**Batch (15-60 minutes):**
-- Social graph structure updates
-- Relationship computation
+- Message metadata (views, forwards), author information and forward sources are available as soon as the message is archived
+- Comments, reactions and engagement figures are collected in the background and refresh periodically, so recent messages may show partial numbers
 
 ## Advanced Features
 
@@ -416,10 +309,7 @@ Message has none of:
 - Includes all visible nodes and edges
 - Theme-aware (matches light/dark mode)
 
-**Future: Data Export**
-- GraphML format (Gephi, Cytoscape)
-- JSON format (D3.js, custom tools)
-- CSV edge list (Excel, analysis)
+**Data export (GraphML, JSON, CSV)** is not available in the interface. Programmatic access is through the API; see [API Reference](../reference/api-endpoints.md).
 
 ### Theme Adaptation
 
@@ -435,24 +325,6 @@ Graph automatically adapts to light/dark theme:
 - Darker node borders
 - Vibrant colors
 
-### Accessibility
-
-**Keyboard Navigation:**
-- Tab to focus nodes
-- Arrow keys to navigate
-- Enter to select
-- Esc to deselect
-
-**Screen Readers:**
-- Node labels announced
-- Edge relationships described
-- Metrics read aloud
-
-**Color Blindness:**
-- Node shapes differ by type
-- Not relying solely on color
-- High contrast mode compatible
-
 ## Troubleshooting
 
 ### Graph Not Loading
@@ -465,8 +337,8 @@ Graph automatically adapts to light/dark theme:
 **Solutions:**
 - Refresh page
 - Clear browser cache
-- Try different browser
-- Disable ad blockers temporarily
+- Try a different browser
+- Check that WebGL is enabled (the graph will not draw without it)
 
 ### Empty Graph
 
@@ -488,18 +360,16 @@ Graph automatically adapts to light/dark theme:
 - Browser freeze
 
 **Solutions:**
-- Switch to simpler layout (grid)
 - Close other browser tabs
-- Reduce graph complexity (if admin)
 - Use zoom controls to reduce visible area
+- Re-run the layout once after the graph loads
 
 ### Graph Too Cluttered
 
 **Techniques:**
 - Use zoom controls to focus on region
-- Select simpler layout (breadth-first, concentric)
-- Manually drag nodes to organize
-- Re-run layout after dragging
+- Click nodes to read details instead of relying on labels
+- Re-run the layout to separate overlapping nodes
 
 ## Best Practices
 

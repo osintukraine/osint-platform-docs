@@ -14,7 +14,7 @@ The **Processor Service** is the core intelligence engine of the OSINT platform.
 - **Speed**: <1s processing time per message (target)
 - **Position**: Between Listener (Telegram) and Enrichment (batch processing)
 - **Role**: Real-time per-message classification and archival
-- **Scaling**: Horizontally scalable (default: 2 workers)
+- **Scaling**: Horizontally scalable (default: 2 `processor-worker` replicas, `PROCESSOR_WORKER_REPLICAS`)
 
 ```mermaid
 graph LR
@@ -38,19 +38,26 @@ graph LR
 | File | Size | Purpose |
 |------|------|---------|
 | `main.py` | - | Worker initialization and Redis consumer loop |
-| `message_processor.py` | - | Main orchestrator for 5-stage pipeline (with sub-steps) |
-| `llm_classifier.py` | 49 KB | Unified LLM classification (spam + topic + importance) |
+| `redis_consumer.py` | - | Consumer-group reader over the realtime, backfill and legacy streams; auto-claim, dead letter queue (`dead_letter_queue.py`) |
+| `message_processor.py` | ~2,000 lines | Main orchestrator for the pipeline (with sub-steps) |
+| `llm_classifier.py` | ~1,750 lines | Unified (and modular) LLM classification: spam + topic + importance + enrichment fields |
+| `embedding_spam_filter.py` | - | Embedding spam / off-topic filter and LLM pre-filter |
 | `media_archiver.py` | - | Content-addressed storage with SHA-256 deduplication |
-| `entity_matcher.py` | - | Semantic entity matching against 1,425 curated entities |
+| `media_lane.py`, `media_worker.py` | - | Optional background media download (`media-worker` service) |
+| `entity_matcher.py` | - | Semantic entity matching against `curated_entities` |
 | `entity_extractor.py` | - | Regex-based extraction (hashtags, mentions, coordinates) |
 | `message_router.py` | - | Channel rule lookup and routing decisions |
+| `backlog_worker.py`, `backlog_jobs_worker.py`, `backlog_reclassify.py` | - | Re-classification of the backlog (`backlog-worker`, `llm-gateway` profile) |
+| `message_timeout.py`, `backpressure.py` | - | Per-message time limit; backpressure on the gateway lane |
+
+The same image (`services/processor/Dockerfile`) runs several compose services: `processor-worker` (realtime), `processor-worker-backfill` (profile `backfill`), `media-worker`, `backlog-worker`, `backlog-enrich`, `backlog-reprocess`.
 
 ### Processing Pipeline
 
 The processor executes **5 major stages** for each message, with sub-steps:
 
 !!! note "Pipeline Architecture"
-    The code comments describe 5 major stages. The detailed view below shows sub-steps (9 total) to clarify the decision flow.
+    The `message_processor.py` docstring describes 5 major stages. The detailed view below shows sub-steps (9 total) to clarify the decision flow; the exact order of translation and media inside the code differs slightly from the diagram.
 
 **5 Major Stages** (from code):
 1. **LLM Classification** - Spam detection + topic + importance + archive decision
@@ -96,8 +103,8 @@ Messages arrive via Redis Streams from the Listener service. Each message contai
 
 Spam handling is layered, not a single call:
 
-1. **Embedding filter** (`embedding_spam_filter.py`): a multilingual sentence-embedding model (loaded from `/models`, see [Embedding Models](../../operator-guide/model-provisioning.md)) scores similarity to spam and off-topic examples. At or above `EMBEDDING_SPAM_THRESHOLD` (0.75) a message counts as spam.
-2. **Pre-filter before the LLM**: with LLM classification on, spam similarity at or above the admin setting `llm_prefilter_spam_similarity` (0.80 in production) is decided without calling the LLM.
+1. **Embedding filter** (`embedding_spam_filter.py`): a multilingual sentence-embedding model (loaded from `/models`, see [Embedding Models](../../operator-guide/model-provisioning.md)) scores similarity to spam and off-topic examples. At or above `EMBEDDING_SPAM_THRESHOLD` (0.75) a message counts as spam. The code default for `EMBEDDING_SPAM_MODEL` is `all-MiniLM-L6-v2`; `.env.example` points it at `/models/paraphrase-multilingual-MiniLM-L12-v2`.
+2. **Pre-filter before the LLM**: with LLM classification on, spam similarity at or above the admin setting `llm_prefilter_spam_similarity` (code default 0.90; 1.0 disables the pre-filter) is decided without calling the LLM.
 3. **LLM verdict**: spam types are crypto, gambling, scam, adult, advertising (including fundraising) and filler. A war report is never spam because of an attached ad or donation footer.
 4. **Later re-checks**: the backlog worker re-judges spam-flagged messages and fact-check audits a sample.
 
@@ -130,7 +137,7 @@ Entities stored as JSONB in `messages.entities` column.
 ### 5. LLM Classification
 
 !!! info "Unified Classifier"
-    One call returns spam, Ukraine relevance, topic, importance and the archive decision. The provider is `LLM_PROVIDER` (`openai` gateway in production, `ollama`, or `none`). Production runs prompt **v12** with structured JSON output; the `analysis` field is kept as the audit trail.
+    One call returns spam, Ukraine relevance, topic, importance and the archive decision. The provider is `LLM_PROVIDER` (`openai` gateway in production, `ollama`, or `none`). Production runs prompt **v13** (classification plus enrichment fields in one call: keywords, entities, locations, urgency, sentiment, emotions, complexity) with structured JSON output; the `analysis` field is kept as the audit trail. `LLM_CLASSIFIER_MODE=modular` splits the v13 answer into three focused prompts run in parallel; `unified` is the default.
 
 The processor chooses a path per message from runtime settings: embedding filter only (`realtime_use_embedding`), LLM guarded by the embedding filter (pre-filter, and fallback when the LLM is unavailable), or tier-based fallback without an LLM. After the LLM answers, code enforces: spam and non-relevant posts are never archived, a spam verdict on a conflict topic is overridden, and channel tiers decide how strict archiving is.
 
@@ -140,7 +147,7 @@ Full reference: [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intellige
 
 ### 6. Entity Matching
 
-Semantic matching against **1,425 curated entities** (ArmyGuide, Root.NK, ODIN datasets):
+Semantic matching against the curated entities in `curated_entities` (ArmyGuide, Root.NK, ODIN datasets; see [Database Tables](../../reference/database-tables.md)):
 
 **Methods** (priority order):
 
@@ -237,9 +244,9 @@ REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_PASSWORD=""
 REDIS_DB=0
-REDIS_STREAM_NAME=telegram_messages
-REDIS_GROUP_NAME=processor_workers
 ```
+
+Stream and group names are constants in `redis_consumer.py` (`telegram:messages:realtime`, `telegram:messages:backfill`, legacy `telegram:messages`; group `processor-workers`), not environment variables.
 
 ### MinIO (Object Storage)
 
@@ -257,8 +264,11 @@ MINIO_SECURE=false
 LLM_ENABLED=true                 # Master switch (admin setting llm_classification_enabled)
 LLM_PROVIDER=openai              # openai (gateway) | ollama | none
 LLM_GATEWAY_URL=...              # see the LLM Gateway page; lane keys and aliases are there too
-EMBEDDING_SPAM_MODEL=/models/paraphrase-multilingual-MiniLM-L12-v2
+LLM_CLASSIFIER_MODE=unified      # unified | modular
+EMBEDDING_SPAM_MODEL=/models/paraphrase-multilingual-MiniLM-L12-v2   # code default: all-MiniLM-L6-v2
 EMBEDDING_SPAM_THRESHOLD=0.75
+OLLAMA_NUM_PREDICT=250           # compose default; prompt v13 needs >= 1024 (1280 recommended)
+PROCESSOR_CONCURRENCY=           # runtime key: messages handled at once per worker (default 1)
 ```
 
 With `LLM_PROVIDER=ollama`: `OLLAMA_BASE_URL` and `OLLAMA_MODEL`. Every variable is in [`.env.example`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/.env.example); runtime knobs are listed in [`runtime_keys.py`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/shared/python/config/runtime_keys.py).
@@ -274,7 +284,9 @@ DEEPL_API_URL=https://api-free.deepl.com/v2/translate
 ### Scaling
 
 ```bash
-PROCESSOR_REPLICAS=2             # Number of worker containers
+PROCESSOR_WORKER_REPLICAS=2      # compose deploy.replicas for processor-worker
+PROCESSOR_BATCH_SIZE=10          # messages per XREADGROUP call
+PROCESSOR_MESSAGE_TIMEOUT_S=600  # per-message time limit
 ```
 
 ## LLM Classification
@@ -397,39 +409,44 @@ When multiple methods match the same entity, priority is:
 
 ## Metrics
 
-The processor exposes Prometheus metrics at `http://localhost:8002/metrics`:
+The processor exposes Prometheus metrics at `http://localhost:8002/metrics` (`METRICS_PORT`, from `PROCESSOR_METRICS_PORT`). Shared series are defined in `shared/python/observability/metrics.py` and carry the `osint_` prefix; the blocks below show the main ones (labels abbreviated):
 
 ### Message Processing
 
 ```python
-messages_processed_total{worker_id="...", channel_id="..."}
-messages_archived_total{channel_id="...", routing_rule="..."}
-messages_skipped_total{channel_id="...", skip_reason="..."}
-processing_duration_seconds{stage="total"}
+osint_messages_processed_total
+osint_messages_archived_total
+osint_messages_skipped_total
+osint_messages_spam_total
+osint_processing_duration_seconds
+osint_queue_depth_realtime / _backfill / _legacy
 ```
 
 ### LLM Classification
 
 ```python
-llm_requests_total{model="<alias>", status="success"}
-llm_request_duration_seconds{model="..."}
+osint_llm_requests_total
+osint_llm_response_duration_seconds
+osint_llm_errors_total
+osint_classifier_mode_total / osint_classifier_fallback_total
+osint_llm_calls_skipped_total       # embedding pre-filter decided alone
 osint_topics_total{topic="combat"}
 ```
 
 ### Media Archival
 
 ```python
-media_download_duration_seconds{media_type="photo"}
-media_storage_bytes_total{media_type="video"}
-media_deduplication_saves_total{media_type="photo"}
-media_errors_total{error_type="download_failed"}
+osint_media_download_duration_seconds
+osint_media_storage_bytes_total
+osint_media_deduplication_saves_total
+osint_media_errors_total / osint_media_archival_failures_total
 ```
 
 ### Entity Extraction
 
 ```python
-entities_extracted_total{entity_type="hashtag", channel_id="..."}
-entity_extraction_duration_seconds{entity_type="..."}
+osint_entities_extracted_total
+osint_entity_extraction_duration_seconds
 ```
 
 ## Scaling
@@ -441,17 +458,18 @@ Scale processor workers with Docker Compose:
 ```bash
 # Default: 2 workers
 docker-compose up -d --scale processor-worker=4
+# or set PROCESSOR_WORKER_REPLICAS in .env
 ```
 
 Each worker:
-- Consumes from same Redis Stream (`telegram_messages`)
+- Consumes from the same Redis Streams (`telegram:messages:realtime`, legacy `telegram:messages`; `processor-worker-backfill` reads only `telegram:messages:backfill`)
 - Uses Redis Consumer Groups for load balancing
 - Processes messages independently
 - No shared state (stateless design)
 
 ### Performance Tuning
 
-**Ollama CPU Allocation**:
+**Ollama CPU Allocation** (only when running local Ollama):
 
 ```yaml
 deploy:
@@ -466,19 +484,34 @@ deploy:
 
 **Redis Consumer Group**:
 
-- Group name: `processor_workers`
-- Consumer ID: `worker-{hostname}`
-- Auto-claim: Unclaimed messages after 60s
+- Group name: `processor-workers`
+- Consumer ID: `worker-{hostname}-{pid}`
+- Auto-claim: messages from dead workers after 5 minutes
 - Max retries: 3
 
 **Database Connection Pool**:
 
 ```python
-# AsyncSessionLocal uses asyncpg pool
+# shared/python/database/session.py, asyncpg pool
 pool_size=10
 max_overflow=20
 pool_pre_ping=True  # Verify connections before use
 ```
+
+## Running Locally
+
+```bash
+# Docker (starts the default 2 realtime workers)
+docker-compose up -d processor-worker
+docker-compose logs -f processor-worker
+curl http://localhost:8002/metrics | grep osint_messages_processed_total
+
+# Without Docker (from services/processor, with shared/python on PYTHONPATH)
+export PYTHONPATH=../../shared/python:$PYTHONPATH
+python -m src.main
+```
+
+The embedding model must be provisioned first (`scripts/fetch-models.sh`, see [Embedding Models](../../operator-guide/model-provisioning.md)); workers run with `HF_HUB_OFFLINE=1`.
 
 ## Troubleshooting
 
@@ -489,14 +522,14 @@ pool_pre_ping=True  # Verify connections before use
 **Symptom**: Messages classified as `general` with `"reasoning": "Fallback classification"`
 
 **Causes**:
-- Ollama service down
+- LLM provider down (Ollama service, or gateway unreachable)
 - Model not loaded (Ollama) or gateway lane paused (see [Troubleshooting](../../operator-guide/troubleshooting.md#llm-gateway-problems))
 - JSON parsing errors (truncated responses)
 
 **Debug**:
 
 ```bash
-# Check Ollama health
+# Gateway: check lane status per the LLM Gateway page. Ollama: check health
 docker-compose logs ollama
 
 # Test classification manually
@@ -545,11 +578,7 @@ docker-compose exec minio mc ls local/osint-media/media/
 
 **Fix**:
 
-Run repair script:
-
-```bash
-python scripts/repair_missing_media.py --execute
-```
+Restore the failing dependency (Telegram session, MinIO or disk). Media stays queued in the local buffer until `media-sync` moves it; see [Media Sync](media-sync.md).
 
 #### 3. Redis Stream Backlog
 
@@ -564,10 +593,10 @@ python scripts/repair_missing_media.py --execute
 
 ```bash
 # Check stream info
-docker-compose exec redis redis-cli XINFO STREAM telegram_messages
+docker-compose exec redis redis-cli XINFO STREAM telegram:messages:realtime
 
 # Check pending messages
-docker-compose exec redis redis-cli XPENDING telegram_messages processor_workers
+docker-compose exec redis redis-cli XPENDING telegram:messages:realtime processor-workers
 
 # Check worker health
 docker-compose ps processor-worker
@@ -580,8 +609,8 @@ docker-compose ps processor-worker
 docker-compose up -d --scale processor-worker=4
 
 # Claim stuck messages
-docker-compose exec redis redis-cli XAUTOCLAIM telegram_messages \
-  processor_workers worker-1 60000 0-0 COUNT 100
+docker-compose exec redis redis-cli XAUTOCLAIM telegram:messages:realtime \
+  processor-workers worker-1 60000 0-0 COUNT 100
 ```
 
 #### 4. Spam False Positives
@@ -602,11 +631,7 @@ LIMIT 20;
 
 **Fix**:
 
-Update prompt in NocoDB (`llm_prompts` table) or reprocess:
-
-```bash
-python scripts/reprocess_messages.py --message-ids 123,456,789
-```
+Fix the active prompt in `llm_prompts` (see [LLM Gateway and Providers](../../operator-guide/external-llm.md#prompt-versions)), then re-judge flagged posts with `scripts/reprocess_false_spam.py` or the backlog worker.
 
 ### Health Checks
 
@@ -621,7 +646,7 @@ docker-compose ps processor-worker
 curl http://localhost:11434/api/tags
 
 # Check Redis Stream
-docker-compose exec redis redis-cli XLEN telegram_messages
+docker-compose exec redis redis-cli XLEN telegram:messages:realtime
 
 # Check database
 docker-compose exec postgres psql -U postgres -d osint_platform \
@@ -637,6 +662,4 @@ docker-compose exec postgres psql -U postgres -d osint_platform \
 
 ---
 
-**Last Updated**: 2025-12-09
-**Version**: 1.0
 **Maintainer**: Platform Development Team

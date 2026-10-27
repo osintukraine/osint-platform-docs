@@ -13,14 +13,14 @@ Ollama (self-hosted LLM) is typically the most impactful component to tune on CP
 
 ### CPU Allocation
 
-The platform uses two Ollama instances:
-- **ollama** (realtime): Processor classification, API queries
-- **ollama-batch** (background): Enrichment tasks
+The compose file defines two Ollama instances:
+- **ollama** (always on): search-query embeddings (`all-minilm`) and, with `LLM_PROVIDER=ollama`, processor classification
+- **ollama-batch** (enrichment profiles only, port `OLLAMA_BATCH_PORT`=11435): background enrichment tasks that still use the Ollama endpoint `OLLAMA_BATCH_URL`
 
 **Recommended CPU allocation** (8-core system):
 
 ```yaml
-# docker-compose.yml
+# docker-compose.yml (shipped values)
 ollama:
   deploy:
     resources:
@@ -36,37 +36,35 @@ ollama-batch:
         memory: 6G
 ```
 
+Both have CPU/memory reservations as well. Lower the limits on small hosts; the sum of all limits should not exceed your core count by much.
+
 **Tuning parameters** in `.env`:
 
 ```bash
-# Realtime Ollama (low latency priority)
+# Realtime Ollama (low latency priority) - compose defaults
 OLLAMA_NUM_PARALLEL=1      # Process one request at a time
 OLLAMA_MAX_LOADED_MODELS=2 # Keep 2 models in memory
 OLLAMA_CPU_THREADS=6       # Match cpus limit
 OLLAMA_KEEP_ALIVE=5m       # Keep model loaded
 
-# Development mode (laptop)
-DEVELOPMENT_MODE=true
+# Small host (laptop)
 OLLAMA_CPU_THREADS=2       # Reduce for laptop
 OLLAMA_KEEP_ALIVE=2m       # Faster unload
 ```
 
+`./scripts/stack-manager-py.sh hardware` writes tier-appropriate values for these into `.env` (see [Stack Manager](stack-manager.md)).
+
 ### Model Selection
 
-| Model | RAM | Speed | Quality | Use Case |
-|-------|-----|-------|---------|----------|
-| `gemma2:2b` | 1.5GB | Fast (30-35 tok/s) | 75% | Development, testing |
-| `qwen2.5:3b` | 2.4GB | Medium (18-25 tok/s) | 87% | Production (RU/UK best) |
-| `llama3.2:3b` | 2.5GB | Medium (20-25 tok/s) | 85% | Production (fallback) |
-| `phi3.5:3.8b` | 3GB | Slow (12-15 tok/s) | 90% | Quality-critical |
+The `.env.example` default is `OLLAMA_MODEL=qwen2.5:1.5b`, a small CPU-friendly model. Larger models classify better but need proportionally more RAM and CPU; benchmark on your own data (`scripts/benchmark_llm_models.py`) rather than trusting generic tables. Which model is used at runtime is also controlled by the `model_configuration` table (Admin UI, Model Configuration). If you have a GPU host, prefer the LLM gateway ([LLM Gateway](external-llm.md)).
 
 **Switch model**:
 ```bash
 # In .env
-OLLAMA_MODEL=gemma2:2b  # Faster for development
+OLLAMA_MODEL=<smaller model>  # Faster, lower quality; pull it first
 
 # Restart processor
-docker-compose restart processor-worker
+docker compose restart processor-worker
 ```
 
 ### Memory Management
@@ -78,8 +76,8 @@ docker stats osint-ollama
 # If memory pressure, reduce loaded models
 OLLAMA_MAX_LOADED_MODELS=1
 
-# Or use smaller model
-OLLAMA_MODEL=gemma2:2b
+# Or use a smaller model
+OLLAMA_MODEL=<smaller model>
 ```
 
 ---
@@ -88,39 +86,32 @@ OLLAMA_MODEL=gemma2:2b
 
 ### Connection Pooling
 
-Default pool is 20 connections. Adjust based on worker count.
+The code default is 40 connections per process (`POSTGRES_POOL_SIZE`, overflow 40), which is per service replica, so total connections grow with the replica count. PostgreSQL's `max_connections` is 200 in `postgresql.conf`; keep `replicas x (pool + overflow)` under it, or lower the pool.
 
 ```bash
-# .env
-POSTGRES_POOL_SIZE=20        # Base connections
-POSTGRES_MAX_OVERFLOW=10     # Burst connections
+# .env (code defaults shown)
+POSTGRES_POOL_SIZE=40        # Base connections per process
+POSTGRES_MAX_OVERFLOW=40     # Burst connections
 POSTGRES_POOL_TIMEOUT=30     # Wait time (seconds)
 POSTGRES_POOL_RECYCLE=3600   # Recycle connections hourly
 ```
 
-**Rule of thumb**: `POSTGRES_POOL_SIZE = (processor_workers * 2) + (enrichment_workers * 2) + 10`
+**Rule of thumb**: size the pool for the busiest service, not the sum; every service replica opens its own pool.
 
 ### Memory Settings
 
-Edit `infrastructure/postgres/postgresql.conf`:
+Memory settings are passed on the PostgreSQL command line by `docker-compose.yml` and **override** `infrastructure/postgres/postgresql.conf`. Change them in `.env`:
 
-```conf
-# For 16GB RAM system
-shared_buffers = 4GB          # 25% of RAM
-effective_cache_size = 12GB   # 75% of RAM
-maintenance_work_mem = 1GB    # For vacuum/index
-work_mem = 64MB               # Per operation
-
-# For 32GB RAM system
-shared_buffers = 8GB
-effective_cache_size = 24GB
-maintenance_work_mem = 2GB
-work_mem = 128MB
+```bash
+POSTGRES_SHARED_BUFFERS=4GB      # ~25% of RAM (compose default 1GB)
+POSTGRES_EFFECTIVE_CACHE=12GB    # ~75% of RAM (compose default 4GB)
+POSTGRES_WORK_MEM=64MB           # per sort/hash operation (compose default 128MB)
 ```
 
-Restart PostgreSQL after changes:
+Other settings (`maintenance_work_mem`, `max_connections`, parallel workers, logging) come from `postgresql.conf`, which is tuned for a 32 GB host. `hardware` in the stack manager sets `POSTGRES_SHARED_BUFFERS` and `POSTGRES_WORK_MEM` per tier. Recreate PostgreSQL after changes:
+
 ```bash
-docker-compose restart postgres
+docker compose up -d postgres
 ```
 
 ### Vacuum and Analyze
@@ -129,29 +120,29 @@ The platform creates frequent writes. Auto-vacuum is enabled, but manual optimiz
 
 ```bash
 # Analyze all tables (update query planner statistics)
-docker-compose exec postgres psql -U osint_user -d osint_platform \
+docker compose exec postgres psql -U osint_user -d osint_platform \
   -c "ANALYZE;"
 
 # Vacuum and analyze large tables
-docker-compose exec postgres psql -U osint_user -d osint_platform \
+docker compose exec postgres psql -U osint_user -d osint_platform \
   -c "VACUUM ANALYZE messages;"
 ```
 
 **Schedule weekly** (cron):
 ```bash
-0 3 * * 0 docker-compose exec -T postgres psql -U osint_user -d osint_platform -c "VACUUM ANALYZE;" >> /var/log/postgres-vacuum.log 2>&1
+0 3 * * 0 docker compose exec -T postgres psql -U osint_user -d osint_platform -c "VACUUM ANALYZE;" >> /var/log/postgres-vacuum.log 2>&1
 ```
 
 ### Index Optimization
 
-Critical indexes are created in `init.sql`. Monitor slow queries:
+Critical indexes are created in `init.sql` and migrations. Monitor slow queries (`pg_stat_statements` is loaded by `postgresql.conf`; on PostgreSQL 13+ the columns are `total_exec_time` and `mean_exec_time`):
 
 ```sql
 -- Find slow queries (>1 second)
-SELECT query, calls, total_time/1000 as total_seconds, mean_time/1000 as mean_seconds
+SELECT query, calls, total_exec_time/1000 as total_seconds, mean_exec_time/1000 as mean_seconds
 FROM pg_stat_statements
-WHERE mean_time > 1000
-ORDER BY total_time DESC
+WHERE mean_exec_time > 1000
+ORDER BY total_exec_time DESC
 LIMIT 10;
 ```
 
@@ -161,38 +152,37 @@ LIMIT 10;
 
 ### Stream Length
 
-Redis Streams can grow indefinitely. Limit to prevent memory issues:
+The listener writes to two streams, `telegram:messages:realtime` (live) and `telegram:messages:backfill` (historical, consumed when idle). Each is capped at 100,000 entries (`MAX_STREAM_LENGTH` in `services/listener/src/redis_queue.py`; it is not an environment variable). Size Redis memory for a full stream.
 
-```bash
-# .env
-REDIS_MAX_STREAM_LENGTH=100000  # Max messages in queue
-```
-
-**Memory estimate**: 100K messages ≈ 500MB-1GB RAM
+**Memory estimate**: 100K queued messages ≈ 500MB-1GB RAM
 
 ### Memory Configuration
 
+Redis memory is set in `.env` (compose runs `redis-server --maxmemory ${REDIS_MAXMEMORY:-1gb} --maxmemory-policy allkeys-lru`):
+
 ```bash
-# docker-compose.yml redis command
-command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+REDIS_MAXMEMORY=2gb   # raise for high-volume or large backfills
 ```
 
-**Increase for high-volume**:
-```yaml
-command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+```bash
+docker compose up -d redis
 ```
+
+!!! warning
+    `allkeys-lru` can evict stream data under memory pressure. If `RedisHighEvictionRate` fires, raise `REDIS_MAXMEMORY` rather than waiting.
 
 ### Monitor Queue Health
 
 ```bash
 # Check stream length
-docker-compose exec redis redis-cli XLEN telegram_messages
+docker compose exec redis redis-cli XLEN telegram:messages:realtime
+docker compose exec redis redis-cli XLEN telegram:messages:backfill
 
 # Check consumer group lag
-docker-compose exec redis redis-cli XINFO GROUPS telegram_messages
+docker compose exec redis redis-cli XINFO GROUPS telegram:messages:realtime
 
 # Check memory usage
-docker-compose exec redis redis-cli INFO memory | grep used_memory_human
+docker compose exec redis redis-cli INFO memory | grep used_memory_human
 ```
 
 ---
@@ -201,38 +191,22 @@ docker-compose exec redis redis-cli INFO memory | grep used_memory_human
 
 ### Content-Addressed Deduplication
 
-The platform uses SHA-256 hashing for deduplication. This is automatic and saves 50-70% storage for media-heavy channels.
+The platform stores media by SHA-256 (`media_files.sha256` is unique), so identical files are stored once. This is automatic; the saving varies with the channels (expect roughly 30-40% on typical content).
 
 **Verify deduplication**:
 ```bash
-# Check unique vs total media
-docker-compose exec postgres psql -U osint_user -d osint_platform \
-  -c "SELECT COUNT(DISTINCT media_hash), COUNT(*) FROM message_media;"
+# Links from messages vs distinct stored files
+docker compose exec postgres psql -U osint_user -d osint_platform \
+  -c "SELECT (SELECT COUNT(*) FROM message_media) AS links, (SELECT COUNT(*) FROM media_files) AS files;"
 ```
 
 ### Storage Tiers
 
-For large deployments, consider tiered storage:
-
-```yaml
-# docker-compose.yml
-minio:
-  volumes:
-    - /fast-ssd/minio:/data        # Hot storage (recent)
-    # Archive script moves old media to:
-    # /slow-hdd/minio-archive      # Cold storage (>30 days)
-```
+For large deployments the platform has built-in tiers: a local SSD media buffer (`MEDIA_BUFFER_PATH`) served directly by Caddy, and Hetzner Storage Boxes behind MinIO for cold files. See [Hetzner Storage](hetzner-storage.md), [Multi-Storage Setup](multi-storage-setup.md) and [Media Lanes](media-lanes.md) (background download so the realtime path stays fast).
 
 ### Cleanup Old Media
 
-Telegram URLs expire, but archived media persists. Archive script (optional):
-
-```bash
-#!/bin/bash
-# Move media older than 90 days to archive storage
-find /data/minio/telegram-archive -mtime +90 -type f \
-  -exec mv {} /archive/minio/ \;
-```
+Do not move or delete files under the MinIO data directory by hand: the database records each object's key and storage box. Use the media repair tooling instead ([Media Repair](media-repair.md)).
 
 ---
 
@@ -242,27 +216,27 @@ find /data/minio/telegram-archive -mtime +90 -type f \
 
 ```bash
 # .env
-PROCESSOR_BATCH_SIZE=10  # Messages per batch
-WORKER_BATCH_SIZE=50     # Worker batch size
+PROCESSOR_BATCH_SIZE=10      # Messages per XREADGROUP call (default 10)
+BACKFILL_BATCH_SIZE=100      # Batch size for the backfill lane (default 100)
 ```
 
 **Increase for higher throughput** (but higher latency):
 ```bash
 PROCESSOR_BATCH_SIZE=25
-WORKER_BATCH_SIZE=100
 ```
 
 ### Worker Count
 
 ```bash
 # .env
-WORKER_COUNT=4           # Internal workers per container
-PROCESSOR_REPLICAS=2     # Container replicas
+PROCESSOR_WORKER_REPLICAS=2   # processor-worker container replicas (default 2)
+PROCESSOR_CONCURRENCY=1       # concurrent messages per worker (see .env.example)
+BACKFILL_WORKER_REPLICAS=2    # processor-worker-backfill replicas (backfill profile)
 ```
 
-**Total workers** = `WORKER_COUNT * PROCESSOR_REPLICAS`
+**Total concurrency** = `PROCESSOR_WORKER_REPLICAS * PROCESSOR_CONCURRENCY`
 
-**CPU rule**: Total workers ≤ CPU cores - 2 (leave room for Ollama)
+**CPU rule**: keep total workers at or below CPU cores minus 2 when Ollama runs on the same host. With a GPU gateway the LLM load is off-box.
 
 ### Feature Toggles
 
@@ -272,8 +246,8 @@ Disable features to reduce load:
 # .env
 SPAM_FILTER_ENABLED=true          # Keep enabled (saves resources!)
 ENTITY_EXTRACTION_ENABLED=true    # Optional
-TRANSLATION_ENABLED_IN_WORKER=true # Disable if not needed
-LLM_SCORING_ENABLED=true          # Core feature
+TRANSLATION_ENABLED=true          # Disable if not needed (also saves DeepL quota)
+LLM_ENABLED=true                  # Core feature; LLM_PROVIDER selects ollama, openai (gateway) or none
 ```
 
 ---
@@ -313,22 +287,22 @@ caddy:
 For laptops and testing:
 
 ```bash
-# .env - Development optimizations
-DEVELOPMENT_MODE=true
-
+# .env - Development optimizations (or run: ./scripts/stack-manager-py.sh hardware --tier=laptop)
 # Lighter Ollama
-OLLAMA_MODEL=gemma2:2b
 OLLAMA_CPU_THREADS=2
 OLLAMA_NUM_PARALLEL=1
 OLLAMA_KEEP_ALIVE=2m
 
-# Smaller pools
-POSTGRES_POOL_SIZE=5
-WORKER_COUNT=2
-PROCESSOR_REPLICAS=1
+# Smaller pools and fewer workers
+POSTGRES_POOL_SIZE=10
+POSTGRES_MAX_OVERFLOW=10
+PROCESSOR_WORKER_REPLICAS=1
+REDIS_MAXMEMORY=256mb
 
 # Reduced features
 TRANSLATION_ENABLED=false  # Save API calls
+
+# Profiles: enrichment-lite (CPU only) or none
 ```
 
 ---
@@ -337,11 +311,11 @@ TRANSLATION_ENABLED=false  # Save API calls
 
 Before deploying to production:
 
-- [ ] Set `DEVELOPMENT_MODE=false`
-- [ ] Allocate 4-6 CPU cores to Ollama
+- [ ] Set `ENVIRONMENT=production` and `DEBUG=false`
+- [ ] Allocate 4-6 CPU cores to Ollama if it runs classification locally
 - [ ] Choose a model that fits your hardware (`./scripts/bootstrap-hardware.sh show`) when using Ollama
-- [ ] Configure `POSTGRES_POOL_SIZE` for worker count
-- [ ] Set Redis memory limit (`--maxmemory 1gb`)
+- [ ] Check `POSTGRES_POOL_SIZE` x replicas against `max_connections`
+- [ ] Set `REDIS_MAXMEMORY` and `POSTGRES_SHARED_BUFFERS` for your RAM
 - [ ] Configure log rotation
 - [ ] Set up monitoring alerts
 - [ ] Test backup/restore procedure
@@ -354,7 +328,7 @@ Before deploying to production:
 
 ```bash
 # Test Ollama response time
-time docker-compose exec ollama ollama run <your OLLAMA_MODEL> "Classify: Russian troops near Kharkiv"
+time docker compose exec ollama ollama run <your OLLAMA_MODEL> "Classify: troop movement near Kharkiv"
 
 # Expected: <3 seconds for classification
 ```
@@ -363,7 +337,7 @@ time docker-compose exec ollama ollama run <your OLLAMA_MODEL> "Classify: Russia
 
 ```bash
 # Test query performance
-docker-compose exec postgres psql -U osint_user -d osint_platform \
+docker compose exec postgres psql -U osint_user -d osint_platform \
   -c "\timing on" \
   -c "SELECT COUNT(*) FROM messages WHERE telegram_date > NOW() - INTERVAL '1 hour';"
 
@@ -374,7 +348,7 @@ docker-compose exec postgres psql -U osint_user -d osint_platform \
 
 ```bash
 # Watch processing rate
-watch -n 5 'docker-compose exec redis redis-cli XLEN telegram_messages'
+watch -n 5 'docker compose exec redis redis-cli XLEN telegram:messages:realtime'
 
 # Should decrease or stay stable, not grow continuously
 ```
@@ -392,6 +366,6 @@ watch -n 5 'docker-compose exec redis redis-cli XLEN telegram_messages'
 
 **Quick Wins**:
 1. Increase Ollama CPU to 6 cores (biggest impact)
-2. Use `gemma2:2b` for development
+2. Use a smaller model (or the `enrichment-lite` profile) for development
 3. Enable spam filter (saves 73% processing)
 4. Run `VACUUM ANALYZE` weekly

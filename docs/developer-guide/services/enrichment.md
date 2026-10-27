@@ -10,8 +10,8 @@ The Enrichment Service handles asynchronous, batch-oriented processing of messag
 graph LR
     A[PostgreSQL<br/>Messages] --> B[Router]
     B --> C[Redis Queues]
-    C --> D[11 Queue Workers]
-    D --> E[32 Task Types]
+    C --> D[12 compose services<br/>router + 11 workers]
+    D --> E[38 Task Modules]
     E --> F[PostgreSQL<br/>Enriched Data]
 
     subgraph "Pipeline"
@@ -38,7 +38,7 @@ graph LR
 | **Resource Usage** | CPU/memory intensive | Bounded and predictable |
 
 !!! success "Production Stats"
-    - **32 Task Types** across 11 workers (6 queue-based + 5 pipeline/dedicated)
+    - **38 task modules** in `src/tasks/`, run by 11 worker services plus the router (9 Redis queues, a pipeline worker for event detection and a fact-check auditor)
     - **Background Processing**: Enriches ~50,000 messages/day
     - **LLM Tasks**: Dedicated workers keep slow LLM tasks from blocking each other
     - **LLM backends**: fact-check and RSS validation run on the LLM gateway (`llm-gateway` profile); AI tagging, event detection, geolocation and cluster validation default to the CPU-era Ollama endpoint (`OLLAMA_BATCH_URL`) and its small models, and are not part of the production profile set (`enrichment-lite`). See [LLM Gateway and Providers](../../operator-guide/external-llm.md) and [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_GATEWAY.md).
@@ -127,7 +127,7 @@ for msg in messages:
 
 #### Phase 2: Worker Pools
 
-11 worker types (6 queue-based + 5 pipeline/dedicated):
+11 worker services (9 queue-based or queue-fed, 2 database-scan pipeline workers):
 
 | Worker | Queue | Tasks Handled | LLM? | Rate Limited? |
 |--------|-------|---------------|------|---------------|
@@ -138,13 +138,14 @@ for msg in messages:
 | **Decision** | `enrich:decision` | Decision verification, reprocessing | ❌ | ❌ |
 | **Maintenance** | `enrich:maintenance` | Channel cleanup, quarantine, discovery eval, Wikidata | ❌ | ❌ |
 | **Event Detection** | *Pipeline (DB-scan)* | RSS event creator, Telegram matcher, status updater | ✅ | ❌ |
+| **Fact-Check** | *Pipeline (DB-scan)* | Classification audit and council votes (see [Fact-Check](fact-check.md)) | ✅ (audit lane) | ❌ |
 | **Geolocation LLM** | `enrich:geolocation_llm` | LLM-based location extraction | ✅ | ❌ |
 | **Cluster Detection** | `enrich:cluster_detection` | Cluster detection, archiver, tier updater | ❌ | ❌ |
 | **Cluster Validation** | `enrich:cluster_validation` | LLM-based cluster validation | ✅ | ❌ |
 
 #### Phase 3: Task Execution
 
-32 task types (most inherit from `BaseEnrichmentTask`):
+The task modules (most inherit from `BaseEnrichmentTask`):
 
 ### Task Execution Patterns
 
@@ -312,8 +313,7 @@ class BaseEnrichmentTask(ABC):
 ```bash
 ROUTER_POLL_INTERVAL=30        # Seconds between DB polls
 ROUTER_BATCH_SIZE=100          # Messages per poll cycle
-BACKPRESSURE_HIGH=1000         # Pause routing when queue exceeds
-BACKPRESSURE_LOW=500           # Resume routing when queue drops below
+# Backpressure thresholds are constants in router.py (MAX_QUEUE_DEPTH=1000, RESUME_QUEUE_DEPTH=500)
 METRICS_PORT=9198
 ```
 
@@ -370,12 +370,12 @@ def calculate_priority(msg) -> int:
 
 **Backpressure Control**:
 
-When a queue exceeds `BACKPRESSURE_HIGH` (default 1000), the router:
+When a queue exceeds `MAX_QUEUE_DEPTH` (1000, constant in `router.py`), the router:
 
 1. Pauses routing to that queue
 2. Logs warning with queue depth
-3. Emits `enrichment_backpressure_active{queue="..."} 1` metric
-4. Resumes when queue drops below `BACKPRESSURE_LOW` (default 500)
+3. Reflects the pressure in `enrichment_backpressure_ratio{task="..."}`
+4. Resumes when queue drops below `RESUME_QUEUE_DEPTH` (500)
 
 This prevents unbounded queue growth if workers can't keep up.
 
@@ -425,7 +425,7 @@ enrichment_queue_depth{queue="ai_tagging"} 150
 
 ### 1. AI Tagging Worker
 
-**Purpose**: Generate AI-powered tags using Ollama LLM
+**Purpose**: Generate AI-powered tags with an LLM (compose default: the batch Ollama endpoint; not in the `llm-gateway` production path)
 
 **Queue**: `enrich:ai_tagging`
 **File**: `/services/enrichment/src/workers/ai_tagging_worker.py`
@@ -435,11 +435,12 @@ enrichment_queue_depth{queue="ai_tagging"} 150
 
 ```bash
 OLLAMA_HOST=http://ollama-batch:11434
-AI_TAGGING_MODEL=qwen2.5:3b
+AI_TAGGING_MODEL=qwen2.5:1.5b   # compose default
+AI_TAGGING_TIMEOUT=300
 TIME_BUDGET_SECONDS=120  # Max processing time per cycle
-BATCH_SIZE=10
+BATCH_SIZE=12            # AI_TAGGING_BATCH_SIZE
 CYCLE_INTERVAL_SECONDS=30
-METRICS_PORT=9096
+METRICS_PORT=9196
 ```
 
 **How It Works**:
@@ -456,9 +457,9 @@ METRICS_PORT=9096
 - Recovers after 5 minutes
 
 **Metrics**:
-- `enrichment_llm_requests_total{task="ai_tagging", model="qwen2.5:3b"}`
-- `enrichment_llm_duration_seconds{task="ai_tagging"}`
-- `enrichment_queue_depth{queue="redis:ai_tagging"}`
+- `llm_requests_total{task="ai_tagging", model="...", status="..."}`
+- `llm_request_duration_seconds{task="ai_tagging"}`
+- `enrichment_queue_depth{task="ai_tagging"}`
 
 ### 2. RSS Validation Worker
 
@@ -476,7 +477,7 @@ LLM_GATEWAY_URL=...
 LLM_GATEWAY_BATCH_API_KEY=...        # batch lane key (falls back to LLM_GATEWAY_API_KEY)
 RSS_VALIDATION_MODEL=osint-batch     # gateway alias (compose default granite3-dense:2b is for Ollama)
 RSS_VALIDATION_TIME_BUDGET_SECONDS=60
-RSS_VALIDATION_BATCH_SIZE=2
+RSS_VALIDATION_BATCH_SIZE=6           # compose default
 RSS_VALIDATION_CYCLE_INTERVAL_SECONDS=30
 ```
 
@@ -643,14 +644,14 @@ METRICS_PORT=9202
 
 ```bash
 OLLAMA_HOST=http://ollama-batch:11434
-EVENT_DETECTION_MODEL=qwen2.5:3b
+EVENT_DETECTION_MODEL=qwen2.5:3b   # compose default (Ollama option)
 TIME_BUDGET_SECONDS=300  # 5 minutes total
 BATCH_SIZE=10
 CYCLE_INTERVAL_SECONDS=60
-METRICS_PORT=9098
+METRICS_PORT=9099
 
 # Event matching thresholds
-EVENT_ENTITY_OVERLAP_THRESHOLD=1      # Min shared entities for matching
+EVENT_ENTITY_OVERLAP_THRESHOLD=2      # Min shared entities for matching (compose default)
 EVENT_EMBEDDING_SIMILARITY_THRESHOLD=0.85  # Semantic similarity cutoff
 EVENT_TIME_WINDOW_HOURS=72            # Max hours between article and message
 ```
@@ -1001,7 +1002,7 @@ Stage 4: Mark Unresolved (manual review queue)
 
 **Stage 1 - Gazetteer**: Instant lookup against local GeoNames database (~30,000 UA/RU locations). Returns 0.95 confidence.
 
-**Stage 2 - LLM Relative**: Handles "10km north of Bakhmut" patterns. Uses qwen2.5:3b via Ollama. Returns 0.75 confidence.
+**Stage 2 - LLM Relative**: Handles "10km north of Bakhmut" patterns. Uses `GEOLOCATION_MODEL` (compose default `qwen2.5:1.5b` on the batch Ollama endpoint). Returns 0.75 confidence.
 
 **Stage 3 - Nominatim**: OpenStreetMap API fallback. Rate-limited to 1 req/sec. Returns 0.85 confidence.
 
@@ -1077,7 +1078,7 @@ MIN_MESSAGES_FOR_CLUSTER=3
 **File**: `/services/enrichment/src/tasks/geolocation_llm.py`
 **Worker**: Fast Pool (`enrich:fast` queue)
 **Priority**: 60
-**LLM Required**: Yes (qwen2.5:3b via Ollama)
+**LLM Required**: Yes (compose default `qwen2.5:1.5b` via the batch Ollama endpoint; model set by `GEOLOCATION_MODEL`)
 
 Handles messages that the fast geolocation task couldn't process by using LLM to extract location names, then geocoding them.
 
@@ -1133,7 +1134,7 @@ Polls discovery channels via Telegram API to collect quality metrics WITHOUT arc
 3. DiscoveryEvaluatorTask → Promotes/rejects based on metrics
 ```
 
-**Why This Matters**: Enables evaluation of channels BEFORE committing to archive them. Channels in probation period (14 days) are monitored but not archived until quality is proven.
+**Why This Matters**: Enables evaluation of channels BEFORE committing to archive them. Channels in probation (~7 days after 30+ messages) are monitored but not archived until quality is proven.
 
 #### How It Works
 
@@ -1274,7 +1275,7 @@ Calls PostgreSQL function `recalculate_cluster_tiers()` which:
 **Task**: `cluster_validation`
 **Queue**: `enrich:cluster_validation`
 **Container**: `enrichment-cluster-validation`
-**LLM Required**: Yes (qwen2.5:3b via Ollama)
+**LLM Required**: Yes (`VALIDATION_MODEL`, compose default `qwen2.5:3b` via the batch Ollama endpoint)
 
 Dedicated LLM worker for validating detected clusters using claim analysis. Completes the Event Detection V3 pipeline:
 
@@ -1970,8 +1971,8 @@ POSTGRES_PASSWORD=your-password
 # Redis (for queues and reprocessing)
 REDIS_URL=redis://redis:6379
 
-# Metrics
-METRICS_PORT=9095
+# Metrics (each worker sets its own port in docker-compose.yml; see Prometheus Endpoints)
+METRICS_PORT=9196
 ```
 
 #### Task Configuration
@@ -1987,16 +1988,16 @@ EMBEDDING_BATCH_SIZE=100
 
 # AI Tagging (LLM)
 OLLAMA_HOST=http://ollama-batch:11434
-AI_TAGGING_MODEL=qwen2.5:3b
-AI_TAGGING_BATCH_SIZE=10
-AI_TAGGING_TIMEOUT=300.0
+AI_TAGGING_MODEL=qwen2.5:1.5b
+AI_TAGGING_BATCH_SIZE=12
+AI_TAGGING_TIMEOUT=300
 
 # Entity Matching
 ENTITY_MATCHING_THRESHOLD=0.75
 ENTITY_MATCHING_BATCH_SIZE=100
 
 # Event Detection
-EVENT_ENTITY_OVERLAP_THRESHOLD=1
+EVENT_ENTITY_OVERLAP_THRESHOLD=2
 EVENT_EMBEDDING_SIMILARITY_THRESHOLD=0.85
 EVENT_TIME_WINDOW_HOURS=72
 
@@ -2016,16 +2017,16 @@ TELEGRAM_PHONE=+1234567890
 ```bash
 # AI Tagging Worker
 TIME_BUDGET_SECONDS=120
-BATCH_SIZE=10
+BATCH_SIZE=12
 CYCLE_INTERVAL_SECONDS=30
-METRICS_PORT=9096
+METRICS_PORT=9196
 
 # RSS Validation Worker
 TIME_BUDGET_SECONDS=60
 BATCH_SIZE=5
 CYCLE_INTERVAL_SECONDS=30
-MIN_SIMILARITY=0.5
-METRICS_PORT=9097
+# similarity floor: admin setting validation_min_similarity (0.5)
+METRICS_PORT=9197
 
 # Fast Pool Worker
 TIME_BUDGET_SECONDS=60
@@ -2057,7 +2058,7 @@ METRICS_PORT=9202
 TIME_BUDGET_SECONDS=300
 BATCH_SIZE=10
 CYCLE_INTERVAL_SECONDS=60
-METRICS_PORT=9098
+METRICS_PORT=9099
 
 # Router
 ROUTER_POLL_INTERVAL=30
@@ -2117,55 +2118,42 @@ QUEUE_CONFIGS = {
         stream_key="enrich:maintenance",
         consumer_group="maintenance_workers",
         batch_size=100,
-        max_batch_size=200,
+        max_batch_size=500,
         time_budget_seconds=120,
         priority_weight=10,
     ),
+    # Also configured: "geolocation_llm" (batch 5, budget 300 s), "cluster_detection"
+    # (batch 50, weight 75) and "cluster_validation" (batch 5, weight 70).
 }
 ```
 
 ### Task to Queue Mapping
 
+Abridged from `TASK_TO_QUEUE` in `redis_queue.py`:
+
 ```python
 TASK_TO_QUEUE = {
-    # LLM tasks (dedicated queues)
     "ai_tagging": "ai_tagging",
     "rss_validation": "rss_validation",
     "geolocation_llm": "geolocation_llm",
-    "cluster_validation": "cluster_validation",
+    "cluster_detection": "cluster_detection",
 
     # CPU tasks (shared fast queue)
-    "embedding": "fast",
-    "translation": "fast",
-    "entity_matching": "fast",
-    "geolocation": "fast",
-    "rss_correlation": "fast",
+    "embedding": "fast", "translation": "fast", "entity_matching": "fast",
+    "geolocation": "fast", "rss_correlation": "fast",
 
     # Telegram API tasks (rate-limited queue)
-    "engagement_polling": "telegram",
-    "social_graph_extraction": "telegram",
-    "comment_fetcher": "telegram",
-    "comment_realtime": "telegram",
-    "comment_backfill": "telegram",
-    "comment_ondemand": "telegram",
-    "forward_discovery": "telegram",
+    "engagement_polling": "telegram", "social_graph_extraction": "telegram",
+    "comment_fetcher": "telegram", "comment_ondemand": "telegram", "channel_join": "telegram",
 
-    # Decision tasks
-    "decision_verifier": "decision",
     "decision_reprocessor": "decision",
 
-    # Maintenance tasks
-    "channel_cleanup": "maintenance",
-    "quarantine_processor": "maintenance",
+    "channel_cleanup": "maintenance", "quarantine_processor": "maintenance",
     "discovery_evaluator": "maintenance",
-    "wikidata_enrichment": "maintenance",
-
-    # Cluster detection (with auxiliary tasks)
-    "cluster_detection": "cluster_detection",
-    # Note: cluster_archiver and cluster_tier_updater run as
-    # post-cycle auxiliary tasks in cluster_detection_worker
 }
 ```
+
+Deliberately not routed: `event_detection` (the event-detection worker selects its own work), `cluster_validation` (polls `telegram_event_clusters`), and `comment_realtime` / `comment_backfill` (the telegram worker finds them with its own database scans). Each stream is capped at 50,000 entries (`max_stream_length`); entries dropped unread are re-selected from the database by the router.
 
 ### Queue Operations
 
@@ -2224,9 +2212,10 @@ Each worker exposes metrics on a unique port:
 |--------|--------------|----------------|
 | **Router** | 9198 | `osint-enrichment-router` |
 | **AI Tagging** | 9196 | `osint-enrichment-ai-tagging` |
-| **RSS Validation** | 9097 | `osint-enrichment-rss-validation` |
-| **Event Detection** | 9098 | `osint-enrichment-event-detection` |
-| **Geolocation LLM** | 9099 | `osint-enrichment-geolocation-llm` |
+| **RSS Validation** | 9197 | `osint-enrichment-rss-validation` |
+| **Event Detection** | 9099 | `osint-enrichment-event-detection` |
+| **Fact-Check** | 9203 | `osint-enrichment-fact-check` |
+| **Geolocation LLM** | 9210 | `osint-enrichment-geolocation-llm` |
 | **Fast Pool** | 9199 | `osint-enrichment-fast-pool` |
 | **Telegram** | 9200 | `osint-enrichment-telegram` |
 | **Decision** | 9201 | `osint-enrichment-decision` |
@@ -2237,7 +2226,7 @@ Each worker exposes metrics on a unique port:
 **Quick check all endpoints**:
 
 ```bash
-for port in 9198 9096 9097 9098 9199 9200 9201 9202; do
+for port in 9196 9197 9198 9099 9199 9200 9201 9202 9203 9210 9211 9212; do
   echo "Port $port: $(curl -s http://localhost:$port/metrics | head -1)"
 done
 ```
@@ -2248,10 +2237,10 @@ done
 
 ```prometheus
 # Queue depth (pending messages)
-enrichment_queue_depth{queue="redis:ai_tagging"} 150
+enrichment_queue_depth{task="ai_tagging"} 150
 
 # Queue lag (age of oldest message in seconds)
-enrichment_queue_lag_seconds{queue="redis:ai_tagging"} 3600
+enrichment_queue_lag_seconds{task="ai_tagging"} 3600
 
 # Backpressure ratio (pending / batch_size)
 enrichment_backpressure_ratio{task="ai_tagging"} 15.0
@@ -2261,36 +2250,51 @@ enrichment_backpressure_ratio{task="ai_tagging"} 15.0
 
 ```prometheus
 # LLM request count
-enrichment_llm_requests_total{task="ai_tagging", model="qwen2.5:3b", status="success"} 1500
+llm_requests_total{task="ai_tagging", model="<model>", status="success"} 1500
 
 # LLM request duration
-enrichment_llm_duration_seconds{task="ai_tagging", model="qwen2.5:3b"} 2.5
+llm_request_duration_seconds{task="ai_tagging", model="<model>"} 2.5
 
 # LLM batch size
-enrichment_llm_batch_size{task="ai_tagging"} 10
+llm_batch_size{task="ai_tagging"} 10
 ```
 
 #### Worker Metrics
 
 ```prometheus
 # Cycle duration
-enrichment_cycle_duration_seconds{worker="ai_tagging_worker"} 120.5
+enrichment_cycle_duration_seconds 120.5
 
 # Messages processed
 enrichment_messages_processed_total{task="ai_tagging"} 1500
 
 # Task errors
-enrichment_task_errors_total{task="ai_tagging"} 3
+enrichment_errors_total{task="ai_tagging", error_type="..."} 3
 ```
 
-#### Circuit Breaker Metrics
+#### Circuit Breaker
 
-```prometheus
-# Circuit state (0=closed, 1=open)
-enrichment_circuit_breaker_state{worker="ai_tagging_worker"} 0
+The circuit breaker (`shared/python/utils`, used in `workers/base_worker.py`) is observable through the worker log line `Circuit breaker OPEN`, not through a dedicated Prometheus series.
 
-# Consecutive failures
-enrichment_circuit_breaker_failures{worker="ai_tagging_worker"} 0
+## Running Locally
+
+Enrichment services are selected by compose profile (`enrichment-lite`, `enrichment-standard`, `enrichment-full`, `enrichment`, or `llm-gateway` for the gateway-backed workers):
+
+```bash
+# Router + CPU workers only (no LLM)
+docker-compose --profile enrichment-lite up -d
+
+# Gateway-backed workers (fact-check, RSS validation, ...)
+docker-compose --profile llm-gateway up -d
+
+# One worker, following logs
+docker-compose --profile enrichment-standard up -d enrichment-router enrichment-fast-pool
+docker-compose logs -f enrichment-fast-pool
+curl -s localhost:9199/metrics | grep enrichment_messages_processed_total
+
+# Outside Docker (from services/enrichment, shared/python on PYTHONPATH)
+python -m src.router
+python -m src.workers.fast_worker
 ```
 
 ## Scaling Patterns
@@ -2311,6 +2315,9 @@ services:
       TIME_BUDGET_SECONDS: 120
       BATCH_SIZE: 10
 ```
+
+!!! warning "Fixed names and ports"
+    Enrichment services in compose set `container_name` and a fixed host metrics port, so plain `--scale` or extra replicas collide. Several workers read `deploy.replicas: ${ENRICHMENT_WORKER_REPLICAS:-1}`; check the service definition before scaling, and remove the `container_name`/host port mapping if you need more than one replica.
 
 **Scaling Guidelines**:
 
@@ -2337,7 +2344,7 @@ TIME_BUDGET_SECONDS=60
 
 ### LLM Task Isolation
 
-**Problem**: LLM tasks compete for Ollama (CPU inference is single-threaded)
+**Problem**: LLM tasks compete for the same backend (single-threaded Ollama on CPU, or the shared gateway lanes)
 
 **Solution**: Dedicated workers prevent contention
 
@@ -2425,11 +2432,8 @@ redis-cli XINFO GROUPS enrich:ai_tagging
 **Symptom**: Worker skipping cycles, "Circuit breaker OPEN" in logs
 
 ```bash
-# Check circuit breaker state
-curl http://localhost:9096/metrics | grep circuit_breaker
-
-# enrichment_circuit_breaker_state{worker="ai_tagging_worker"} 1
-# enrichment_circuit_breaker_failures{worker="ai_tagging_worker"} 5
+# Look for the OPEN state in the worker log
+docker-compose logs enrichment-ai-tagging | grep -i "circuit breaker"
 ```
 
 **Causes**:
@@ -2523,7 +2527,7 @@ MAX_OVERFLOW=10
 | `/services/enrichment/src/workers/cluster_detection_worker.py` | Cluster detection + archiver + tier updater (V3) |
 | `/services/enrichment/src/workers/cluster_validation_worker.py` | LLM cluster validation (V3) |
 
-### Task Files (32 total)
+### Task Files (38 modules)
 
 | Task | File | Type |
 |------|------|------|

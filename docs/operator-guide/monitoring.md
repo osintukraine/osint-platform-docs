@@ -2,7 +2,7 @@
 
 **OSINT Intelligence Platform - Production Monitoring & Observability**
 
-Complete guide to monitoring stack health, investigating issues, and optimizing performance using Prometheus, Grafana, Loki, and Dozzle.
+Complete guide to monitoring stack health, investigating issues, and optimizing performance using Prometheus, Grafana, Alertmanager, Loki and ntfy. Everything here runs under the `monitoring` Compose profile (`docker compose --profile monitoring up -d`, or `COMPOSE_PROFILES=...,monitoring`).
 
 ---
 
@@ -26,16 +26,16 @@ Complete guide to monitoring stack health, investigating issues, and optimizing 
 The OSINT Intelligence Platform includes a comprehensive monitoring solution based on industry-standard tools:
 
 - **Prometheus**: Time-series metrics database (scrapes every 15 seconds, 30-day retention)
-- **Grafana**: Visualization dashboards (11 pre-configured dashboards)
+- **Grafana**: Visualization dashboards (12 pre-provisioned dashboards)
 - **AlertManager**: Alert routing and notification delivery
-- **Loki**: Centralized log aggregation (optional, for advanced deployments)
-- **Dozzle**: Real-time container log viewer (lightweight alternative to Loki)
-- **Exporters**: PostgreSQL, Redis, MinIO, cAdvisor, node-exporter
+- **Loki + Promtail**: Centralized log aggregation, queried from Grafana (Explore or the Service Logs dashboard)
+- **ntfy**: Push notification delivery for alerts
+- **Exporters**: PostgreSQL, Redis, cAdvisor, node-exporter (MinIO exposes its own metrics endpoint)
 
 **What We Monitor:**
 
 - Message processing pipeline (ingestion rate, spam detection, archival)
-- LLM performance (response time, success rate, cost estimation)
+- LLM performance (response time, success rate, token counts)
 - Database health (connections, query performance, cache hit ratio)
 - Queue metrics (Redis depth, consumer lag, backpressure)
 - Media archival (storage usage, deduplication efficiency)
@@ -51,7 +51,8 @@ The OSINT Intelligence Platform includes a comprehensive monitoring solution bas
 │                    Application Services                      │
 ├──────────┬──────────┬──────────┬──────────┬─────────────────┤
 │ Listener │ Processor│   API    │Enrichment│  Infrastructure │
-│ :8001    │ :8002    │ :8000    │ :9095    │  (PG,Redis,S3)  │
+│ :8001    │ :8002    │ :8000    │ :9196-   │  (PG,Redis,S3)  │
+│          │ (x N)    │          │  9212    │                 │
 └────┬─────┴────┬─────┴────┬─────┴────┬─────┴────┬────────────┘
      │          │          │          │          │
      │ /metrics │ /metrics │ /metrics │ /metrics │ Exporters
@@ -84,9 +85,9 @@ The OSINT Intelligence Platform includes a comprehensive monitoring solution bas
           ┌──────────────────────────────────────┐
           │           Log Pipeline               │
           ├────────────────┬─────────────────────┤
-          │     Dozzle     │    Loki (Optional)  │
-          │  Container Logs│  Centralized Logs   │
-          │     :8888      │      :3100          │
+          │    Promtail    │        Loki         │
+          │ Container Logs │  Centralized Logs   │
+          │  (Docker API)  │      :3100          │
           └────────────────┴─────────────────────┘
 ```
 
@@ -100,20 +101,19 @@ The OSINT Intelligence Platform includes a comprehensive monitoring solution bas
 # URL
 http://localhost:3001
 
-# Default credentials
-Username: admin
-Password: admin
+# Credentials (from .env)
+Username: GRAFANA_ADMIN_USER (default: admin)
+Password: GRAFANA_ADMIN_PASSWORD (required; compose refuses to start without it)
 
-# IMPORTANT: Change password on first login!
+# The port is GRAFANA_PORT: .env.example sets 3001, the compose default is 3000
 ```
 
 **First Login Checklist:**
 
-1. Login with default credentials
-2. Navigate to **Profile → Change Password**
-3. Set strong password (minimum 12 characters)
-4. Navigate to **Dashboards → Browse** to view pre-configured dashboards
-5. Verify Prometheus datasource: **Configuration → Data Sources → Prometheus → Test**
+1. Login with the `.env` credentials
+2. Use a strong `GRAFANA_ADMIN_PASSWORD` (minimum 12 characters)
+3. Navigate to **Dashboards → Browse** to view pre-configured dashboards
+4. Verify Prometheus datasource: **Configuration → Data Sources → Prometheus → Test**
 
 ### Prometheus (Metrics Query UI)
 
@@ -122,7 +122,9 @@ Password: admin
 http://localhost:9090
 
 # Access
-- No authentication required (internal network only)
+- No authentication of its own: keep it off the public internet. Behind Caddy
+  (production) /prometheus/ is reachable by admins only, through Oathkeeper.
+- Configuration reloads via POST /-/reload (--web.enable-lifecycle is on); retention 30d
 
 # Common tasks
 - Query metrics: Click "Graph" → enter PromQL expression
@@ -131,21 +133,19 @@ http://localhost:9090
 - View configuration: Status → Configuration
 ```
 
-### Dozzle (Real-Time Container Logs)
+### Loki (Log Search)
+
+Logs are shipped by Promtail and searched in Grafana: **Explore -> Loki** (LogQL), or the **Service Logs** dashboard.
 
 ```bash
-# URL
-http://localhost:8888
-
-# Access
-- No authentication required (internal network only)
-
-# Features
-- Real-time log streaming for all containers
-- Search and filter logs by container, time range, or keyword
-- Multi-container view (compare logs side-by-side)
-- No storage overhead (reads directly from Docker daemon)
+# Loki readiness
+curl http://localhost:3100/ready
 ```
+
+For a quick look without Grafana use `docker compose logs -f SERVICE`.
+
+!!! note
+    Dozzle is no longer part of the stack (the service is commented out in `docker-compose.yml`). The Caddyfiles still carry a `/dozzle/` route that only works if you run it yourself.
 
 ### AlertManager (Alert Management)
 
@@ -167,39 +167,42 @@ http://localhost:9093
 ```bash
 # Application services
 curl http://localhost:8001/metrics   # Listener
-curl http://localhost:8002/metrics   # Processor Worker 1
-curl http://localhost:8003/metrics   # Processor Worker 2
-curl http://localhost:8000/metrics   # API
+curl http://localhost:8000/metrics   # API (also API_METRICS_PORT 8003)
+curl http://localhost:9094/metrics   # Notifier
+# processor-worker publishes 8002 inside the container only (it is scaled,
+# so there is no fixed host port); use: docker compose exec processor-worker curl -s localhost:8002/metrics
 
-# Enrichment workers (12 total)
+# Enrichment workers (host ports from docker-compose.yml)
 curl http://localhost:9198/metrics   # Router
 curl http://localhost:9196/metrics   # AI Tagging
-curl http://localhost:9097/metrics   # RSS Validation
-curl http://localhost:9098/metrics   # Event Detection
-curl http://localhost:9099/metrics   # Geolocation LLM
+curl http://localhost:9197/metrics   # RSS Validation
+curl http://localhost:9099/metrics   # Event Detection
+curl http://localhost:9210/metrics   # Geolocation LLM
 curl http://localhost:9199/metrics   # Fast Pool
 curl http://localhost:9200/metrics   # Telegram
 curl http://localhost:9201/metrics   # Decision
 curl http://localhost:9202/metrics   # Maintenance
+curl http://localhost:9203/metrics   # Fact Check
 curl http://localhost:9211/metrics   # Cluster Detection
 curl http://localhost:9212/metrics   # Cluster Validation
 
 # Infrastructure exporters
 curl http://localhost:9187/metrics   # PostgreSQL Exporter
 curl http://localhost:9121/metrics   # Redis Exporter
-curl http://localhost:8080/metrics   # cAdvisor (container stats)
+curl http://localhost:8081/metrics   # cAdvisor (container stats; host port 8081)
 curl http://localhost:9100/metrics   # Node Exporter (host stats)
 
 # Monitoring stack self-monitoring
 curl http://localhost:9090/metrics   # Prometheus
-curl http://localhost:3001/metrics   # Grafana
 ```
+
+Which of these Prometheus actually scrapes is defined in `infrastructure/prometheus/prometheus.yml`: listener, processor (all replicas, via DNS discovery), processor-backfill, api, postgres, redis, minio, cadvisor, node, ntfy, alertmanager, notifier, and the enrichment workers ai-tagging, rss-validation, router, fast-pool, telegram, decision, maintenance and fact-check. The event-detection, geolocation-llm and cluster workers, and the extra listeners (`listener-russia`, `listener-ukraine`), are not in the file; add a `job_name` for any you want in Grafana. Check **Status -> Targets** in Prometheus.
 
 ---
 
 ## Grafana Dashboards
 
-The platform includes **11 pre-configured dashboards** located in `/infrastructure/grafana/dashboards/`:
+The platform provisions **12 dashboards** from `infrastructure/grafana/dashboards/` (the 11 below plus `disaster-recovery.json`, shown when the DR/shadow-sync setup is used):
 
 ### 1. Platform Overview (`platform-overview.json`)
 
@@ -307,11 +310,11 @@ The platform includes **11 pre-configured dashboards** located in `/infrastructu
 - **Recent Errors**: Table of last 100 error messages
 - **Log Search**: Full-text search across all services
 - **Slow Query Logs**: PostgreSQL queries > 100ms
-- **LLM Request Logs**: Ollama request/response details
+- **LLM Request Logs**: LLM request/response details
 
 **Refresh Rate**: 10 seconds
 
-**Note**: Requires Loki deployment. For lightweight alternative, use Dozzle (http://localhost:8888).
+**Note**: Requires the `monitoring` profile (Loki and Promtail). Without it use `docker compose logs`.
 
 ### 6. PostgreSQL Dashboard (`postgres.json`)
 
@@ -343,9 +346,9 @@ The platform includes **11 pre-configured dashboards** located in `/infrastructu
 
 **Key Panels:**
 
-- **Queue Depth**: Messages in `telegram_messages` stream
+- **Queue Depth**: Messages pending in the `telegram:messages:realtime` / `telegram:messages:backfill` streams
 - **Consumer Lag**: Processing delay (seconds)
-- **Memory Usage**: Current vs max memory (512MB limit)
+- **Memory Usage**: Current vs max memory (`REDIS_MAXMEMORY`, default 1gb)
 - **Eviction Rate**: Keys evicted due to memory pressure
 - **Connection Count**: Active clients
 - **Command Rate**: Commands per second
@@ -456,7 +459,7 @@ The platform includes **11 pre-configured dashboards** located in `/infrastructu
 
 ### Message Processing Metrics
 
-**Source**: Listener (`listener:8001/metrics`) and Processor (`processor:8002/metrics`)
+**Source**: Listener (`listener:8001/metrics`) and Processor (`processor-worker:8002/metrics`)
 
 ```promql
 # Ingestion rate
@@ -487,7 +490,7 @@ osint_queue_consumer_lag_seconds
 
 ### LLM Performance Metrics
 
-**Source**: Processor (`processor:8002/metrics`)
+**Source**: Processor (`processor-worker:8002/metrics`)
 
 ```promql
 # LLM success rate
@@ -499,16 +502,13 @@ osint:llm_response:avg_duration_seconds
 # LLM error rate
 rate(osint_llm_requests_total{status!="success"}[5m]) / rate(osint_llm_requests_total[5m])
 
-# Importance level distribution
-importance_level_distribution
-
 # Topic classification
 osint_topics_total
 ```
 
 **Key Thresholds:**
 
-- Success rate: >90% normal, <90% investigate Ollama health
+- Success rate: >90% normal, <90% investigate the LLM provider (gateway or Ollama) health
 - Response time: <5s target, <15s acceptable, >15s for 15m triggers alert
 - Error rate: <10% normal, >10% for 10m triggers alert
 
@@ -545,11 +545,11 @@ rate(pg_stat_database_deadlocks[5m])
 
 ### Queue Metrics
 
-**Source**: Redis Exporter (`redis-exporter:9121/metrics`)
+**Source**: Redis Exporter (`redis-exporter:9121/metrics`) and the processor (`osint_queue_messages_pending`)
 
 ```promql
-# Queue depth
-redis_stream_length{stream="telegram_messages"}
+# Queue depth (published by the processor)
+osint_queue_messages_pending
 
 # Memory usage
 redis_memory_used_bytes
@@ -564,13 +564,13 @@ redis_connected_clients
 **Key Thresholds:**
 
 - Queue depth: See message processing metrics
-- Memory usage: <90% of max (512MB), >90% for 10m triggers warning
+- Memory usage: <90% of `REDIS_MAXMEMORY` (default 1gb), >90% for 10m triggers warning
 - Eviction rate: 0 normal, >10/s for 10m triggers warning
 - Connections: <80% of max, >80% for 10m triggers warning
 
 ### Media Archival Metrics
 
-**Source**: Processor (`processor:8002/metrics`)
+**Source**: Processor (`processor-worker:8002/metrics`)
 
 ```promql
 # Media archived by type
@@ -622,7 +622,7 @@ histogram_quantile(0.95, rate(api_request_duration_seconds_bucket[5m]))
 
 ### Enrichment Pipeline Metrics
 
-**Source**: Enrichment Service (`enrichment:9095/metrics`)
+**Source**: Enrichment workers (`enrichment-*:9196-9212/metrics`, one endpoint per worker)
 
 ```promql
 # Queue depth by task
@@ -652,7 +652,10 @@ increase(enrichment_messages_processed_total[30m]) == 0 and enrichment_queue_dep
 
 ## Alert Rules
 
-Alert rules are defined in `/infrastructure/prometheus/rules/alerting_rules.yml`. **75 total alerts** across 12 categories.
+Alert rules are defined in `infrastructure/prometheus/rules/alerting_rules.yml` (about 90 alerts: service availability, pipeline, LLM, database, Redis, media, API, host, SLO burn rate, enrichment backlog, DLQ and Telegram account alerts). Recording rules (`osint:*` series) are in `recording_rules.yml`. Only files under `rules/` are loaded.
+
+!!! warning "Known gap"
+    `RedisQueueDepthHigh/Critical` and `DLQGrowing/SizeHigh` query `redis_stream_length{stream="telegram_messages"}`, but the streams are named `telegram:messages:realtime` / `:backfill` and the Redis exporter is not started with stream checking. These alerts do not fire; `RedisQueueBacklog` and `RedisQueueGrowing` (on `osint_queue_messages_pending`) are the working queue alerts.
 
 ### Viewing Active Alerts
 
@@ -685,19 +688,19 @@ All services expose health check endpoints:
 ```bash
 # Application services
 curl http://localhost:8001/health   # Listener
-curl http://localhost:8002/health   # Processor Worker
 curl http://localhost:8000/health   # API
-curl http://localhost:9095/health   # Enrichment
+docker compose exec processor-worker curl -s localhost:8002/health   # Processor worker
+curl http://localhost:9198/health   # Enrichment router (each worker has its own port)
 
 # Infrastructure services
-docker exec osint-postgres pg_isready -U postgres -d osint_platform
+docker exec osint-postgres pg_isready -U osint_user -d osint_platform
 docker exec osint-redis redis-cli ping
 curl http://localhost:9000/minio/health/live
-curl http://localhost:11434/api/tags  # Ollama
+curl http://localhost:11434/api/tags  # Ollama (search embeddings)
 
 # Monitoring stack
 curl http://localhost:9090/-/healthy  # Prometheus
-curl http://localhost:3001/api/health # Grafana
+curl http://localhost:3001/api/health # Grafana (GRAFANA_PORT)
 curl http://localhost:9093/-/healthy  # AlertManager
 ```
 
@@ -705,44 +708,42 @@ curl http://localhost:9093/-/healthy  # AlertManager
 
 ## Log Analysis
 
-### Dozzle (Real-Time Container Logs)
+### Grafana + Loki
 
-**Access**: http://localhost:8888
+Open **Explore**, pick the Loki datasource and query, for example:
 
-**Features:**
+```logql
+{container_name=~"osint-processor.*"} |= "ERROR"
+```
 
-- Real-time log streaming for all containers
-- Search and filter logs by keyword, regex, or time range
-- Multi-container view (compare logs side-by-side)
-- Export logs for offline analysis
-- No storage overhead
+Promtail reads container logs from the Docker daemon; retention is set in `infrastructure/loki/loki-config.yaml`.
 
 ### Docker Compose Logs (CLI)
 
 ```bash
 # View all logs
-docker-compose logs -f
+docker compose logs -f
 
 # View specific service
-docker-compose logs -f processor-worker
+docker compose logs -f processor-worker
 
 # View last 100 lines
-docker-compose logs --tail=100 processor-worker
+docker compose logs --tail=100 processor-worker
 
 # Search logs
-docker-compose logs processor-worker | grep "ERROR"
+docker compose logs processor-worker | grep "ERROR"
 
 # Export logs to file
-docker-compose logs --no-color processor-worker > processor-$(date +%Y%m%d).log
+docker compose logs --no-color processor-worker > processor-$(date +%Y%m%d).log
 ```
 
 ### Structured JSON Logging
 
-All services use structured JSON logging:
+Services log JSON when `LOG_FORMAT=json` is set for them (the default is console format, so add it to the service environment first). Typical record:
 
 ```json
 {
-  "timestamp": "2025-12-09T12:34:56.789Z",
+  "timestamp": "2026-01-15T12:34:56.789Z",
   "level": "INFO",
   "service": "processor",
   "worker_id": "worker-1",
@@ -760,13 +761,13 @@ All services use structured JSON logging:
 
 ```bash
 # Extract ERROR-level logs
-docker-compose logs processor-worker | jq 'select(.level == "ERROR")'
+docker compose logs --no-log-prefix processor-worker | jq -R 'fromjson? | select(.level == "ERROR")'
 
 # Find slow processing (>1000ms)
-docker-compose logs processor-worker | jq 'select(.duration_ms > 1000)'
+docker compose logs --no-log-prefix processor-worker | jq -R 'fromjson? | select(.duration_ms > 1000)'
 
 # Get average processing time
-docker-compose logs processor-worker | jq -s '[.[].duration_ms] | add / length'
+docker compose logs --no-log-prefix processor-worker | jq -R -s -c '[split("\n")[] | fromjson? | .duration_ms | numbers] | add / length'
 ```
 
 ---
@@ -779,11 +780,11 @@ docker-compose logs processor-worker | jq -s '[.[].duration_ms] | add / length'
 
 ```bash
 # Check queue depth
-curl -s http://localhost:8002/metrics | grep osint_queue_messages_pending
+docker compose exec processor-worker curl -s localhost:8002/metrics | grep osint_queue_messages_pending
 # If >10,000: Scale up processor workers
 
 # Check consumer lag
-curl -s http://localhost:8002/metrics | grep osint_queue_consumer_lag_seconds
+docker compose exec processor-worker curl -s localhost:8002/metrics | grep osint_queue_consumer_lag_seconds
 # If >300s: Processor can't keep up with ingestion
 ```
 
@@ -791,12 +792,12 @@ curl -s http://localhost:8002/metrics | grep osint_queue_consumer_lag_seconds
 
 ```bash
 # Check LLM response time
-curl -s http://localhost:8002/metrics | grep osint_llm_response_duration
-# If >15s: Ollama may be overloaded
+docker compose exec processor-worker curl -s localhost:8002/metrics | grep osint_llm_response_duration
+# If >15s: the LLM gateway/Ollama may be overloaded
 
 # Check LLM error rate
 # Grafana → AI/ML Processing → LLM Success Rate
-# If <90%: Check Ollama logs for errors
+# If <90%: Check the LLM provider (gateway or Ollama) logs for errors
 ```
 
 **3. Database Performance**
@@ -807,7 +808,7 @@ curl -s http://localhost:9187/metrics | grep pg_stat_database_blks
 # If <90%: Increase shared_buffers in postgresql.conf
 
 # Check slow queries
-docker exec osint-postgres psql -U postgres -d osint_platform -c "
+docker exec osint-postgres psql -U osint_user -d osint_platform -c "
 SELECT calls, mean_exec_time, query
 FROM pg_stat_statements
 ORDER BY mean_exec_time DESC
@@ -819,30 +820,31 @@ LIMIT 10;"
 **Scale Processor Workers:**
 
 ```bash
-# If queue depth >10,000 or consumer lag >300s:
-docker-compose up -d --scale processor-worker=4
+# If queue depth >10,000 or consumer lag >300s (persist it in .env):
+PROCESSOR_WORKER_REPLICAS=4 docker compose up -d processor-worker
 ```
 
 **PostgreSQL Tuning:**
 
 ```bash
 # Edit infrastructure/postgres/postgresql.conf
-shared_buffers = 512MB  # Increase from 256MB if cache hit ratio <90%
-work_mem = 16MB         # Increase from 4MB if complex queries slow
-max_connections = 200   # Increase from 100 if >80 connections frequently
+# Review shared_buffers, work_mem and max_connections (200 by default).
+# Increase shared_buffers if the cache hit ratio stays <90%, work_mem if complex
+# queries spill to disk. The hardware tier also sets POSTGRES_SHARED_BUFFERS and
+# POSTGRES_WORK_MEM in .env (see Performance Tuning).
 
 # Restart PostgreSQL
-docker-compose restart postgres
+docker compose restart postgres
 ```
 
 **Redis Tuning:**
 
 ```bash
-# Edit docker-compose.yml redis command
-command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+# Set in .env (compose passes it to redis-server --maxmemory, policy allkeys-lru)
+REDIS_MAXMEMORY=2gb
 
-# Restart Redis
-docker-compose restart redis
+# Recreate Redis
+docker compose up -d redis
 ```
 
 ---
@@ -891,14 +893,14 @@ command:
   - '--storage.tsdb.retention.time=7d'  # Reduce from 30d
 
 # 3. Restart Prometheus
-docker-compose restart prometheus
+docker compose restart prometheus
 ```
 
 ### Issue: Alerts not firing
 
 ```bash
 # 1. Check alerting rules syntax
-docker exec osint-prometheus promtool check rules /etc/prometheus/rules/alerting_rules.yml
+docker exec osint-prometheus promtool check rules /etc/prometheus/rules/alerting_rules.yml /etc/prometheus/rules/recording_rules.yml
 
 # 2. Verify alert is configured
 curl http://localhost:9090/api/v1/rules | jq
@@ -912,7 +914,7 @@ curl http://localhost:9090/api/v1/rules | jq
 
 Before deploying monitoring to production:
 
-- [ ] Change Grafana admin password from default `admin/admin`
+- [ ] Set a strong `GRAFANA_ADMIN_PASSWORD` in `.env`
 - [ ] Set strong secrets in `.env`
 - [ ] Disable Grafana anonymous auth
 - [ ] Enable HTTPS with reverse proxy (Caddy/Nginx)
@@ -945,9 +947,3 @@ Before deploying monitoring to production:
 - Dashboard JSONs: `/infrastructure/grafana/dashboards/`
 - Metrics module: `/shared/python/observability/metrics.py`
 - Logging module: `/shared/python/observability/logging.py`
-
----
-
-**Last Updated**: 2025-12-09
-**Version**: 1.0
-**Platform Version**: 1.0 (Production-ready)

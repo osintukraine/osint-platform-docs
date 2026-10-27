@@ -22,7 +22,7 @@ After this tutorial, you will be able to:
 
 Before starting, make sure you have:
 
-- The OSINT Intelligence Platform API running (`docker-compose up -d api`)
+- The OSINT Intelligence Platform API running (`docker-compose up -d api`; it listens on `${API_PORT:-8000}`, and behind Caddy feeds are served at `https://your-domain.com/rss/...`)
 - At least 10 messages indexed in the platform (from your monitored channels)
 - An RSS reader installed or account created (Feedly, Inoreader, Thunderbird, etc.) - optional for step 7
 - Basic understanding of query parameters (the query string part of a URL)
@@ -54,7 +54,11 @@ Your RSS reader displays items
 - **Base URL**: `http://localhost:8000/rss/search` (on local machine) or `https://your-domain.com/rss/search` (production)
 - **Query Parameters**: URL parameters that define what gets included in the feed
 - **Feed Updates**: The feed updates automatically as new messages matching your criteria are added
-- **Caching**: Popular feeds are cached for 5 minutes to reduce server load
+- **Formats**: add `format=atom` or `format=json` to get Atom 1.0 or JSON Feed 1.1 instead of the default RSS 2.0
+- **Authentication**: with the default configuration (`FEED_AUTH_REQUIRED=true`) feeds need a signed token URL, see [Step 8](#step-8-create-a-feed-for-your-team)
+
+!!! warning "Anonymous requests return 401 by default"
+    The plain URLs in Steps 1-4 only work without a token when `FEED_AUTH_REQUIRED=false` (local testing). With the default (`true`), generate a signed URL first (Step 8) and use that in every example below. Production deployments should keep it `true`.
 
 ---
 
@@ -70,9 +74,18 @@ The RSS feed endpoint accepts these common filters:
 |---|---|---|
 | `q` | `Bakhmut` | Search keyword |
 | `importance_level` | `high` | Message importance (high, medium, low) |
-| `days` | `7` | Only messages from last N days |
+| `days` | `7` | Only messages from last N days (1-365) |
 | `channel_id` | `123` | Filter to specific channel |
-| `verified` | `true` | Only from verified channels |
+| `channel_username` | `deepstateua` | Filter by channel username (no `@`) |
+| `channel_folder` | `%25UA` | Folder pattern (`%25` is a URL-encoded `%` wildcard) |
+| `topic`, `language`, `sentiment` | `combat` | Classification filters |
+| `has_media` | `true` | Only messages with media |
+| `min_views`, `min_forwards` | `1000` | Engagement thresholds |
+| `date_from`, `date_to` | `2025-12-01` | ISO date range |
+| `limit` | `50` | Items in feed (default 50, max 100) |
+| `format` | `atom` | `rss` (default), `atom` or `json` |
+
+Shortcut endpoints also exist: `/rss/channel/{username}` and `/rss/topic/{topic}`.
 
 ### Build Your Query
 
@@ -112,15 +125,15 @@ Before subscribing in an RSS reader, let's test it directly in your browser.
 <?xml version="1.0" encoding="UTF-8" ?>
 <rss version="2.0">
 <channel>
-  <title>OSINT Platform Search: importance_level=high days=7</title>
-  <description>Dynamic RSS feed of search results</description>
-  <link>http://localhost:8000</link>
+  <title>(feed title generated from your filters)</title>
+  <description>(feed description generated from your filters)</description>
+  <link>...</link>
   <lastBuildDate>Tue, 09 Dec 2025 15:30:45 GMT</lastBuildDate>
   <item>
     <title>Russian Forces Advance Near Bakhmut</title>
     <description>Combat report...</description>
     <pubDate>Tue, 09 Dec 2025 14:22:10 GMT</pubDate>
-    <link>http://localhost:8000/messages/12345</link>
+    <link>...</link>
   </item>
   <!-- More items here -->
 </channel>
@@ -208,7 +221,7 @@ The platform classifies messages into three importance tiers:
 http://localhost:8000/rss/search?importance_level=high&days=1
 ```
 
-**Daily Brief** (all message levels):
+**Daily Brief** (all importance levels):
 ```bash
 http://localhost:8000/rss/search?days=1
 ```
@@ -285,23 +298,30 @@ If your feed contains non-sensitive intelligence:
 https://your-domain.com/rss/search?importance_level=high&q=intelligence
 ```
 
-Team members can paste this into any RSS reader and subscribe.
+This only works if the operator set `FEED_AUTH_REQUIRED=false`. Anyone with the URL can read the feed.
 
-### Option 2: Authenticated Feed (with API Token)
+### Option 2: Signed Feed URL (default, recommended)
 
-For sensitive feeds, add authentication:
+With `FEED_AUTH_REQUIRED=true` every feed URL carries a `token` (feed token ID) and a `sig` (HMAC signature of the query). You cannot build this by hand; the platform signs it for you.
 
-```bash
-# Get your API token (or create one)
-API_TOKEN="your_api_token_here"
+1. Log in to the web UI and open **Settings -> Feed Tokens** (`/settings/feed-tokens`) or **Profile -> Feeds**.
+2. Create a token (max 10 active tokens per user) and give it a label.
+3. Generate a signed URL for the search you want. The result looks like:
 
-# Build authenticated feed URL
-FEED_URL="http://localhost:8000/rss/search?importance_level=high&q=sensitive-topic&token=${API_TOKEN}"
-
-echo $FEED_URL
+```
+https://your-domain.com/rss/search?importance_level=high&q=sensitive-topic&token=<token-id>&sig=<signature>
 ```
 
-Share the URL only with authorized team members.
+Or via the API (logged-in session required; `POST /api/feed-tokens` creates the token, `POST /api/feed-tokens/{token_id}/sign-url` signs a URL):
+
+```bash
+curl -X POST https://your-domain.com/api/feed-tokens/<token_id>/sign-url \
+  -H "Content-Type: application/json" \
+  -H "Cookie: <your session cookie>" \
+  -d '{"endpoint": "/rss/search", "params": {"importance_level": "high", "q": "sensitive-topic"}}'
+```
+
+Changing any parameter invalidates the signature; sign again. Share the signed URL only with authorized people, and revoke the token in the UI to cut off access.
 
 ---
 
@@ -311,7 +331,7 @@ Here are ready-to-use feed URLs for different intelligence needs:
 
 ### Recipe 1: Daily Intelligence Briefing
 
-All messages from today, sorted by importance:
+All messages from the last day, newest first:
 
 ```bash
 http://localhost:8000/rss/search?days=1
@@ -366,10 +386,10 @@ You can combine multiple parameters for sophisticated feeds:
 
 ### Multi-Keyword Feed
 
-Search for multiple keywords (use `q` parameter):
+`q` is a case-insensitive substring match on the message text (and its translation):
 
 ```bash
-# Messages containing either "equipment" OR "losses"
+# Messages containing the exact phrase "equipment losses" (substring match)
 http://localhost:8000/rss/search?q=equipment%20losses&days=7
 ```
 
@@ -387,8 +407,8 @@ http://localhost:8000/rss/search?channel_id=5&importance_level=high&days=30&limi
 Get more items in your feed:
 
 ```bash
-# 250 most recent messages (default is 50)
-http://localhost:8000/rss/search?days=30&limit=250
+# 100 most recent messages (default is 50, maximum is 100)
+http://localhost:8000/rss/search?days=30&limit=100
 ```
 
 ---
@@ -404,7 +424,7 @@ http://localhost:8000/rss/search?days=30&limit=250
 1. **Check message count:**
    ```bash
    docker-compose exec -T postgres psql -U osint_user -d osint_platform -c \
-     "SELECT COUNT(*) FROM messages WHERE created_at > NOW() - INTERVAL '7 days';"
+     "SELECT COUNT(*) FROM messages WHERE telegram_date > NOW() - INTERVAL '7 days';"
    ```
 
 2. **If count is 0:** You don't have messages from the last 7 days
@@ -413,9 +433,9 @@ http://localhost:8000/rss/search?days=30&limit=250
 
 3. **If count > 0:** API might not be responding
    ```bash
-   curl -I http://localhost:8000/rss/search?days=7
+   curl -s -o /dev/null -w "%{http_code}\n" "http://localhost:8000/rss/search?days=7"
    ```
-   Should return HTTP 200
+   Should print 200. A `401` means feed auth is on: use a signed URL (Step 8).
 
 4. **Check API logs:**
    ```bash
@@ -442,9 +462,9 @@ http://localhost:8000/rss/search?days=30&limit=250
 
 3. **Test with curl:**
    ```bash
-   curl -I http://localhost:8000/rss/search?importance_level=high
+   curl -s -o /dev/null -w "%{http_code}\n" "http://localhost:8000/rss/search?importance_level=high"
    ```
-   Should return `200 OK`
+   Should print `200` (`401` = signed token URL required)
 
 ### "RSS reader shows items but they're not updating"
 
@@ -462,7 +482,7 @@ http://localhost:8000/rss/search?days=30&limit=250
 3. **Verify new messages are being added:**
    ```bash
    docker-compose exec -T postgres psql -U osint_user -d osint_platform -c \
-     "SELECT COUNT(*) FROM messages WHERE created_at > NOW() - INTERVAL '1 hour';"
+     "SELECT COUNT(*) FROM messages WHERE telegram_date > NOW() - INTERVAL '1 hour';"
    ```
 
 ---
@@ -484,7 +504,7 @@ Congratulations! You now understand:
 Now that you're producing RSS feeds, you can:
 
 1. **Setup Discord Alerts** - [Tutorial: Setup Discord Alerts](setup-discord-alerts.md)
-   - Turn RSS feeds into Discord notifications
+   - Get Discord notifications for matching messages
    - Alert your team in real-time
 
 2. **Create Multiple Feeds** - Build feeds for different intelligence areas
@@ -496,7 +516,7 @@ Now that you're producing RSS feeds, you can:
    - Organize by folders/collections
    - Set up smart filters
 
-4. **Share with Team** - Give authenticated feed URLs to team members
+4. **Share with Team** - Give signed feed URLs to team members
    - Each person can subscribe in their reader
    - Feeds update automatically
 
@@ -510,7 +530,7 @@ Now that you're producing RSS feeds, you can:
 | **Query Building** | Use URL parameters to filter: importance_level, days, q, channel_id |
 | **Reader Agnostic** | Works with any RSS reader (Feedly, Inoreader, Thunderbird, etc.) |
 | **Real-Time Updates** | Feeds auto-update as new messages arrive |
-| **Secure Sharing** | Use API tokens for authenticated feeds |
+| **Secure Sharing** | Signed token URLs (`token` + `sig`) when `FEED_AUTH_REQUIRED=true` |
 
 ---
 

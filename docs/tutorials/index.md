@@ -31,7 +31,7 @@ Learn the folder-based channel management system that makes adding channels incr
 
 **Prerequisites:**
 - Telegram account with admin access to a test account
-- Platform running and operational (docker-compose up -d)
+- Platform running and operational (`docker-compose up -d`) with a Telegram session authenticated
 
 [:octicons-arrow-right-24: Start Tutorial](add-telegram-channel.md)
 
@@ -57,7 +57,7 @@ Turn any search query into a shareable RSS feed that you can subscribe to in any
 
 ### 3. Setup Discord Alerts (~15 minutes)
 
-Configure real-time notifications for critical intelligence using Discord webhooks and n8n workflows.
+Configure near-real-time notifications for critical intelligence using Discord webhooks and an n8n workflow that polls a signed RSS feed.
 
 **What You'll Learn:**
 - Creating a Discord webhook for your server
@@ -67,8 +67,8 @@ Configure real-time notifications for critical intelligence using Discord webhoo
 
 **Prerequisites:**
 - Discord server with admin permissions
-- Platform running with at least 50 messages
-- n8n service available (http://localhost:5678)
+- Platform running with at least 50 messages and a signed RSS feed URL
+- Your own n8n instance (not shipped with the platform)
 
 [:octicons-arrow-right-24: Start Tutorial](setup-discord-alerts.md)
 
@@ -80,8 +80,8 @@ Complete walkthrough of deploying the OSINT platform to a production server with
 
 **What You'll Learn:**
 - Server requirements and cost optimization
-- DNS setup and SSL certificates with Caddy
-- Environment configuration for production
+- DNS setup, SSL certificates and CrowdSec with Caddy
+- Environment configuration for production (including Kratos auth)
 - Telegram session authentication
 - First channel monitoring and verification
 - Health monitoring with Grafana

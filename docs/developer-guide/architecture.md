@@ -16,7 +16,7 @@ The platform operates as a distributed pipeline that continuously monitors Teleg
 ### Core Capabilities
 
 - **Real-time Ingestion**: Monitor hundreds of Telegram channels simultaneously with automatic spam filtering (>95% accuracy)
-- **AI-Powered Enrichment**: Multi-model LLM classification (6 models), entity extraction, semantic embeddings
+- **AI-Powered Enrichment**: LLM classification (spam, relevance, topic, importance, archive decision) via an OpenAI-compatible gateway or Ollama, entity extraction, semantic embeddings
 - **Content-Addressed Storage**: SHA-256 deduplication for media files, 50-70% storage savings
 - **Semantic Search**: pgvector embeddings for similarity queries across all archived content
 - **Dynamic Distribution**: Subscribe to any search query combination via RSS feeds
@@ -53,9 +53,9 @@ graph LR
 ### Flow Stages
 
 1. **Ingestion** (Listener): Monitors Telegram folders, pushes raw messages to Redis
-2. **Real-time Processing** (Processor): Spam filter → routing → entity extraction → media download → persistence
+2. **Real-time Processing** (Processor): Spam filter → routing → LLM classification → entity extraction → persistence. Media is downloaded by the `media-worker` after the text is saved (media lane), or inline when the lane is off
 3. **Batch Enrichment** (Enrichment): Embeddings → AI tagging → social graph → translation backfill
-4. **API Layer**: REST endpoints, GraphQL, dynamic RSS feeds
+4. **API Layer**: REST endpoints, WebSocket map updates, dynamic RSS feeds
 5. **Distribution**: Next.js frontend, RSS readers, N8N automation
 
 ---
@@ -107,7 +107,7 @@ The canonical list of services, profiles and ports is [Docker Services](../refer
 - Embedding spam filter (fast, CPU; obvious spam skips the LLM)
 - Channel routing (archive_all vs selective_archive)
 - Regex entity extraction (compiled patterns)
-- Media download + SHA-256 deduplication
+- Media download + SHA-256 deduplication (media lane: queued as `media_status = 'pending'`, downloaded by `media-worker`)
 - LLM classification (spam, relevance, topic, importance, archive decision) via the LLM gateway or Ollama
 - PostgreSQL persistence
 
@@ -137,24 +137,27 @@ The canonical list of services, profiles and ports is [Docker Services](../refer
 
 **Implementation**:
 ```sql
--- Database schema (infrastructure/postgres/init.sql)
-CREATE TABLE media_files (
+-- Database schema (infrastructure/postgres/init.sql, abridged)
+CREATE TABLE IF NOT EXISTS media_files (
     id SERIAL PRIMARY KEY,
-    sha256_hash CHAR(64) UNIQUE NOT NULL,
-    file_type VARCHAR(20),
-    file_size BIGINT,
-    mime_type VARCHAR(100),
-    s3_key VARCHAR(500),  -- media/{hash[:2]}/{hash[2:4]}/{hash}.{ext}
-    reference_count INTEGER DEFAULT 0
+    sha256 VARCHAR(64) UNIQUE NOT NULL,   -- content address
+    s3_key TEXT NOT NULL,                 -- media/{hash[:2]}/{hash[2:4]}/{hash}.{ext}
+    file_size BIGINT NOT NULL,
+    mime_type VARCHAR(100) NOT NULL,
+    storage_box_id VARCHAR(50) REFERENCES storage_boxes(id),
+    reference_count INTEGER DEFAULT 1,
+    synced_at TIMESTAMP,                  -- NULL = still in the local buffer
+    local_path TEXT
 );
 
-CREATE TABLE message_media (
-    message_id INTEGER REFERENCES messages(id),
+CREATE TABLE IF NOT EXISTS message_media (
+    message_id BIGINT REFERENCES messages(id),
     media_file_id INTEGER REFERENCES media_files(id),
-    media_group_id BIGINT,  -- Telegram album grouping
-    position INTEGER DEFAULT 0
+    ...
 );
 ```
+
+New files go to a local SSD buffer first and `media-sync` moves them to Hetzner storage boxes; see [Media Storage](media-storage.md).
 
 **Storage Path Pattern**:
 ```
@@ -188,7 +191,7 @@ async def discover_channels_from_folders(telegram_client):
     Discovers channels from Telegram folders matching patterns:
     - Archive-* → archive_all rule (store everything)
     - Monitor-* → selective_archive rule (high importance only)
-    - Discover-* → auto-joined channels (14-day probation)
+    - Discover-* → auto-joined channels (~7-day probation after 30+ messages)
     """
     folders = await telegram_client.get_folders()
 
@@ -205,6 +208,8 @@ async def discover_channels_from_folders(telegram_client):
         # Sync channels in this folder to database
         await sync_folder_channels(folder, rule)
 ```
+
+Folder-name matching is by prefix (`^Archive`, `^Monitor`, `^Discover`) and the sync interval is `FOLDER_SYNC_INTERVAL` (default 5 minutes). With several Telegram accounts, each account's listener syncs its own folders.
 
 **User Workflow** (30 seconds):
 1. Open Telegram app (mobile or desktop)
@@ -288,7 +293,7 @@ concrete query is too slow in PostgreSQL. Until then, improve coverage of the ex
 
 | Category | Technology | Purpose | Why Chosen |
 |----------|-----------|---------|------------|
-| **API Framework** | FastAPI 0.104+ | REST endpoints, OpenAPI docs | Async support, type hints, auto-validation |
+| **API Framework** | FastAPI 0.127 | REST endpoints, OpenAPI docs | Async support, type hints, auto-validation |
 | **Database** | PostgreSQL 16 | Primary data store | JSONB, full-text search, pgvector extension |
 | **Vector Store** | pgvector | Semantic similarity search | Native PostgreSQL integration, no separate service |
 | **Message Queue** | Redis 7 Streams | Event streaming, task queues | Persistent ordered queues, consumer groups |
@@ -304,12 +309,11 @@ concrete query is too slow in PostgreSQL. Until then, improve coverage of the ex
 | **Next.js 15** | React framework | Server-side rendering, file-based routing |
 | **React 19** | UI library | Component reusability, large ecosystem |
 | **TailwindCSS** | Styling | Utility-first, rapid development |
-| **AG Grid Community** | Data tables | High-performance virtual scrolling (1M+ rows) |
+| **MapLibre GL** | Maps | Vector/GeoJSON map rendering for the map interface |
 | **Recharts** | Charts/graphs | Simple API, responsive |
 | **Sigma.js + graphology** | Network visualizations | WebGL rendering of entity, channel and social graphs; ForceAtlas2 layout (replaced Cytoscape.js in January 2026) |
 | **ReactFlow** | News timeline | Node/edge layout of articles and correlated posts |
-| **Jotai** | State management | Lightweight, atomic state |
-| **React Query** | Data fetching | Caching, background refetch |
+| **TanStack Query** | Data fetching | Caching, background refetch |
 
 ### AI/ML Stack
 
@@ -317,7 +321,7 @@ concrete query is too slow in PostgreSQL. Until then, improve coverage of the ex
 |-----------|-----------|---------|------|
 | **LLM Inference** | OpenAI-compatible gateway (LiteLLM in front of vLLM on a GPU host), or Ollama | Classification, fact-check, validation | Self-hosted |
 | **Embeddings** | sentence-transformers, models pinned in `infrastructure/models/models.txt` and mounted read-only | Spam filter and similarity (the multilingual MiniLM model for spam) | €0/month |
-| **Search embeddings** | Ollama `all-minilm` (384d vectors) in pgvector | Semantic search | €0/month |
+| **Search embeddings** | `all-MiniLM-L6-v2` (384-d vectors, `messages.content_embedding`) in pgvector | Semantic search | €0/month |
 | **Translation** | DeepL Pro Free API | English translation (500k chars/month free) | €0/month |
 | **Language Detection** | fasttext / langdetect | Detect message language | €0/month |
 
@@ -343,15 +347,18 @@ Models are selected by gateway alias or `OLLAMA_MODEL`; classifier prompts are v
 osint-intelligence-platform/
 ├── services/                    # Application services (microservices architecture)
 │   ├── listener/               # Telegram channel monitoring
-│   ├── processor/              # Real-time message processing
-│   ├── enrichment/             # Background batch enrichment
-│   ├── api/                    # REST API + GraphQL endpoints
+│   ├── processor/              # Real-time processing (+ media-worker, backlog-worker entry points)
+│   ├── enrichment/             # Background batch enrichment (router + workers)
+│   ├── api/                    # REST API + WebSocket endpoints
 │   ├── frontend-nextjs/        # Next.js web application
+│   ├── media-sync/             # Local buffer → storage box sync
+│   ├── shadow-sync/            # Shadow account state sync
 │   ├── rss-ingestor/           # RSS feed ingestion
 │   ├── opensanctions/          # OpenSanctions entity matching
-│   ├── entity-ingestion/       # CSV entity import
+│   ├── entity-ingestion/       # Curated entity import
 │   ├── notifier/               # Notification routing
-│   ├── analytics/              # Social graph analytics
+│   ├── analytics/              # Social graph analytics, materialized view refresh
+│   ├── translation-backfill/   # One-off translation backfill
 │   └── migration/              # Legacy data migration
 │
 ├── shared/python/              # Shared Python modules
@@ -360,22 +367,28 @@ osint-intelligence-platform/
 │   ├── database/               # Database utilities
 │   ├── ai/                     # AI/LLM utilities
 │   ├── observability/          # Logging + metrics
-│   ├── telegram/               # Telegram utilities
+│   ├── telegram/               # Client factory, session names
 │   ├── translation/            # Translation services
+│   ├── storage/                # Storage box selection, MinIO pool
+│   ├── hardware/ hashing/ utils/
 │   └── notifications/          # Notification client
 │
 ├── infrastructure/             # Infrastructure configuration
 │   ├── postgres/
-│   │   └── init.sql            # Database schema (4,658 lines)
+│   │   ├── init.sql            # Database schema (~7,200 lines)
+│   │   └── migrations/         # Numbered SQL migrations (000_template.sql, 001_... )
 │   ├── docker/
 │   │   └── Dockerfile.pytorch-cpu  # Shared base image
-│   ├── prometheus/
-│   ├── grafana/
-│   ├── ollama/
+│   ├── models/                 # models.txt: pinned embedding models
+│   ├── prometheus/ grafana/ loki/ alertmanager/
+│   ├── kratos/ oathkeeper/ crowdsec/   # Auth stack
+│   ├── ollama/ yente/
 │   └── caddy/
 │
 ├── scripts/                    # Operational scripts
-│   ├── stack-manager.sh        # Interactive Docker menu
+│   ├── stack-manager-py.sh     # Interactive Docker menu
+│   ├── migrate.sh              # Apply SQL migrations
+│   ├── deploy.sh               # Pull, migrate, build, restart
 │   ├── telegram_auth.py        # Telegram session authentication
 │   └── build-pytorch-services.sh
 │
@@ -412,9 +425,9 @@ osint-intelligence-platform/
 | **Redis** | 0.1-0.3 cores | 512MB | Low |
 | **MinIO** | 0.1-0.5 cores | 256MB | High (reads/writes) |
 | **Frontend** | 0.1-0.2 cores | 256MB | Low |
-| **Enrichment (12 workers)** | 1-3 cores | 1-2GB | Medium |
+| **Enrichment (per-lane workers)** | 1-3 cores in total | 1-2GB | Medium |
 
-**Total**: 8-16 cores, 12-24GB RAM, 100GB+ disk (+ media storage)
+Figures are indicative; measure on your hardware.
 
 ---
 
@@ -423,30 +436,32 @@ osint-intelligence-platform/
 ### Development Environment
 
 ```bash
-# Start core services + dev tools
-docker-compose --profile dev --profile monitoring up -d
+# Core services with the laptop-friendly override
+docker-compose -f docker-compose.yml -f docker-compose.development.yml up -d
+
+# Optional profiles, e.g. monitoring
+docker-compose --profile monitoring up -d
 ```
 
 ### Production Environment
 
 ```bash
-# Start production + monitoring + enrichment
-docker-compose \
-  --profile monitoring \
-  --profile enrichment \
-  -f docker-compose.yml \
-  -f docker-compose.production.yml \
-  up -d
+# Profiles come from COMPOSE_PROFILES in .env (enrichment-standard, monitoring, auth, llm-gateway, ...)
+# Pull, migrate and restart:
+./scripts/deploy.sh
+
+# Or by hand:
+docker-compose -f docker-compose.yml -f docker-compose.production.yml up -d
 ```
 
 ### Scaling Strategies
 
 ```bash
-# Scale processor workers (handle message spikes)
-docker-compose up -d --scale processor-worker=4
+# Scale processor workers (handle message spikes): replicas come from .env
+PROCESSOR_WORKER_REPLICAS=4 docker-compose up -d processor-worker
 
-# Add enrichment workers (catch up on backlog)
-docker-compose --profile enrichment up -d --scale enrichment-fast-pool=2
+# Enrichment workers have fixed container names; their replica count is
+# ENRICHMENT_WORKER_REPLICAS (default 1) in .env
 ```
 
 ---
@@ -461,4 +476,4 @@ docker-compose --profile enrichment up -d --scale enrichment-fast-pool=2
 ---
 
 !!! success "Documentation Complete"
-    This architecture overview was generated from the actual codebase on 2025-12-09.
+    Reviewed against the codebase on 2026-10-27.

@@ -19,8 +19,8 @@ A **Telegram channel** is a broadcast medium where administrators post messages 
 
 **Processing Rules**:
 - `Archive-*` folders → Archive all messages (after spam filter)
-- `Monitor-*` folders → Archive only high-importance messages
-- `Discover-*` folders → Auto-created for forward chain discovery
+- `Monitor-*` folders → Archive only more important messages (low importance is never archived)
+- `Discover-*` folders → Channels found through forwards; evaluated for about a week, then promoted to a Monitor folder or dropped
 
 ### Message
 
@@ -54,7 +54,7 @@ An **entity** is a named thing extracted from messages: person, organization, lo
 - **Equipment**: HIMARS, Leopard 2, F-16
 
 **Entity Sources**:
-- **Extracted**: Automatically detected from message text via regex/NER
+- **Extracted**: Automatically detected from message text with pattern matching
 - **Curated**: Custom CSV imports for domain-specific entities (military units, equipment, people)
 - **OpenSanctions/Yente**: Matched against sanctions/PEP databases
 - **Wikidata**: Automatic property enrichment for matched entities
@@ -82,7 +82,7 @@ An **entity** is a named thing extracted from messages: person, organization, lo
 **Usage**:
 - Filter searches: `GET /api/messages?importance_level=high`
 - RSS feeds: `GET /rss/search?importance_level=high`
-- Message routing: Monitor-* folders only archive high importance
+- Message routing: Monitor-* and Discover-* folders never archive low importance
 
 ### Spam Filtering
 
@@ -105,11 +105,11 @@ An **entity** is a named thing extracted from messages: person, organization, lo
 : Folder pattern: `Archive-*`
 
 **selective_archive**
-: Store only high-importance messages. Used for monitoring without full archival.
+: Store only messages at or above a minimum importance (default: medium). Used for monitoring without full archival.
 : Folder pattern: `Monitor-*`
 
 **discovery**
-: Auto-joined channels in 14-day probation. Promoted or rejected based on spam rate.
+: Auto-joined channels on probation (about a week once 30+ messages have arrived). Promoted or rejected based on spam and off-topic rate.
 : Folder pattern: `Discover-*`
 
 ### Content-Addressed Storage
@@ -117,7 +117,7 @@ An **entity** is a named thing extracted from messages: person, organization, lo
 **Content-addressed storage** stores media files by their SHA-256 hash, not by filename or ID.
 
 **Benefits**:
-- **Deduplication**: Identical media stored once (30-40% storage savings)
+- **Deduplication**: Identical media stored once
 - **Integrity**: Hash proves file hasn't been tampered with
 - **Reference counting**: Track how many messages use each file
 
@@ -160,7 +160,7 @@ The platform separates **real-time** and **background** processing.
 
 **Flow**:
 1. Listener receives message from Telegram
-2. Listener pushes to Redis Stream (`telegram_messages`)
+2. Listener pushes to a Redis Stream (`telegram:messages:realtime`; backfilled history uses `telegram:messages:backfill`)
 3. Processor workers consume from stream
 4. Processor acknowledges (ACK) after successful processing
 
@@ -169,7 +169,7 @@ The platform separates **real-time** and **background** processing.
 - **Reliability**: Messages persist in stream until processed
 - **Backpressure**: Stream buffers messages if Processor is slow
 
-**Consumer Groups**: All Processor replicas share work via `processor_group`
+**Consumer Groups**: All Processor replicas share work via the `processor-workers` consumer group
 
 ### Folder-Based Channel Management
 
@@ -188,7 +188,7 @@ The platform separates **real-time** and **background** processing.
 - ✅ **Zero training**: Everyone knows Telegram folders
 - ✅ **Scales easily**: 10 to 1000+ channels
 
-**Folder Patterns** (hardcoded in `services/listener/src/channel_discovery.py`):
+**Folder Patterns** (stored in the `folder_rules` table; defaults seeded at install):
 - `Archive-*` → `archive_all` rule
 - `Monitor-*` → `selective_archive` rule
 - `Discover-*` → `discovery` rule
@@ -200,16 +200,14 @@ The platform separates **real-time** and **background** processing.
 **Full-text search** finds messages containing specific keywords using PostgreSQL's built-in search.
 
 **Features**:
-- **GIN index**: 10-100x faster than LIKE queries
-- **Phrase search**: `"exact phrase"`
-- **Prefix matching**: `bakhmut*`
-- **Language-aware**: Stemming for English (configurable)
-
-**Performance**: <100ms on 100K+ messages
+- **GIN index**: much faster than LIKE queries
+- **All words must match**: `tank destroyed` finds messages containing both words (operators and quoted phrases are not interpreted)
+- **Cross-language**: an English query also finds Russian and Ukrainian posts ("Bakhmut" finds "Бахмут")
+- **Original and translated text** are both searched
 
 **Example**:
 ```http
-GET /api/messages?q=Bakhmut&limit=50
+GET /api/messages?q=Bakhmut&page_size=50
 ```
 
 ### Semantic Search
@@ -226,40 +224,21 @@ GET /api/messages?q=Bakhmut&limit=50
 - "Similar to this message" feature
 - Cross-language search (RU/UK message → EN query)
 
-**Performance**: <100ms on 1M+ messages (HNSW index)
+**Performance**: an HNSW index keeps nearest-neighbour lookups fast on large archives
 
 **Example**:
 ```http
-POST /api/semantic/search
-{
-  "query": "Russian forces near Bakhmut",
-  "similarity_threshold": 0.7,
-  "limit": 20
-}
+GET /api/semantic/search?q=Russian+forces+near+Bakhmut&threshold=0.6&limit=20
 ```
 
-### Hybrid Search
+`threshold` is the minimum similarity (0-1, where 0.5 is unrelated); lower it for very short queries.
 
-**Hybrid search** combines full-text and semantic search for best results.
+### Unified Search
 
-**Ranking Formula**:
-```
-score = 0.4 × text_rank + 0.6 × semantic_similarity
-```
+The web **Search** page and `GET /api/search` query messages, events, RSS articles and entities in one call, in either `text` or `semantic` mode:
 
-**Benefits**:
-- Keyword precision (text search)
-- Semantic recall (vector search)
-- Configurable weights
-
-**Example**:
 ```http
-POST /api/semantic/hybrid
-{
-  "text_query": "Bakhmut",
-  "semantic_query": "combat operations near Bakhmut",
-  "importance_level": "high"
-}
+GET /api/search?q=Bakhmut&mode=semantic&types=messages,events
 ```
 
 ## Data Flow
@@ -292,20 +271,15 @@ graph LR
 
 ### Database-Driven Configuration
 
-**All filtering/routing/scoring logic** is stored in PostgreSQL tables, not code. Change rules without code deployments.
+**Routing and classification behaviour** is stored in PostgreSQL tables and admin settings, not code. Change it without code deployments.
+
+!!! note "Legacy rule tables are gone"
+    Earlier versions kept `spam_patterns`, `importance_rules`, `entity_patterns` and `message_routing_rules` tables. Spam, importance and archive decisions are now made by the LLM (guarded by the embedding filter), so those tables no longer exist.
 
 **Configurable Tables**:
-- `spam_patterns`: Spam detection rules
-- `importance_rules`: Importance classification modifiers
-- `entity_patterns`: Entity extraction patterns
-- `message_routing_rules`: Channel archive mode configuration
+- `folder_rules`: which Telegram folder pattern maps to which archive mode (`archive_all`, `selective_archive`, `discovery`)
 - `llm_prompts`: classifier prompt versions (one active at a time)
-
-**Example - Add Spam Pattern**:
-```sql
-INSERT INTO spam_patterns (category, pattern, pattern_type, weight)
-VALUES ('promotional', '🎰', 'emoji', 2);
-```
+- `platform_config`: admin settings (thresholds, switches)
 
 **Example - see the active classifier prompt**:
 ```sql
@@ -326,6 +300,6 @@ Classification uses an LLM through one of three providers (`openai` gateway, `ol
 Now that you understand the core concepts, explore:
 
 - [Channel Management](../tutorials/add-telegram-channel.md) - Folder-based workflow details
-- [Searching Messages](../user-guide/searching.md) - Full-text, semantic, and hybrid search
+- [Searching Messages](../user-guide/searching.md) - Full-text and semantic search
 - [Architecture Overview](../developer-guide/architecture.md) - Technical deep dive
 - [Enrichment Service](../developer-guide/services/enrichment.md) - Background AI tasks

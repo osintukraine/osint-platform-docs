@@ -64,7 +64,7 @@ Import your own domain-specific entity lists via CSV. The platform supports:
 - Private military companies
 - Government agencies
 
-The entity-ingestion service processes CSVs with configurable column mapping for different source formats.
+Ask your administrator to import a new list; column mapping is configured per source format.
 
 ### OpenSanctions (Auto-synced)
 
@@ -73,7 +73,7 @@ The entity-ingestion service processes CSVs with configurable column mapping for
 - US OFAC
 - UK sanctions
 - UN sanctions
-- 10,000+ entities
+- 10,000+ entities, with fuzzy name matching against the full OpenSanctions dataset
 
 **Politically Exposed Persons (PEPs)**
 - Government officials
@@ -93,31 +93,18 @@ Automatically enriches entities with:
 
 ## Browsing Entities
 
-### Entity Directory
+### Finding an Entity
 
-Access the entity list at `/entities`.
-
-**Filters:**
-- Entity type (equipment, person, organization, etc.)
-- Source (curated, opensanctions)
-- Name search
-- Alphabetical sorting
-
-**Display:**
-- Entity icon and type badge
-- Primary name
-- Brief description
-- Link count (messages, events, RSS articles)
-- Source indicators
+There is no separate entity directory page. Entities are reached through search or from the badges on messages.
 
 ### Search Results
 
-Entities appear in unified search (`/search`) under the "Entities" tab:
+Use the unified search (**Search** in the top navigation) and open the **Entities** tab:
 
 - Search by name or alias
-- Fuzzy matching for typos
-- Alternative spellings recognized
-- Click entity to view profile
+- Fuzzy matching for typos and alternative spellings
+- Filter by source (curated or OpenSanctions) and entity type through the API
+- Click an entity to view its profile
 
 ## Entity Profile Pages
 
@@ -233,7 +220,7 @@ Curated intelligence events linked to entity:
 
 **Status:** Coming soon
 - Event linking not yet implemented
-- Will show ODIN event references
+- Will show related events
 
 #### RSS Articles Tab
 
@@ -248,14 +235,13 @@ External news articles mentioning entity:
 Interactive graph of entity relationships from multiple sources:
 
 **Display:**
-- Network visualization (Sigma.js, ForceAtlas2 layout)
+- Interactive network graph (drawn in your browser with Sigma.js)
 - Entity nodes connected by relationship types
-- Force-directed layout (default)
-- Zoom, pan, and layout controls
+- Zoom in/out, a **Refresh** button, and PNG export
 
 **Relationship Sources:**
 
-!!! info "Wikidata Relationships (NEW)"
+!!! info "Wikidata Relationships"
     The platform automatically fetches structured relationships from Wikidata for entities with known Wikidata QIDs. These provide authoritative, verified connections.
 
 | Category | Relationship Types | Examples |
@@ -266,79 +252,38 @@ Interactive graph of entity relationships from multiple sources:
 
 **Additional Relationship Types:**
 - Co-mentioned in messages (platform-computed)
-- Organizational hierarchy (from OpenSanctions)
-- Geographic proximity
-- Temporal correlation
+- Links reported by OpenSanctions
 
 **Graph Controls:**
-- Layout selector (fCoSE, grid, circle, etc.)
 - Zoom in/out
-- Reset view
-- Re-run layout
-- Export as PNG
-- **Refresh** button to force Wikidata re-fetch
+- **Refresh** button to fetch the latest Wikidata relationships
+- **Export** as PNG
 
 **Node Colors:**
-- Blue: Selected entity (center)
-- Green: Related entities
-- Purple: Organizations
-- Orange: Locations
-- Red border: Sanctioned entity (from OpenSanctions)
-
-**Relationship Edge Labels:**
-- Hover over edge to see relationship type
-- Dotted lines = lower confidence
-- Solid lines = high confidence/verified
+- Blue: the entity you are viewing (center)
+- Other colors group related entities by relationship category (corporate, political, associates)
+- Sanctioned related entities are marked
 
 **Empty State:**
 - "Needs enrichment" - relationships not yet computed
 - Click "Refresh" to trigger Wikidata enrichment
-- Background task runs periodically to build graph
+- A background task also builds the graph over time
 
-## Understanding Confidence Scores
+## Understanding Match Scores
 
-Entity mentions are detected automatically with confidence levels:
+Entity mentions are detected automatically. Each badge on a message shows how well the mention matched the entity, as a percentage:
 
-### Extraction Methods
+- **High (90% and above)**: near-exact match, safe to rely on
+- **Lower**: fuzzy or partial match, check the message text before trusting it
 
-**NER (Named Entity Recognition)**
-- AI model extracts entities from text
-- Confidence: 0.7-0.95
-- May have false positives
-
-**Dictionary Matching**
-- Exact match against curated database
-- Confidence: 0.95-1.0
-- High precision
-
-**Fuzzy Matching**
-- Handles typos and variants
-- Confidence: 0.6-0.85
-- Requires manual review
-
-### Confidence Indicators
-
-In message views, entities display badges:
-
-```
-High Confidence (≥0.9)
-  └─ Solid badge, no indicator
-
-Medium Confidence (0.7-0.9)
-  └─ Badge with "~" symbol
-
-Low Confidence (<0.7)
-  └─ Badge with "?" symbol, faded color
-```
+Short or ambiguous names (common surnames, short equipment designations) are the most likely to produce false matches.
 
 ## Entity Mention Context
 
 When you click an entity badge in a message:
 
-1. **Inline Tooltip** - Shows entity type and source
-2. **Click Action** - Navigates to entity profile
-3. **Highlight** - Message text highlights entity mention
-4. **Context Preview** - See surrounding text
+1. **Tooltip** - Shows entity type, source and match percentage
+2. **Click Action** - Navigates to the entity profile
 
 ## Advanced Features
 
@@ -371,21 +316,15 @@ Each relationship includes:
 - Cross-reference with OpenSanctions (shows if related entity is sanctioned)
 
 **How It Works:**
-1. Entity created with basic info
-2. Background enrichment task runs (maintenance worker)
-3. Queries Wikidata SPARQL by name (batch of 50 entities)
-4. Name matching with 90% confidence threshold
-5. Fetches profile properties (image, DOB, country, etc.)
-6. Fetches relationships via SPARQL
-7. Cross-references relationships with OpenSanctions database
-8. Stores enrichment in `metadata.wikidata` and `metadata.relationships`
-9. Updates entity profile
+1. An entity is created with basic information
+2. A background task matches it to Wikidata by name (only close matches, 90% or better, are accepted)
+3. Profile details and relationships are fetched and cross-checked against OpenSanctions
+4. The entity profile is updated
 
 **Data Freshness:**
-- Enriched on first view (lazy loading)
-- Relationships cached for 7 days
-- Re-enriched monthly (background task)
-- Manual refresh via API (`?refresh=true`) or UI button
+- Relationships are cached for 7 days
+- Entities are re-enriched periodically in the background
+- Use the **Refresh** button on the Relationships tab to force a re-fetch
 
 **Viewing Wikidata Data:**
 - Profile header shows Wikidata description and image
@@ -395,11 +334,10 @@ Each relationship includes:
 
 ### OpenSanctions Sync
 
-**Automatic Daily Updates:**
-1. Downloads latest OpenSanctions dataset
-2. Processes sanctions and PEP lists
-3. Upserts entities (updates existing, adds new)
-4. Links to messages via background task
+**Kept up to date automatically:**
+1. The platform downloads the latest OpenSanctions dataset
+2. Sanctions and PEP lists are processed and entities updated or added
+3. Entities are linked to messages by a background task
 
 **Data Included:**
 - Personal information (name, DOB, nationality)
@@ -410,16 +348,7 @@ Each relationship includes:
 
 ### Entity Relationship Graph
 
-**Graph Building:**
-1. Co-occurrence analysis (entities mentioned together)
-2. Temporal proximity (mentioned in similar timeframes)
-3. Channel clustering (same channels discuss related entities)
-4. OpenSanctions links (explicit relationships)
-
-**Update Frequency:**
-- Built on-demand for viewed entities
-- Cached for performance
-- Refreshed weekly (background task)
+Relationships come from Wikidata, OpenSanctions links and co-mentions in messages. They are built on demand for the entities you view, cached, and refreshed in the background.
 
 ## Using Entities for Analysis
 
@@ -438,11 +367,11 @@ Each relationship includes:
 ### Monitor Sanctioned Individuals
 
 **Workflow:**
-1. Browse OpenSanctions entities
-2. Filter by "Sanctioned" badge
+1. Search for the person or organization (filter by OpenSanctions source)
+2. Look for the "Sanctioned" badge on the profile
 3. Check Messages tab for recent mentions
 4. View Relationships tab for networks
-5. Cross-reference with ODIN events
+5. Cross-reference with events on the Events page
 
 ### Research Organizational Networks
 
@@ -451,15 +380,15 @@ Each relationship includes:
 2. Open Relationships tab
 3. Explore connected entities (commanders, units)
 4. Click nodes to navigate to related profiles
-5. Export graph for reporting
+5. Export the graph as PNG for reporting
 
 ### Identify Emerging Entities
 
 **Workflow:**
-1. Browse messages with high NER confidence
-2. Look for unknown entity mentions
+1. Browse recent high-importance messages
+2. Look for names that carry no entity badge
 3. Research via Wikidata and external sources
-4. Submit to admin for curated entity creation
+4. Ask your administrator to add them to a curated list
 
 ## Filtering by Entities
 
@@ -484,17 +413,11 @@ For programmatic access, see [API Reference](../reference/api-endpoints.md#entit
 
 **Endpoints:**
 ```
-GET /api/entities
+GET /api/entities/search?q=...
 GET /api/entities/{source}/{id}
 GET /api/entities/{source}/{id}/messages
 GET /api/entities/{source}/{id}/relationships
 ```
-
-**Use Cases:**
-- Build custom dashboards
-- Export entity data
-- Integration with other tools
-- Automated reporting
 
 ## Best Practices
 
@@ -514,7 +437,7 @@ GET /api/entities/{source}/{id}/relationships
 
 **Use Multiple Sources:**
 - Compare curated vs. auto-detected entities
-- Cross-reference OpenSanctions with ODIN
+- Cross-reference OpenSanctions with curated lists and events
 - Validate with Wikidata and external sources
 
 ### Responsible Use
@@ -547,7 +470,6 @@ GET /api/entities/{source}/{id}/relationships
 **Solutions:**
 - Try alternative spellings
 - Use semantic search for concept matching
-- Browse entity directory manually
 - Contact admin to request entity addition
 
 ### Missing Wikidata
@@ -559,7 +481,7 @@ GET /api/entities/{source}/{id}/relationships
 - API rate limit temporarily hit
 
 **What to do:**
-- Wait for background enrichment (24-48 hours)
+- Wait for background enrichment (can take a day or two)
 - Check Wikidata manually and note QID
 - Report to admin for manual enrichment
 
@@ -568,12 +490,11 @@ GET /api/entities/{source}/{id}/relationships
 **Reasons:**
 - Entity is newly added
 - Insufficient mentions for co-occurrence
-- Enrichment task not yet run
+- Enrichment has not run yet
 
-**Wait time:**
-- Background task runs weekly
-- On-demand computation available (admin)
-- Check back in 7 days
+**What to do:**
+- Click **Refresh** on the Relationships tab
+- Check back later; the background task fills it in over time
 
 ---
 
