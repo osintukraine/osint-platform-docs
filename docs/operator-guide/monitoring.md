@@ -512,6 +512,27 @@ osint_topics_total
 - Response time: <5s target, <15s acceptable, >15s for 15m triggers alert
 - Error rate: <10% normal, >10% for 10m triggers alert
 
+### Translation Metrics
+
+**Source**: every service that translates, through one DeepL client (`shared/python/translation/deepl_client.py`)
+
+```promql
+# Characters translated per day, by who spent them
+sum by (caller) (increase(osint_translation_characters_total[1d]))
+
+# Estimated DeepL cost per day
+increase(osint_translation_cost_usd_total[1d])
+
+# Translation errors, by provider (deepl / google)
+rate(osint_translation_errors_total[5m])
+```
+
+All callers — `processor` (posts), `comments`, `translation_backfill` and `search` (query translation) — share one DeepL client, so comments now translate through DeepL too (they previously always fell back to Google). DeepL's own account page is the authoritative character count; the `caller` label on these counters tells you **which** caller spent the quota. Google Translate is only the fallback for *other* DeepL errors — when DeepL signals the allowance is used up or rate-limited, posts do **not** fall back to Google, they wait for the translation backfill to catch up.
+
+**Key Thresholds:**
+
+- A sustained rise in `osint_translation_errors_total{provider="deepl"}` usually means the DeepL allowance is exhausted — check the DeepL account page.
+
 ### Database Metrics
 
 **Source**: PostgreSQL Exporter (`postgres-exporter:9187/metrics`)

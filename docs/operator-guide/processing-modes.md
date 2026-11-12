@@ -135,6 +135,17 @@ With `LLM_PROVIDER=ollama` the model comes from `OLLAMA_MODEL` (compose default 
 !!! note "Embedding model"
     The spam filter uses a model from `/models` (`EMBEDDING_SPAM_MODEL`, default in `.env.example`: `/models/paraphrase-multilingual-MiniLM-L12-v2`, 384 dimensions), provisioned by `scripts/fetch-models.sh`. Services never download models; see [Model Provisioning](model-provisioning.md). The English-only `all-MiniLM-L6-v2` performs very poorly on RU/UK posts.
 
+#### Classification council (`llm_classifier_mode = modular`)
+
+`unified` (the default) runs one prompt — the production, benchmarked path. `modular` turns on the **classification council**, live since 2026-11-08 (v3, migration 062), which splits the decision across roles:
+
+- **screen, judge, indexer** decide spam, relevance, topic, importance and the archive call on the live path.
+- **narrative** (claims, framing, information-operation signals) runs *after* the decision, off the live path, and only when `llm_council_narrative_enabled` is on. It costs about a quarter of the council's GPU calls; its output goes to `decision_log.decision_value.council` and does not change the archive decision.
+
+Set it in the admin UI or with `LLM_CLASSIFIER_MODE=modular` (read by the processor and enrichment).
+
+**Council vision** (`llm_council_vision_enabled`): a photo or video post with almost no text (under ~20 characters) is judged on **two images** — album items, or two frames of a video — sent through the gateway's vision aliases (the normal alias plus `LLM_GATEWAY_VISION_SUFFIX`, e.g. `-vision`). The media is held in the buffer until the decision. If `LLM_GATEWAY_VISION_SUFFIX` is unset, image calls **fail closed** (no vision alias → not sent) rather than falling back to a text-only model.
+
 ## Hardware Recommendations
 
 The processor itself needs only CPU (the embedding model is small). The LLM is the part that needs hardware, and it is normally remote.
@@ -164,6 +175,8 @@ Backfill workers:
 - Are the only readers of the backfill stream (realtime workers never touch it), so without the `backfill` profile backfilled and gap-filled messages are never stored
 - Use the LLM on the gateway's batch lane, or the embedding filter only when `backfill_fast_mode` is on
 - Can run alongside realtime workers without interference
+
+**Night pace** (`backfill_night_concurrency`): between 22:00 and 06:00 UTC the backfill may use more LLM concurrency, but the number is a **ceiling, not a fixed level** — the worker climbs toward it step by step only while live-path p95 latency stays low, and backs off otherwise. The deployed ceiling is **4**; higher values added no throughput because the GPU is decode-bound, not concurrency-bound. (`BACKFILL_NIGHT_CONCURRENCY`, admin-tunable, 1–16.)
 
 **Monitor backfill progress:**
 
@@ -264,6 +277,21 @@ The script:
 1. Finds recent messages marked as spam that contain Ukraine keywords
 2. Reclassifies them as non-spam
 3. Logs the count of fixed messages to journald
+
+## Classification auditor and review queue
+
+**Auditor** (v2, migration 067). A random sample of classified posts is re-checked by the fact-check auditor (a council vote running in audit mode). When the auditor disagrees with the original call, its action is **`queued_review`**: the post goes to human review (`classification_fact_checks`) and **nothing about the post changes automatically** — the auditor never hides or re-classifies on its own. (Its other possible actions — `auto_hide`, `auto_reclassify`, `logged_only` — are configured separately; `FACT_CHECK_CLASSIFIER_MODE` can override the classifier mode the auditor uses.)
+
+**Review queue.** The review queue is exactly the auditor's open requests. The old automatic "media needs review" flag is **gone** — migrations 068/069 dropped the trigger after it had set 564k flags that no one ever reviewed. Those stale flags are cleared overnight by the maintenance task `review_flag_cleanup`; the auditor's own open requests are kept.
+
+**LLM spam review** (2026-11). When the council runs, its spam verdict is **final**: the post is marked `spam_review_status = llm_confirmed`. Spam decided *without* the council — by the embedding pre-filter, or during a gateway outage — stays `spam_review_status = pending` and waits to be re-judged by the council:
+
+```bash
+# Re-judge pending spam (group S) through the council
+python services/processor/tools/recover_media_posts.py requeue --group S
+```
+
+On 2026-11-11 this re-judged 18,165 pending posts and restored 8,646 (48%) of them as real content.
 
 ## Monitoring Processing
 

@@ -13,6 +13,7 @@ The platform's "Subscribe to any search" feature transforms any filtered search 
 - **Authenticated Feeds** - Optional token-based authentication
 - **URL Signing** - Cryptographically signed feed URLs
 - **Universal Support** - Works with any feed reader
+- **Newest First** - Feed items are ordered most-recent-first
 
 ## Creating a Feed
 

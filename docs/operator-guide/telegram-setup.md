@@ -344,6 +344,16 @@ The platform uses Telegram app folders to organize and manage channels. No datab
 - `Archive-Ukraine` - 15 chars ❌
 - `Monitor-Important` - 17 chars ❌
 
+### Channel affiliation from the folder suffix
+
+The suffix after the tier sets the channel's **side**. On every folder sync the suffix writes `channels.affiliation` (migration 070, #511):
+
+- `-RU` → `russia` (e.g. `Archive-RU`, `Monitor-RU`, `Discover-RU`)
+- `-UA` → `ukraine` (e.g. `Archive-UA`, `Monitor-UA`, `Discover-UA`)
+- no side (`-?`, e.g. `Discover-?`, `Rec-?`) → the channel keeps whatever affiliation the admin UI has set; the sync does not overwrite it.
+
+Affiliation is what the map colours a channel by, and it drives the **cross-affiliation** step in event-cluster tiers (a cluster seen from both `russia` and `ukraine` channels reaches `unconfirmed`; see [Map API](../developer-guide/map-api.md)). Because the folder is the source of truth, moving a channel between `-RU` and `-UA` folders re-sides it on the next sync.
+
 ### Creating Folders in Telegram
 
 #### Desktop App (Telegram Desktop)
