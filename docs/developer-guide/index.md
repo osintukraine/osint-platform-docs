@@ -218,11 +218,13 @@ DEEPL_API_KEY=your_key  # Translation
 LLM_GATEWAY_URL=https://gateway.example/v1  # OpenAI-compatible LLM gateway (LLM_PROVIDER=openai)
 ```
 
-### Hot Reload
+### Hot reload
 
-- **API**: Uvicorn auto-reload in development
-- **Frontend**: Next.js fast refresh
-- **Processor**: Restart container after changes
+There are **no source bind mounts**: every service runs the code baked into its image, so editing a file on the host changes nothing in a running container. Reload only happens with a dev server run **outside** Docker:
+
+- **API**: `uvicorn src.main:app --reload` run locally (see [API service](services/api.md))
+- **Frontend**: `bun run dev` / `npm run dev` — Next.js fast refresh
+- **Everything else (processor, listener, …)**: no reload — rebuild the image with `./scripts/deploy.sh --build-service <service>` (see [Upgrades](../operator-guide/upgrades.md))
 
 ---
 

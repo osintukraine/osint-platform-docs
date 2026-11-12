@@ -928,7 +928,7 @@ services/rss-ingestor/
 article = ExternalNews(...)
 
 # Add entity extraction
-from shared.python.ai.entity_extractor import EntityExtractor
+from ai.entity_extractor import EntityExtractor
 extractor = EntityExtractor()
 
 if article.content or article.summary:

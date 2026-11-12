@@ -584,19 +584,13 @@ curl http://localhost:8001/metrics | grep telegram_messages
 
 ### Development Tips
 
-!!! tip "Hot Reload for Testing"
+!!! note "No hot reload in containers"
 
-    For development, use `docker-compose watch` (Docker Compose 2.22+):
-
-    ```yaml
-    # docker-compose.yml
-    services:
-      listener:
-        develop:
-          watch:
-            - path: ./services/listener/src
-              action: sync+restart
-    ```
+    Containers run the code baked into the image — there are no source bind mounts, and the
+    platform does not use `docker compose watch`. To pick up a code change, rebuild the service
+    image with `./scripts/deploy.sh --build-service listener` (see
+    [Upgrades](../../operator-guide/upgrades.md)). For a fast edit loop, run the listener locally,
+    outside Docker, instead.
 
 **Testing Album Handling**:
 

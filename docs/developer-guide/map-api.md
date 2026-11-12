@@ -210,7 +210,7 @@ Get geocoded messages within a bounding box as GeoJSON.
         "telegram_date": "2025-12-18T14:30:00Z",
         "channel_name": "Intel Slava Z",
         "channel_username": "intelslava",
-        "channel_affiliation": "ru",
+        "channel_affiliation": "russia",
         "location_name": "Moscow",
         "location_hierarchy": "RU-MOW",
         "confidence": 0.95,
@@ -535,7 +535,7 @@ Get movement trajectories as GeoJSON LineStrings.
         "telegram_date": "2025-12-18T08:00:00Z",
         "channel_name": "Intel Slava Z",
         "channel_folder": "Archive-RU",
-        "channel_affiliation": "ru"
+        "channel_affiliation": "russia"
       }
     }
   ]
@@ -798,7 +798,7 @@ Get most recent geolocated messages (for sidebar feed).
     {
       "message_id": 12345,
       "channel_name": "Intel Slava Z",
-      "channel_affiliation": "ru",
+      "channel_affiliation": "russia",
       "content": "Russian forces report...",
       "content_translated": "Russian forces report...",
       "location_name": "Bakhmut",
@@ -992,7 +992,7 @@ All Map API endpoints return GeoJSON FeatureCollections compatible with MapLibre
   "telegram_date": "2025-12-18T15:30:00Z",
   "channel_name": "...",
   "channel_username": "...",
-  "channel_affiliation": "ru" | "ua" | "unknown",
+  "channel_affiliation": "russia" | "ukraine" | "neutral" | "unknown",
   "location_name": "Bakhmut",
   "location_hierarchy": "UA-14",
   "confidence": 0.95,

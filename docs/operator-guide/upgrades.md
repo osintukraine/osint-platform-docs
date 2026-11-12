@@ -38,7 +38,13 @@ Production updates use the deploy script, which pulls the code, applies pending 
 
 After an update that changes `infrastructure/models/models.txt`, run `./scripts/fetch-models.sh` (see [Embedding Models](model-provisioning.md)); `deploy.sh` does not do it.
 
+Before a large `--build` (for example a `shared/python/` change that rebuilds every service), run `./scripts/warm-build-cache.sh` to pre-build the images first, so the deploy's own build step is a warm-cache no-op and downtime stays short.
+
 **Downtime**: a few minutes (container restart).
+
+### Post-deploy health check
+
+After restarting, `deploy.sh` inspects **every container the deploy created** — crash loops, unexpected restarts, non-zero exits and `unhealthy` status. If any fail, it stops and prints the offending container names, their last log lines and the rollback command, so a bad build is caught at deploy time instead of in production. (`--skip-health` bypasses this; do not use it in production.)
 
 ### Schema Changes
 
@@ -160,36 +166,53 @@ UPDATE messages SET new_field = computed_value WHERE new_field = '';
 
 ## Rolling Updates
 
-For zero-downtime updates of stateless services:
-
-### Processor Workers
+Code lives in the Docker images. There are **no source bind mounts** any more, so a code change does **not** take effect until its services are rebuilt. Always rebuild through `deploy.sh` — not a manual `docker compose ... --build` — so the post-deploy health check runs (see below):
 
 ```bash
-# Check the queue depth (stream lag is what matters)
+# Rebuild + recreate only the named services (repeatable flag), then health-check
+./scripts/deploy.sh --build-service <service> [--build-service <service> ...]
+```
+
+!!! warning "`shared/python/` changes rebuild everything"
+    `shared/python/` is baked into every service image, so a change there affects
+    every service. Rebuild all of them — in practice a full `./scripts/deploy.sh --build`.
+
+### Processor / shared changes — rebuild all six
+
+The processor is a **family of six services, each with its own image**: `processor-worker`,
+`processor-worker-backfill`, `media-worker`, `backlog-reprocess`, `backlog-worker` and
+`backlog-enrich`. A change to processor code (or to `shared/python/`) must rebuild **all six**:
+
+```bash
+# Queue depth first — messages stay in the Redis stream across the restart
 docker compose exec redis redis-cli XLEN telegram:messages:realtime
 docker compose exec redis redis-cli XLEN telegram:messages:backfill
 
-# processor-worker is one compose service with N replicas
-# (PROCESSOR_WORKER_REPLICAS). Rebuild and recreate it; messages stay in the
-# Redis stream while the workers restart and are consumed afterwards.
-docker compose up -d --no-deps --build processor-worker
+./scripts/deploy.sh \
+  --build-service processor-worker \
+  --build-service processor-worker-backfill \
+  --build-service media-worker \
+  --build-service backlog-reprocess \
+  --build-service backlog-worker \
+  --build-service backlog-enrich
 ```
+
+`processor-worker` runs N replicas (`PROCESSOR_WORKER_REPLICAS`); messages are consumed from
+the Redis stream once the rebuilt workers are back.
 
 ### API
 
 ```bash
-# API is stateless, quick restart
-docker compose up -d --no-deps --build api
+# API is stateless — rebuild its image and recreate
+./scripts/deploy.sh --build-service api
 ```
 
 ### Listener
 
-```bash
-# Listener maintains Telegram session - restart carefully
-docker compose stop listener
-docker compose up -d --build listener
+The listener holds a Telegram session; recreating it reconnects:
 
-# Verify reconnected
+```bash
+./scripts/deploy.sh --build-service listener
 docker compose logs --tail=50 listener | grep -i "connected"
 ```
 

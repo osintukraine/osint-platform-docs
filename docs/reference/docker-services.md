@@ -150,7 +150,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Profile** | (none - essential) |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
 | **Healthcheck** | `curl http://localhost:8002/health` every 60s (600s start period) |
-| **Volumes** | `./services/listener:/app/services/listener`<br>`./shared/python:/app/shared/python`<br>`./telegram_sessions:/app/sessions` |
+| **Volumes** | `./telegram_sessions:/app/sessions` (no source mounts: code is baked into the image) |
 | **Environment** | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_PHONE`<br>`BACKFILL_ENABLED`: false (default)<br>`FOLDER_SYNC_INTERVAL`: 300<br>`TRANSLATION_ENABLED`: false (translation runs in the processor) |
 | **Replicas** | `${SINGLE_ACCOUNT_REPLICAS:-1}`: 0 when `TELEGRAM_MODE=multi` (see [Telegram mode](#telegram-mode-single-or-multi)) |
 | **Notes** | Owns Telegram session - never create standalone clients. The default account's listener (single mode) |
@@ -252,7 +252,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Ports** | `${API_PORT:-8000}:8000` (API)<br>`${API_METRICS_PORT:-8003}:8003` (Prometheus metrics) |
 | **Profile** | (none - essential) |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy), `ollama` (healthy) |
-| **Volumes** | `./services/api:/app/services/api`<br>`./shared/python:/app/shared/python` |
+| **Volumes** | None — code is baked into the image (no source mounts) |
 | **Environment** | `AUTH_PROVIDER`: none (default)<br>`AUTH_REQUIRED`: false (default)<br>`API_CORS_ORIGINS`, `FEED_AUTH_REQUIRED`, `OPENSANCTIONS_*` |
 | **Healthcheck** | `curl http://localhost:8000/health` every 30s |
 
@@ -278,7 +278,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Purpose** | Fetches and enriches RSS feeds for event correlation |
 | **Profile** | (none - essential) |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
-| **Volumes** | `./services/rss-ingestor:/app/services/rss-ingestor`<br>`./shared/python:/app/shared/python`<br>`./data/huggingface:/app/.cache/huggingface` |
+| **Volumes** | `./data/huggingface:/app/.cache/huggingface`<br>`./data/models:/models:ro` (no source mounts: code is baked into the image) |
 
 ### analytics
 
@@ -289,7 +289,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Purpose** | Social graph data collection - engagement polling, comment scraping, view tracking |
 | **Profiles** | `enrichment-lite`, `enrichment-standard`, `enrichment-full`, `enrichment` |
 | **Dependencies** | `postgres` (healthy), `listener` (healthy) |
-| **Volumes** | `./telegram_sessions:/app/sessions`<br>`./shared/python:/shared/python:ro`<br>`./data/logs/analytics:/var/log/analytics` |
+| **Volumes** | `./telegram_sessions:/app/sessions`<br>`./data/logs/analytics:/var/log/analytics` (no source mounts: code is baked into the image) |
 | **Environment** | `TELEGRAM_SESSION_PATH`: /app/sessions (uses analytics.session) |
 | **Replicas** | `${SINGLE_ACCOUNT_REPLICAS:-1}`: 0 in multi mode |
 
@@ -517,7 +517,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Purpose** | Entity intelligence service - enriches entities with sanctions data |
 | **Profile** | `opensanctions` |
 | **Dependencies** | `postgres` (healthy) |
-| **Volumes** | `./services/opensanctions:/app/services/opensanctions`<br>`./shared/python:/app/shared/python`<br>`./data/huggingface:/app/.cache/huggingface` |
+| **Volumes** | `./data/huggingface:/app/.cache/huggingface`<br>`./data/models:/models:ro` (no source mounts: code is baked into the image) |
 | **Environment** | `OPENSANCTIONS_BACKEND`: yente (or api)<br>`OPENSANCTIONS_MATCH_THRESHOLD`: 0.85<br>`OPENSANCTIONS_BATCH_SIZE`: 5<br>`OPENSANCTIONS_POLL_INTERVAL`: 300 |
 
 ### entity-ingestion
@@ -588,7 +588,7 @@ All monitoring services use the `monitoring` profile.
 | **Ports** | `9094:9094` (Prometheus metrics) |
 | **Profiles** | `monitoring`, `notifications` |
 | **Dependencies** | `redis`, `ntfy`, `postgres` (all healthy) |
-| **Volumes** | `./services/notifier:/app/services/notifier`<br>`./shared/python:/app/shared/python` |
+| **Volumes** | None — code is baked into the image (no source mounts) |
 | **Environment** | `NTFY_URL`: http://ntfy:80<br>`AGGREGATOR_ENABLED`: true<br>`AGGREGATOR_BATCH_INTERVAL`: 300 |
 | **Healthcheck** | `curl http://localhost:8000/health` every 30s |
 
