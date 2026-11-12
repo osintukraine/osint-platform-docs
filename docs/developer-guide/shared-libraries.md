@@ -26,7 +26,7 @@ RUN pip install -r /shared/requirements.txt
 COPY shared/python /shared/python
 ENV PYTHONPATH="/shared/python:${PYTHONPATH}"
 ```
-Some services also add the directory with `sys.path.insert` for local runs.
+Some services also add the directory with `sys.path.insert` for local runs. Always import by this top-level name — a test (`test_plain_shared_imports`, #499) forbids `from shared.python.…` imports: there is no `shared` top-level package in a container, and since code is baked into the image (no source mounts) such an import breaks everywhere.
 
 ---
 
@@ -60,11 +60,11 @@ shared/python/
 ├── notifications/           # NotificationClient
 ├── storage/                 # BoxSelector, MinioClientPool
 ├── telegram/                # client_factory.py, session_names.py
-├── translation/             # translator.py, deepl_limits.py
+├── translation/             # deepl_client.py (the one translator), deepl_limits.py, translator.py
 ├── hardware/                # Hardware detection and tiers
 ├── hashing/                 # message_hasher.py, perceptual.py
 ├── utils/                   # circuit_breaker.py, graceful_shutdown.py
-├── media_archiver.py        # Content-addressed media storage
+├── media_archiver.py        # The one MediaArchiver: storage-box selection + perceptual hash at archive time (#482)
 └── translation.py           # Translation service
 ```
 

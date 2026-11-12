@@ -36,7 +36,12 @@ osint-intelligence-platform/
 Most unit tests need no database, Redis or MinIO: each service `conftest.py` sets dummy secrets so `settings` imports, and the processor and enrichment conftests replace `config.runtime` loaders so no database is contacted.
 
 !!! note "Tests that need PostgreSQL"
-    Tests named `*_db.py` and anything using the `db_session` fixture of `services/api/tests`, `services/processor/tests` or `shared/python/models/tests` run against a real PostgreSQL with `infrastructure/postgres/init.sql` applied. Set `TEST_DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname`; without it they are skipped with that reason.
+    Two different database URLs back the PostgreSQL tests, and they are not interchangeable:
+
+    - **`TEST_SCHEMA_DATABASE_URL`** — a database with `infrastructure/postgres/init.sql` loaded (the platform Postgres image: PostGIS + pgvector). The `db_session` fixture and the api `client` fixture use it, and each test is rolled back. This is what the schema CI jobs build.
+    - **`TEST_DATABASE_URL`** — a plain PostgreSQL where the `*_db.py` tests create their own tables.
+
+    Without the relevant URL, those tests are skipped with that reason.
 
 ---
 
@@ -509,6 +514,20 @@ pytest -k "spam"  # Run tests with "spam" in name
    ```
 
 ---
+
+## Continuous integration
+
+`.github/workflows/tests.yml` runs **five jobs** on every pull request and push:
+
+| Job | Scope | Database |
+|-----|-------|----------|
+| `processor-enrichment` | processor + enrichment suites | `TEST_DATABASE_URL` (plain Postgres) |
+| `api` | api suite + shared config | — |
+| `services` | listener, notifier, rss-ingestor, media-sync, shared, scripts, opensanctions | — |
+| `schema` | enrichment against the real schema | `TEST_SCHEMA_DATABASE_URL` (init.sql) |
+| `schema-api` | api against the real schema | `TEST_SCHEMA_DATABASE_URL` (init.sql) |
+
+The two **schema** jobs build the platform Postgres image (PostGIS + pgvector) and load `init.sql`, so the `db_session` and api `client` fixtures run against the production schema; the other jobs use a plain Postgres or no database at all.
 
 ## Related Documentation
 
