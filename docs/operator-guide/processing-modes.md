@@ -58,8 +58,6 @@ Navigate to **Admin → Configuration** (`/admin/config`) and find the **Process
 | `backfill_fast_mode` | `false` | Backfilled messages use the embedding filter only (a reprocess request never does) |
 | `ukraine_keywords_extra` | `[]` | Extra relevance keywords (JSON array) |
 
-![Processing Config in Admin UI](../assets/admin-config-processing.png)
-
 ### Via Environment Variables
 
 ```bash
