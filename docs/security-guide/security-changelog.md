@@ -178,8 +178,8 @@ def format_embedding_safe(embedding: list[float]) -> str:
 **Solution**: Changed default to require authentication:
 
 ```bash
-# .env change
-RSS_REQUIRE_AUTH=true  # Changed from false
+# .env / docker-compose.yml change
+FEED_AUTH_REQUIRED=true  # compose and .env.example default; the code's own fallback (no variable set) is false
 ```
 
 **Files Changed**:
@@ -222,7 +222,7 @@ RSS_REQUIRE_AUTH=true  # Changed from false
 **Usage**:
 - Anonymous users see `/docs` with filtered endpoints
 - Authenticated users see additional endpoints based on role
-- Full docs available at `/docs?include_admin=true` for admins
+- Admins see every endpoint, including `/api/admin/*`
 
 ---
 
@@ -420,11 +420,9 @@ All findings addressed in this release.
 ## Security Testing Verification
 
 ### Rate Limiting
-```bash
-# Verify rate limiting works
-for i in {1..15}; do curl -s -o /dev/null -w "%{http_code}\n" "https://v2.osintukraine.com/api/messages"; done
-# Expected: 200s then 429 (Too Many Requests)
-```
+Rate limits are applied per endpoint category (for example the map endpoints, `MAP_MESSAGES_RATE_LIMIT` and
+`MAP_CLUSTERS_RATE_LIMIT`, default 120 requests per window), not to every route. Hammer one of those endpoints
+to see a `429 Too Many Requests`; `/api/messages` is not rate limited.
 
 ### Authentication
 ```bash

@@ -22,7 +22,7 @@ Intrusion prevention and threat detection using CrowdSec for production deployme
 - **Community intelligence** - Shares attack data to protect all users
 - **Custom scenarios** - Platform-specific threat detection rules
 - **Multiple bouncers** - Block at reverse proxy, firewall, or application level
-- **Low overhead** - Minimal CPU/memory impact (~50MB RAM)
+- **Low overhead** - Small CPU/memory footprint
 
 **How It Works:**
 
@@ -61,47 +61,45 @@ IP Bans enforced by Caddy Bouncer
 
 ## Installation
 
-CrowdSec is integrated into the main `docker-compose.yml` using the `auth` profile. The `crowdsecurity/caddy` collection is **auto-installed** on first startup via the `COLLECTIONS` environment variable.
+CrowdSec and Caddy are defined in `docker-compose.yml` under the `auth` profile (together with Kratos and Oathkeeper). For production, `docker-compose.production.yml` overrides them (CrowdSec adds the `caddy`, `http-cve` and other collections plus host log sources; Caddy becomes `osint-caddy-secured` with the CrowdSec bouncer module and `infrastructure/caddy/Caddyfile.security`). Enable it with:
+
+```bash
+# .env
+COMPOSE_FILE=docker-compose.yml:docker-compose.production.yml
+COMPOSE_PROFILES=...,auth
+```
+
+!!! note "Legacy file"
+    `docker-compose.security.yml` is an older stand-alone variant of this stack. Prefer the production overlay above; do not combine all three files.
 
 ### First-Time Setup
 
-**Step 1: Start the Auth Profile Stack**
+**Step 1: Generate the bouncer API key**
 
 ```bash
-# Start all auth profile services (includes CrowdSec, Caddy, Kratos)
-docker-compose --profile auth up -d
+# Runs CrowdSec in isolation and writes the keys to .env
+./scripts/setup-crowdsec.sh
 ```
 
-On first startup, CrowdSec automatically:
-
-- Installs `crowdsecurity/caddy` collection (HTTP scenarios, Caddy log parser)
-- Loads custom OSINT scenarios from mounted volumes
-- Starts the Local API for bouncer communication
-
-**Step 2: Generate Bouncer API Key**
+Or manually, after starting CrowdSec:
 
 ```bash
-# Generate API key for Caddy bouncer (save the output!)
 docker exec osint-crowdsec cscli bouncers add caddy-bouncer -o raw
+# put the output in .env as CROWDSEC_BOUNCER_API_KEY
 ```
 
-**Step 3: Configure Environment**
-
-Add the bouncer key to `.env`:
+**Step 2: Start the auth profile stack**
 
 ```bash
-# CrowdSec Bouncer API Key (required for Caddy integration)
-CROWDSEC_BOUNCER_API_KEY=<paste-key-from-step-2>
-
-# Your production domain
-DOMAIN=yourdomain.com
+docker-compose up -d     # with COMPOSE_PROFILES including "auth"
 ```
 
-**Step 4: Restart Caddy to Apply Key**
+On first startup, CrowdSec automatically installs its collections, loads the custom OSINT scenarios and `profiles.yaml` from mounted volumes, and starts the Local API for the bouncer.
+
+**Step 3: Recreate Caddy if you added the key afterwards**
 
 ```bash
-# Restart Caddy to pick up the bouncer API key
-docker-compose --profile auth up -d caddy --force-recreate
+docker-compose up -d --force-recreate caddy
 ```
 
 **Step 5: Verify Installation**
@@ -113,7 +111,7 @@ docker exec osint-crowdsec cscli lapi status
 # Verify bouncer is connected (should show caddy-bouncer)
 docker exec osint-crowdsec cscli bouncers list
 
-# Check scenarios are loaded (56+ standard + 7 OSINT custom)
+# Check scenarios are loaded (hub scenarios plus the 10 custom osint/* ones)
 docker exec osint-crowdsec cscli scenarios list | head -20
 
 # Verify OSINT scenarios specifically
@@ -125,27 +123,33 @@ docker exec osint-crowdsec cscli metrics
 
 ### What Gets Auto-Installed
 
-The `COLLECTIONS=crowdsecurity/caddy` environment variable triggers automatic installation of:
+The `COLLECTIONS` variable triggers installation of hub collections on first start:
 
-| Collection | Scenarios | Description |
-|------------|-----------|-------------|
-| `crowdsecurity/caddy` | 1 | Caddy log parser |
-| `crowdsecurity/base-http-scenarios` | 15+ | SQL injection, XSS, path traversal, etc. |
-| `crowdsecurity/http-cve` | 40+ | CVE-specific exploit detection |
+| Where | Collections |
+|-------|-------------|
+| `docker-compose.yml` | `crowdsecurity/caddy` (Caddy log parser plus HTTP scenarios) |
+| `docker-compose.production.yml` | `linux`, `caddy`, `nginx`, `http-cve`, `whitelist-good-actors`, `iptables`, `base-http-scenarios` (plus selected parsers and scenarios such as `http-sqli`, `http-xss`, `http-sensitive-files`) |
+
+The production overlay also mounts `/var/log/auth.log` and `/var/log/syslog` from the host as log sources.
 
 ### Custom OSINT Scenarios
 
-Seven platform-specific scenarios are mounted from `infrastructure/crowdsec/scenarios/`:
+Ten platform-specific scenarios live in `infrastructure/crowdsec/scenarios/`. The ban durations come from `infrastructure/crowdsec/profiles.yaml`; scenarios without their own profile (`rss-abuse`, `kratos-enum`, `minio-abuse`, `monitoring-abuse`) get the default 4 hour ban.
 
-| Scenario | Ban Duration | Trigger |
-|----------|--------------|---------|
-| `osint/api-abuse` | 6 hours | 20+ distinct API paths in 10s |
-| `osint/auth-bruteforce` | 24 hours | 3 failed auth in 60s |
-| `osint/admin-abuse` | 48 hours | 5 admin panel requests in 5min |
-| `osint/search-abuse` | 12 hours | 20 search/messages in 60s |
-| `osint/data-extraction` | 72 hours | 50 successful API calls in 5s |
-| `osint/rss-abuse` | 3 minutes | 15 RSS requests in 30s |
-| `osint/suspicious-ua` | 1 hour | 15 requests with bot/curl/python UA |
+| Scenario | Ban | Trigger (leaky bucket) |
+|----------|-----|------------------------|
+| `osint/api-abuse` | 6 h | 30+ distinct `/api/` paths answering 401/403/429 (probing; busy public read paths are excluded) |
+| `osint/auth-bruteforce` | 24 h | 3 failed (400/401/403/422) requests to `/auth/` within 60 s |
+| `osint/admin-abuse` | 48 h | 5+ 401/403 responses on NocoDB, Grafana, ntfy, docs or Kratos-admin paths within 60 s |
+| `osint/search-abuse` | 12 h | 60+ distinct `/api/search` or `/api/semantic` paths (bucket leaks one event per 5 s) |
+| `osint/data-extraction` | 72 h | 400+ distinct successful (200) `/api/` paths (bucket leaks one event per second) |
+| `osint/rss-abuse` | 4 h (default) | 20+ 401/403 responses on `/rss/` (bad or missing feed tokens) |
+| `osint/suspicious-ua` | 1 h | 15+ requests with a bot/curl/wget/python-style user agent in 60 s; known crawlers and link-preview bots (Googlebot, Telegram, Facebook, ...) are excluded |
+| `osint/kratos-enum` | 4 h (default) | 10+ distinct registration/recovery/verification requests under `/kratos/self-service/` |
+| `osint/minio-abuse` | 4 h (default) | 10+ 401/403/404 responses on `/minio/` or `/osint-media/` |
+| `osint/monitoring-abuse` | 4 h (default) | 5+ 401/403 responses on Prometheus, Alertmanager or `/metrics` |
+
+Additionally, `profiles.yaml` bans anything matching `CVE` or `exploit` for 168 h. Treat the numbers above as defaults that are tuned over time: the YAML files are the source of truth.
 
 ## Security Scenarios
 
@@ -168,7 +172,7 @@ CrowdSec includes built-in web application firewall scenarios:
 
 ### OSINT Platform-Specific Scenarios
 
-Custom scenarios tailored for intelligence platform protection. These use field mappings from the `crowdsecurity/caddy-logs` parser:
+The custom scenarios use field mappings from the `crowdsecurity/caddy-logs` parser. Read the files in `infrastructure/crowdsec/scenarios/` for the exact filters and thresholds rather than relying on copies in documentation.
 
 !!! note "Field Mapping Reference"
     - `evt.Meta.log_type` = `http_access-log` (set by Caddy parser)
@@ -177,87 +181,7 @@ Custom scenarios tailored for intelligence platform protection. These use field 
     - `evt.Meta.http_user_agent` = User-Agent header
     - `evt.Meta.source_ip` = Client IP address
 
-#### 1. API Abuse Detection (`osint/api-abuse`)
-
-Detects automated scraping and excessive API usage.
-
-**Configuration:**
-
-```yaml
-name: osint/api-abuse
-type: leaky
-description: "Detect API abuse against OSINT platform endpoints"
-filter: "evt.Meta.log_type == 'http_access-log' && evt.Meta.http_path contains '/api/'"
-leakspeed: "10s"
-capacity: 50
-groupby: "evt.Meta.source_ip"
-distinct: "evt.Meta.http_path"
-condition: "len(queue.Queue) >= 20"
-blackhole: 300s
-labels:
-  service: osint-api
-  type: api_abuse
-  remediation: true
-```
-
-**Detection:**
-
-- Triggers on 20+ distinct API paths in 10 seconds
-- Bans IP for 6 hours (via profiles.yaml)
-- Protects against automated data scraping
-
-#### 2. Search API Protection (`osint/search-abuse`)
-
-Prevents abuse of search and message endpoints.
-
-**Configuration:**
-
-```yaml
-name: osint/search-abuse
-type: leaky
-filter: "evt.Meta.log_type == 'http_access-log' && (evt.Meta.http_path contains '/api/search' || evt.Meta.http_path contains '/api/messages')"
-leakspeed: "60s"
-capacity: 30
-groupby: "evt.Meta.source_ip"
-distinct: "evt.Meta.http_path"
-condition: "len(queue.Queue) >= 20"
-blackhole: 600s
-```
-
-**Detection:**
-
-- Triggers on 20+ distinct search/message queries per minute
-- Bans IP for 12 hours
-- Prevents search result harvesting
-
-#### 3. RSS Feed Protection (`osint/rss-abuse`)
-
-Prevents RSS feed hammering.
-
-**Configuration:**
-
-```yaml
-name: osint/rss-abuse
-type: leaky
-filter: "evt.Meta.log_type == 'http_access-log' && evt.Meta.http_path contains '/rss/'"
-leakspeed: "30s"
-capacity: 20
-groupby: "evt.Meta.source_ip"
-condition: "len(queue.Queue) >= 15"
-blackhole: 180s
-```
-
-**Detection:**
-
-- Triggers on 15+ RSS requests in 30 seconds
-- Allows reasonable polling intervals (1 req/2s)
-- Bans for 3 minutes
-
-#### 4. Authentication Security (`osint/auth-bruteforce`)
-
-Protects against credential stuffing and brute force.
-
-**Configuration:**
+Example (`osint/auth-bruteforce`):
 
 ```yaml
 name: osint/auth-bruteforce
@@ -270,127 +194,51 @@ condition: "len(queue.Queue) >= 3"
 blackhole: 900s
 ```
 
-**Detection:**
+Design notes from the current files:
 
-- Triggers on 3 failed auth attempts in 60 seconds
-- Covers all error codes (400, 401, 403, 422)
-- Bans IP for 24 hours
-- Protects Ory Kratos authentication endpoints
-
-#### 5. Admin Interface Protection (`osint/admin-abuse`)
-
-Monitors access to admin panels (NocoDB, Grafana, Prometheus).
-
-**Configuration:**
-
-```yaml
-name: osint/admin-abuse
-type: leaky
-filter: "evt.Meta.log_type == 'http_access-log' && (evt.Meta.http_path contains '/nocodb/' || evt.Meta.http_path contains '/grafana/' || evt.Meta.http_path contains '/prometheus/')"
-leakspeed: "300s"
-capacity: 10
-groupby: "evt.Meta.source_ip"
-condition: "len(queue.Queue) >= 5"
-blackhole: 1800s
-```
-
-**Detection:**
-
-- Triggers on 5+ admin requests in 5 minutes
-- Stricter limits for sensitive endpoints
-- Bans for 48 hours
-
-#### 6. Data Extraction Prevention (`osint/data-extraction`)
-
-Detects rapid successful API calls indicating bulk data extraction.
-
-**Configuration:**
-
-```yaml
-name: osint/data-extraction
-type: leaky
-filter: "evt.Meta.log_type == 'http_access-log' && evt.Meta.http_path contains '/api/' && evt.Meta.http_status == '200'"
-leakspeed: "5s"
-capacity: 100
-groupby: "evt.Meta.source_ip"
-distinct: "evt.Meta.http_path"
-condition: "len(queue.Queue) >= 50"
-blackhole: 1200s
-```
-
-**Detection:**
-
-- Triggers on 50+ successful API calls across distinct paths in 5 seconds
-- Identifies bulk download patterns
-- Bans for 72 hours
-
-#### 7. Bot Detection (`osint/suspicious-ua`)
-
-Filters automated tools and scrapers.
-
-**Configuration:**
-
-```yaml
-name: osint/suspicious-ua
-type: leaky
-filter: "evt.Meta.log_type == 'http_access-log' && evt.Meta.http_user_agent != nil && (Lower(evt.Meta.http_user_agent) contains 'bot' || Lower(evt.Meta.http_user_agent) contains 'crawler' || Lower(evt.Meta.http_user_agent) contains 'scraper' || Lower(evt.Meta.http_user_agent) contains 'curl' || Lower(evt.Meta.http_user_agent) contains 'wget' || Lower(evt.Meta.http_user_agent) contains 'python')"
-leakspeed: "60s"
-capacity: 20
-groupby: "evt.Meta.source_ip"
-condition: "len(queue.Queue) >= 15"
-blackhole: 300s
-labels:
-  service: osint-platform
-  type: suspicious_ua
-  remediation: true
-```
-
-**Detection:**
-
-- Triggers on 15+ requests with suspicious user agent in 60 seconds
-- Detects common scraping tools (bot, crawler, curl, wget, python)
-- Bans for 1 hour
-- Case-insensitive matching via `Lower()` function
+- **`api-abuse`** only counts unauthorized responses and excludes busy public paths (`/api/map/`, `/api/messages`, `/api/channels`, `/api/semantic/`, ...), so normal browsing never triggers it.
+- **`suspicious-ua`** excludes search-engine and link-preview crawlers, because banning them breaks link previews on Telegram, Facebook and X.
+- **`data-extraction`** and **`search-abuse`** use high thresholds to avoid banning the frontend's own parallel requests.
+- A scenario that uses `blackhole` suppresses repeat alerts for the same IP for that period.
 
 ## Rate Limiting
 
-Intelligent rate limiting by endpoint type:
+Caddy applies per-IP rate limits before CrowdSec sees abusive behaviour (`infrastructure/caddy/Caddyfile.security`):
 
-| Endpoint Type | Rate Limit | Window | Action |
-|--------------|------------|--------|--------|
-| Static files | 30 req/min | 1 minute | 429 Too Many Requests |
-| API calls | 60 req/min | 1 minute | 429 or ban |
-| Authentication | 10 attempts | 5 minutes | 15-minute ban |
-| Admin interfaces | 20 req | 10 minutes | 30-minute ban |
-| Frontend | 120 req/min | 1 minute | Throttle |
-| RSS feeds | 30 req | 2 minutes | 3-minute ban |
+| Zone | Limit | Applies to |
+|------|-------|------------|
+| `static_files` | 30 req/min | static assets |
+| `api_calls` | 60 req/min | `/api/*` |
+| `auth_attempts` | 10 per 5 minutes | `/kratos/*` |
+| `admin_access` | 20 per 10 minutes | admin routes |
+| `rss_feeds` | 30 per 2 minutes | `/rss/*` |
+| `frontend` | 120 req/min | frontend pages |
+
+Exceeding a Caddy limit returns HTTP 429; the CrowdSec scenarios then decide on bans.
 
 ## Monitoring and Management
 
 ### Access Points
 
-**CrowdSec Dashboard:**
+**CrowdSec Dashboard (optional):**
+
+The dashboard (`crowdsec-dashboard`, `auth` profile in the production overlay) listens on `127.0.0.1:3010` only. Reach it through an SSH tunnel:
 
 ```bash
-# Access web dashboard
-http://localhost:3010
-
-# Credentials configured in docker-compose.security.yml
+./scripts/tunnel-crowdsec-dashboard.sh user@your-server
+# then open http://localhost:3010
 ```
+
+It needs `CROWDSEC_DASHBOARD_API_KEY` in `.env`.
 
 **CrowdSec Metrics:**
 
 ```bash
-# Prometheus metrics
-http://localhost:6060/metrics
+# Prometheus metrics (bound to 127.0.0.1 on the host)
+curl http://127.0.0.1:6060/metrics
 ```
 
-**Grafana Integration:**
-
-```bash
-# CrowdSec dashboard in Grafana
-http://localhost:3001
-```
+**Grafana Integration:** Prometheus scrapes the CrowdSec metrics endpoint when the `monitoring` profile is active; use the Grafana instance described in [Monitoring](../operator-guide/monitoring.md).
 
 ### Management Commands
 
@@ -413,7 +261,7 @@ docker-compose exec crowdsec cscli decisions list --type ban
 # Remove ban for specific IP
 docker-compose exec crowdsec cscli decisions delete --ip 192.168.1.100
 
-# Remove all expired bans
+# Remove ALL decisions (careful)
 docker-compose exec crowdsec cscli decisions delete --all
 ```
 
@@ -422,9 +270,6 @@ docker-compose exec crowdsec cscli decisions delete --all
 ```bash
 # Summary of detection activity
 docker-compose exec crowdsec cscli metrics
-
-# Per-scenario statistics
-docker-compose exec crowdsec cscli metrics --scenarios
 
 # Bouncer status
 docker-compose exec crowdsec cscli bouncers list
@@ -446,11 +291,11 @@ docker-compose exec crowdsec cscli hub upgrade
 **Configuration Validation:**
 
 ```bash
-# Test CrowdSec configuration
-docker-compose exec crowdsec cscli config validate
+# Check configuration
+docker-compose exec crowdsec crowdsec -t
 
-# Reload configuration
-docker-compose exec crowdsec cscli config reload
+# Reload: restart the container
+docker-compose restart crowdsec
 ```
 
 ### Log Analysis
@@ -472,7 +317,7 @@ docker-compose logs crowdsec | grep "decision"
 
 ```bash
 # Watch incoming requests
-docker-compose exec caddy tail -f /var/log/caddy/access.log
+docker-compose exec caddy tail -f /var/log/caddy/access.log   # service is "caddy" (container osint-caddy-secured in production)
 
 # Filter for blocked IPs
 docker-compose logs caddy | grep crowdsec | grep blocked
@@ -489,91 +334,39 @@ docker-compose logs -f caddy | grep crowdsec
 
 ### Whitelist Trusted IPs
 
-**Temporary Whitelist:**
+**Temporary (decision-level):**
 
 ```bash
-# Whitelist IP temporarily
-docker-compose exec crowdsec cscli decisions add \
-  --ip 192.168.1.100 \
-  --type whitelist \
-  --duration 24h \
-  --reason "Trusted analyst"
+# Remove an existing ban
+docker-compose exec crowdsec cscli decisions delete --ip 192.168.1.100
 ```
 
-**Permanent Whitelist:**
+**Permanent (post-overflow whitelist):**
 
-Add to `infrastructure/crowdsec/whitelist.txt`:
-
-```
-# Trusted IPs (one per line)
-192.168.1.100  # Office network
-10.0.0.0/24    # VPN subnet
-```
-
-Update CrowdSec configuration:
+The platform ships `infrastructure/crowdsec/whitelists/owner-ips.yaml`, mounted into `/etc/crowdsec/postoverflows/s01-whitelist/`. It exempts one IP from the site-usage scenarios only (`search-abuse`, `data-extraction`, `api-abuse`, `admin-abuse`); authentication and attack scenarios still apply. Replace the example IP with your own (use a stable address; a reassigned dynamic IP passes its exemption to the next holder), then restart CrowdSec:
 
 ```yaml
-# infrastructure/crowdsec/postoverflows/whitelist.yaml
-name: crowdsecurity/whitelist
-description: "Whitelist trusted IPs"
-filter: "evt.Meta.source_ip in ['192.168.1.100', '10.0.0.0/24']"
+name: osint/owner-whitelist
+description: "Owner IP: exempt from the site-usage scenarios only"
 whitelist:
-  reason: "Trusted source"
+  reason: "Owner IP - site usage never banned"
+  expression:
+    - >-
+      evt.Overflow.Alert.Source.IP in ['203.0.113.10'] &&
+      evt.Overflow.Alert.Scenario in ['osint/search-abuse', 'osint/data-extraction', 'osint/api-abuse', 'osint/admin-abuse']
 ```
 
-### Whitelist Docker Networks
-
-**Internal Services:**
-
-```yaml
-# Automatically whitelist Docker networks
-filter: "evt.Meta.source_ip startsWith '172.' || evt.Meta.source_ip startsWith '10.'"
-whitelist:
-  reason: "Internal Docker network"
+```bash
+docker-compose restart crowdsec
 ```
+
+### Docker and Private Networks
+
+`infrastructure/crowdsec/config.yaml` already lists `172.16.0.0/12`, `192.168.0.0/16` and `10.0.0.0/8` as `trusted_ips` for the Local API. Behind Cloudflare, the `cloudflare-real-ip` parser takes the client address from `Cf-Connecting-Ip` so bans apply to real visitors; the `cloudflare` profile adds a bouncer that syncs bans to Cloudflare (`infrastructure/crowdsec/cloudflare-bouncer.yaml.example`).
 
 ## Performance Impact
 
-### Resource Usage
-
-**CrowdSec Engine:**
-
-- CPU: <5% idle, <15% under attack
-- Memory: ~50MB baseline
-- Disk: ~100MB (scenarios + data)
-- Network: Negligible
-
-**Caddy Bouncer:**
-
-- Latency: 5-10ms per request
-- CPU: <2% overhead
-- Memory: ~10MB
-
-**Total Overhead:**
-
-- ~60MB RAM total
-- <5ms added latency per request
-- ~1GB disk for logs (monthly)
-
-### Benchmarks
-
-**Request Processing:**
-
-- No CrowdSec: 100ms average response time
-- With CrowdSec: 105ms average response time
-- **Impact: +5% latency**
-
-**Throughput:**
-
-- 1000 req/sec without CrowdSec
-- 950 req/sec with CrowdSec
-- **Impact: -5% throughput**
-
-**Attack Mitigation:**
-
-- 95% reduction in automated scraping
-- 99% effectiveness against brute force
-- 90%+ bot traffic filtered
+CrowdSec and the Caddy bouncer add a small per-request overhead and modest memory use (the engine uses a local SQLite database under `/var/lib/crowdsec/data`). Measure on your own hardware with `docker stats osint-crowdsec`; no benchmark numbers are maintained here.
 
 ## Troubleshooting
 
@@ -595,21 +388,23 @@ docker-compose exec crowdsec cscli bouncers list
 grep CROWDSEC_BOUNCER_API_KEY .env
 
 # Regenerate if needed
-docker-compose exec crowdsec cscli bouncers add caddy-bouncer --key
+docker-compose exec crowdsec cscli bouncers delete caddy-bouncer
+docker-compose exec crowdsec cscli bouncers add caddy-bouncer -o raw
 ```
 
 **Test decision creation:**
 
 ```bash
-# Manually ban IP (test)
+# Manually ban your own test IP (use a throwaway address you control)
 docker-compose exec crowdsec cscli decisions add \
-  --ip 1.2.3.4 \
-  --duration 1h \
+  --ip <test-ip> \
+  --duration 10m \
   --reason "Test ban"
 
-# Verify Caddy blocks it
-curl -I http://localhost --header "X-Forwarded-For: 1.2.3.4"
-# Expected: 403 Forbidden
+# Request from that IP; Caddy should answer 403
+curl -I https://your-domain.com/
+# Remove the test ban afterwards
+docker-compose exec crowdsec cscli decisions delete --ip <test-ip>
 ```
 
 ### False Positives
@@ -620,23 +415,18 @@ curl -I http://localhost --header "X-Forwarded-For: 1.2.3.4"
 # Unban false positive
 docker-compose exec crowdsec cscli decisions delete --ip YOUR_IP
 
-# Add to whitelist
-echo "YOUR_IP  # Legitimate researcher" >> infrastructure/crowdsec/whitelist.txt
-
-# Reload configuration
+# Add to infrastructure/crowdsec/whitelists/owner-ips.yaml (see Whitelisting), then
 docker-compose restart crowdsec
 ```
 
 **Adjust scenario thresholds:**
 
-Edit `infrastructure/crowdsec/scenarios/osint-api-abuse.yaml`:
+Edit the scenario file, for example `infrastructure/crowdsec/scenarios/osint-search-abuse.yaml`, then restart CrowdSec:
 
 ```yaml
-# Increase capacity for less sensitivity
-capacity: 100  # Was: 50
-
-# Increase leakspeed for longer window
-leakspeed: "30s"  # Was: "10s"
+# Raise the trigger condition and capacity for less sensitivity
+capacity: 200
+condition: "len(queue.Queue) >= 120"
 ```
 
 ### Scenarios Not Triggering
@@ -662,8 +452,8 @@ docker-compose exec crowdsec cscli scenarios list
 **Validate scenario syntax:**
 
 ```bash
-# Test scenario configuration
-docker-compose exec crowdsec cscli config validate
+# Check configuration
+docker-compose exec crowdsec crowdsec -t
 ```
 
 ### High False Positive Rate
@@ -681,9 +471,7 @@ docker-compose exec crowdsec cscli alerts list --scenario osint/api-abuse
 **Tune scenario parameters:**
 
 ```yaml
-# Make detection less aggressive
-capacity: 200  # Increase capacity
-leakspeed: "60s"  # Longer window
+# Make detection less aggressive: raise `condition` and `capacity`, or add exclusions to the filter
 ```
 
 ## Security Best Practices
@@ -738,37 +526,20 @@ Set up Grafana alerts for unusual patterns:
 
 ### Network Security
 
-**Trust Internal Networks:**
+**Trusted networks:** `infrastructure/crowdsec/config.yaml` already sets `api.server.trusted_ips` to the Docker and private ranges.
 
-Configure CrowdSec to trust Docker networks:
-
-```yaml
-# infrastructure/crowdsec/config.yaml
-api:
-  server:
-    trusted_ips:
-      - 127.0.0.1
-      - 172.16.0.0/12  # Docker networks
-      - 192.168.0.0/16  # Private networks
-```
-
-**API Security:**
-
-```bash
-# Use HTTPS for CrowdSec API (production)
-CROWDSEC_API_URL=https://localhost:8080
-```
+**API exposure:** the Local API (8080) and metrics (6060) are published on `127.0.0.1` only by the production overlay. Keep it that way.
 
 **Key Rotation:**
 
 ```bash
 # Rotate bouncer key quarterly
 docker-compose exec crowdsec cscli bouncers delete caddy-bouncer
-docker-compose exec crowdsec cscli bouncers add caddy-bouncer --key
+docker-compose exec crowdsec cscli bouncers delete caddy-bouncer
+docker-compose exec crowdsec cscli bouncers add caddy-bouncer -o raw
 
-# Update .env with new key
-# Restart Caddy
-docker-compose restart caddy
+# Update CROWDSEC_BOUNCER_API_KEY in .env, then recreate Caddy
+docker-compose up -d --force-recreate caddy
 ```
 
 ## Related Documentation
@@ -780,7 +551,7 @@ docker-compose restart caddy
 ---
 
 !!! tip "Start in Detection Mode"
-    When first deploying CrowdSec, start with logging-only mode to identify false positives before enabling blocking.
+    When first deploying CrowdSec, watch `cscli alerts list` for a few days to spot false positives. To stay in detection-only mode, put a scenario in simulation mode (`cscli simulation enable osint/api-abuse`), which logs alerts without creating bans.
 
 !!! warning "Monitor False Positives"
     Regularly review ban decisions to ensure legitimate users aren't being blocked. Adjust scenario thresholds as needed.

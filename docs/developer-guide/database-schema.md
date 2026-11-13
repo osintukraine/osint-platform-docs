@@ -6,13 +6,12 @@ Complete reference for the PostgreSQL database schema.
 
 ## Overview
 
-The database schema is defined in `infrastructure/postgres/init.sql` (**4658 lines**) which serves as the single source of truth.
+The database schema is defined in `infrastructure/postgres/init.sql` (about 7,200 lines) which serves as the source of truth for fresh installs; numbered SQL migrations in `infrastructure/postgres/migrations/` carry existing databases forward.
 
 **Key Facts:**
-- **45 tables** defined
-- **PostgreSQL 16+** required
-- **pgvector** extension for embeddings
-- **No Alembic** migrations - schema rebuilds only
+- **60+ tables** and 6 materialized views defined in `init.sql`
+- **PostgreSQL 16** required, with the **pgvector** and **PostGIS** extensions (custom image `infrastructure/docker/postgres-pgvector-postgis.Dockerfile`)
+- **No Alembic** (archived): plain SQL migrations applied by `scripts/migrate.sh`
 
 **Extensions Used:**
 ```sql
@@ -20,6 +19,7 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;           -- Similarity search
 CREATE EXTENSION IF NOT EXISTS btree_gin;         -- Compound GIN indexes
 CREATE EXTENSION IF NOT EXISTS vector;            -- pgvector for embeddings
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements; -- Query performance
+CREATE EXTENSION IF NOT EXISTS postgis;           -- Spatial queries (map)
 ```
 
 ---
@@ -28,7 +28,7 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements; -- Query performance
 
 ### Source of Truth
 
-`infrastructure/postgres/init.sql` defines everything:
+`infrastructure/postgres/init.sql` defines everything for a fresh install:
 - All table definitions
 - Indexes and constraints
 - Functions and triggers
@@ -36,13 +36,14 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements; -- Query performance
 
 ### Schema Changes
 
-See [Database Migrations](database-migrations.md) for the full workflow.
+Every change goes into `init.sql` **and** a numbered migration. See [Database Migrations](database-migrations.md) for the full workflow.
 
 ```bash
-# Test schema changes with clean rebuild
+# Test schema changes with clean rebuild (development only: wipes data)
 docker-compose down
 docker volume rm osint-intelligence-platform_postgres_data
 docker-compose up -d postgres
+./scripts/migrate.sh --baseline
 ```
 
 ---
@@ -51,7 +52,7 @@ docker-compose up -d postgres
 
 ### messages
 
-Primary message storage with AI enrichment (~100 columns):
+Primary message storage with AI enrichment (about 85 columns; the excerpt below shows the groups, see `init.sql` for the full definition):
 
 ```sql
 CREATE TABLE IF NOT EXISTS messages (
@@ -74,6 +75,8 @@ CREATE TABLE IF NOT EXISTS messages (
     has_comments BOOLEAN DEFAULT FALSE,
     comments_count INTEGER DEFAULT 0,
     linked_chat_id BIGINT,
+    comments_fetched_at TIMESTAMP WITH TIME ZONE,
+    comments_refreshed_at TIMESTAMP WITH TIME ZONE,
 
     -- Engagement
     views INTEGER,
@@ -87,15 +90,27 @@ CREATE TABLE IF NOT EXISTS messages (
     -- Media
     media_type VARCHAR(20),       -- photo, video, document
     grouped_id BIGINT,            -- Album grouping
+    media_status VARCHAR(20),     -- media lane queue: pending, downloading, archived, failed, unavailable, expired
+    media_attempts SMALLINT NOT NULL DEFAULT 0,
+    album_message_ids BIGINT[],
 
     -- AI Enrichment: Spam
     is_spam BOOLEAN DEFAULT FALSE,
     spam_confidence NUMERIC(5, 2),
     spam_type VARCHAR(50),        -- financial, promotional, off_topic
+    spam_review_status VARCHAR(20),
 
-    -- AI Enrichment: Classification
-    osint_topic VARCHAR(50),      -- 13 topics
+    -- AI Enrichment: Classification (LLM; osint_topic = 'pending' until classified)
+    osint_topic VARCHAR(100),     -- combat, equipment, casualties, ... general, pending
     importance_level VARCHAR(20), -- high, medium, low
+    admin_topic_override VARCHAR(50),       -- NULL = use the AI value
+    admin_importance_override VARCHAR(20),
+
+    -- AI Enrichment: derived metadata (written by the classifier, prompt v13)
+    content_sentiment VARCHAR(20),
+    content_urgency_level INTEGER,
+    content_complexity VARCHAR(20),
+    key_phrases TEXT[],
 
     -- AI Enrichment: Embeddings
     content_embedding vector(384), -- all-MiniLM-L6-v2
@@ -106,6 +121,14 @@ CREATE TABLE IF NOT EXISTS messages (
 
     -- Deduplication
     content_hash VARCHAR(64),     -- SHA-256
+    duplicate_of_message_id BIGINT REFERENCES messages(id) ON DELETE SET NULL,
+    duplicate_reason VARCHAR(50), -- phash_match, text_embedding, cross_check, sha256_match
+
+    -- Moderation (admin_* by a person, is_hidden by automation such as fact-check)
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    admin_hidden BOOLEAN DEFAULT FALSE,
+    is_hidden BOOLEAN DEFAULT FALSE,
+    hidden_reason TEXT,
 
     -- Timestamps
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -117,12 +140,16 @@ CREATE TABLE IF NOT EXISTS messages (
 
 **Key Indexes:**
 ```sql
-CREATE INDEX idx_messages_channel_date ON messages(channel_id, telegram_date DESC);
-CREATE INDEX idx_messages_embedding ON messages USING hnsw (content_embedding vector_cosine_ops);
+CREATE INDEX idx_messages_channel_date ON messages(channel_id, telegram_date DESC, id DESC);
+CREATE INDEX idx_messages_content_embedding ON messages USING hnsw (content_embedding vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
 CREATE INDEX idx_messages_search_vector ON messages USING GIN (search_vector);
-CREATE INDEX idx_messages_topic ON messages(osint_topic);
-CREATE INDEX idx_messages_importance ON messages(importance_level);
-CREATE INDEX idx_messages_spam ON messages(is_spam);
+CREATE INDEX idx_messages_osint_topic ON messages(osint_topic);
+CREATE INDEX idx_messages_importance_level ON messages(importance_level);
+CREATE INDEX idx_messages_is_spam ON messages(is_spam);
+-- Partial indexes for the work queues (migrations 038, 051, 058)
+CREATE INDEX idx_messages_topic_pending ON messages(id) WHERE osint_topic = 'pending';
+CREATE INDEX idx_messages_pending_embedding ON messages(id) WHERE content_embedding IS NULL AND is_spam = false;
 ```
 
 ---
@@ -135,13 +162,13 @@ Telegram channel metadata with folder-based rules:
 CREATE TABLE IF NOT EXISTS channels (
     id SERIAL PRIMARY KEY,
     telegram_id BIGINT UNIQUE NOT NULL,
+    username VARCHAR(100),
     access_hash BIGINT,
 
     -- Identity
-    username VARCHAR(255),
     name VARCHAR(255),
     description TEXT,
-    type VARCHAR(20),             -- 'channel' or 'megagroup'
+    type VARCHAR(20) NOT NULL DEFAULT 'source',  -- 'source', 'filtered', 'archive'
 
     -- Trust signals
     verified BOOLEAN DEFAULT FALSE,
@@ -149,9 +176,14 @@ CREATE TABLE IF NOT EXISTS channels (
     fake BOOLEAN DEFAULT FALSE,
     restricted BOOLEAN DEFAULT FALSE,
 
+    -- Categorization (human-managed)
+    source_type VARCHAR(30),      -- state_media, military_unit, journalist, osint_aggregator, ... unknown
+    affiliation VARCHAR(20),      -- russia, ukraine, neutral, unknown
+
     -- Folder-based management
-    folder VARCHAR(100),          -- Telegram folder name
-    rule VARCHAR(50),             -- 'archive_all', 'selective_archive', 'discovery'
+    folder VARCHAR(100),          -- Telegram folder name (e.g. Archive-UA)
+    rule VARCHAR(50),             -- archive_all, selective_archive, ...
+    source_account VARCHAR(50) DEFAULT 'default',  -- which Telegram account monitors it
 
     -- Status
     active BOOLEAN DEFAULT TRUE,
@@ -159,13 +191,20 @@ CREATE TABLE IF NOT EXISTS channels (
 
     -- Backfill tracking
     backfill_status VARCHAR(20),  -- pending, in_progress, completed, failed
-    backfill_last_message_id BIGINT,
-    backfill_started_at TIMESTAMP WITH TIME ZONE,
+    backfill_from_date TIMESTAMP WITH TIME ZONE,
+    backfill_messages_fetched INTEGER DEFAULT 0,
     backfill_completed_at TIMESTAMP WITH TIME ZONE,
+
+    -- Discovery and retention
+    discovery_status VARCHAR(50), -- discovered, evaluating, promoted, rejected
+    discovery_metadata JSONB DEFAULT '{}'::jsonb,
+    quality_metrics JSONB,
+    retention_policy VARCHAR(50) DEFAULT 'permanent',
 
     -- Timestamps
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_message_at TIMESTAMP WITH TIME ZONE
 );
 ```
 
@@ -173,33 +212,30 @@ CREATE TABLE IF NOT EXISTS channels (
 
 ### curated_entities
 
-Custom entity knowledge graph:
+Curated entity reference data (equipment, units, people, places) imported by the entity-ingestion service:
 
 ```sql
 CREATE TABLE IF NOT EXISTS curated_entities (
-    id SERIAL PRIMARY KEY,
-    entity_id VARCHAR(100) UNIQUE NOT NULL, -- e.g., "brigade_47"
-    name VARCHAR(255) NOT NULL,
-    entity_type VARCHAR(50) NOT NULL,       -- person, organization, unit, location, equipment
-    aliases TEXT[],                         -- Alternative names
-
-    -- Metadata
+    id BIGSERIAL PRIMARY KEY,
+    entity_type VARCHAR(50) NOT NULL,       -- CHECK: equipment, individual, organization, location,
+                                            -- event, military_unit, ship, aircraft, military_vehicle,
+                                            -- military_weapon, electronic_warfare, component
+    name TEXT NOT NULL,
+    aliases TEXT[],
     description TEXT,
-    wikidata_id VARCHAR(20),
-    country VARCHAR(100),
-    affiliation VARCHAR(100),               -- 'ukraine', 'russia', 'neutral'
+    latitude FLOAT, longitude FLOAT,        -- for locations
 
-    -- Embedding for semantic matching
-    name_embedding vector(384),
+    source_reference TEXT NOT NULL,         -- provenance: 'armyguide', 'odin_sanctions', ...
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    notes TEXT,
+    content_hash VARCHAR(64) UNIQUE NOT NULL,  -- SHA-256 deduplication
 
-    -- External links
-    wikipedia_url TEXT,
-    official_url TEXT,
-    social_media JSONB,
+    embedding vector(384),                  -- semantic matching
+    embedding_model VARCHAR(100),
+    search_vector tsvector GENERATED ALWAYS AS (...) STORED,
 
-    -- Timestamps
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
 );
 ```
 
@@ -211,29 +247,31 @@ Sanctions data from OpenSanctions/Yente:
 
 ```sql
 CREATE TABLE IF NOT EXISTS opensanctions_entities (
-    id VARCHAR(255) PRIMARY KEY,            -- OpenSanctions ID
-    schema_name VARCHAR(100) NOT NULL,      -- 'Person', 'Company', 'LegalEntity'
+    id SERIAL PRIMARY KEY,
+    opensanctions_id VARCHAR(255) UNIQUE NOT NULL,  -- e.g. "ofac-13661"
+    external_id VARCHAR(255),
+
+    entity_type VARCHAR(50) NOT NULL,       -- Person, Organization, Vessel, Aircraft
+    schema_type VARCHAR(50) NOT NULL,       -- OpenSanctions schema
     name VARCHAR(500) NOT NULL,
     aliases TEXT[],
+    description TEXT,
+    properties JSONB,                       -- birth_date, nationalities, positions, ...
 
-    -- Sanctions data
-    datasets TEXT[],                        -- ['us_ofac_sdn', 'eu_fsf']
-    countries TEXT[],
-    topics TEXT[],                          -- ['sanction', 'crime.fin']
+    risk_classification VARCHAR(20) NOT NULL,  -- sanctioned, pep, criminal, corporate
+    datasets TEXT[] NOT NULL,               -- ['us_ofac_sdn', 'eu_fsf']
+    topics TEXT[],                          -- ['sanction', 'role.pep']
+    sanctions_reason TEXT,
 
-    -- Properties (flexible FtM schema)
-    properties JSONB NOT NULL,
+    entity_embedding vector(384),           -- HNSW-indexed
+    embedding_model VARCHAR(100),
 
-    -- Embedding for semantic matching
-    name_embedding vector(384),
-
-    -- Sync tracking
-    last_seen_at TIMESTAMP WITH TIME ZONE,
-    first_seen_at TIMESTAMP WITH TIME ZONE,
-
-    -- Timestamps
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    first_seen TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    last_seen TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    mention_count INTEGER NOT NULL DEFAULT 1,
+    data_updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 ```
 
@@ -241,12 +279,12 @@ CREATE TABLE IF NOT EXISTS opensanctions_entities (
 
 ### llm_prompts
 
-Versioned LLM prompts for classification:
+Versioned LLM prompts for classification. Insert a new version and flip `is_active`; never edit a row in place (see [LLM Integration](llm-integration.md)):
 
 ```sql
 CREATE TABLE IF NOT EXISTS llm_prompts (
     id SERIAL PRIMARY KEY,
-    task VARCHAR(50) NOT NULL,              -- 'message_classification'
+    task VARCHAR(50) NOT NULL,              -- 'message_classification', 'classify_screen', ...
     name VARCHAR(100) NOT NULL,
     prompt_type VARCHAR(20) NOT NULL,       -- 'system' or 'user_template'
     content TEXT NOT NULL,
@@ -256,7 +294,7 @@ CREATE TABLE IF NOT EXISTS llm_prompts (
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
 
     -- Model selection
-    model_name VARCHAR(100),                -- 'qwen2.5:3b'
+    model_name VARCHAR(100),                -- per-prompt override; NULL = global default
     model_parameters JSONB DEFAULT '{}',    -- {"temperature": 0.3}
     task_category VARCHAR(50),              -- 'processor', 'enrichment'
 
@@ -267,8 +305,13 @@ CREATE TABLE IF NOT EXISTS llm_prompts (
 
     -- Performance tracking
     usage_count INTEGER DEFAULT 0,
-    avg_latency_ms INTEGER,
     error_count INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
+    failure_count INTEGER DEFAULT 0,
+    avg_latency_ms NUMERIC(10,2),
+
+    -- A/B testing and progressive rollout
+    rollout_percentage INTEGER DEFAULT 100,
 
     -- Timestamps
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -282,37 +325,39 @@ CREATE TABLE IF NOT EXISTS llm_prompts (
 
 ### events
 
-Detected OSINT events:
+Event timeline entries built from correlated RSS articles and Telegram posts:
 
 ```sql
 CREATE TABLE IF NOT EXISTS events (
-    id SERIAL PRIMARY KEY,
-    event_id VARCHAR(100) UNIQUE NOT NULL,
+    id BIGSERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    summary TEXT,                          -- LLM-generated
+    event_type VARCHAR(50) NOT NULL,       -- strike, advance, retreat, political, humanitarian, ...
 
-    -- Event classification
-    event_type VARCHAR(50) NOT NULL,        -- strike, battle, movement, etc.
-    confidence NUMERIC(5, 2),
-    status VARCHAR(20) DEFAULT 'active',    -- active, resolved, disputed
-
-    -- Location
-    location_name VARCHAR(255),
+    location_name TEXT,
     location_coords POINT,
-    location_precision VARCHAR(20),
 
-    -- Time
-    event_time TIMESTAMP WITH TIME ZONE,
-    event_time_precision VARCHAR(20),       -- exact, day, week
+    event_date DATE,
+    first_seen_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    last_activity_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
 
-    -- Content
-    title VARCHAR(500),
-    summary TEXT,
-    source_count INTEGER DEFAULT 0,
+    -- breaking -> developing -> confirmed -> verified
+    tier_status VARCHAR(20) NOT NULL DEFAULT 'breaking',
+    is_major BOOLEAN NOT NULL DEFAULT FALSE,   -- pinned, never auto-archived
+    archived_at TIMESTAMP WITH TIME ZONE,      -- NULL = active
 
-    -- Timestamps
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    rss_source_count INTEGER NOT NULL DEFAULT 0,
+    telegram_channel_count INTEGER NOT NULL DEFAULT 0,
+    telegram_message_count INTEGER NOT NULL DEFAULT 0,
+
+    search_vector tsvector,
+    deleted_at TIMESTAMP WITH TIME ZONE,       -- soft delete with audit trail
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 ```
+
+The "verified" tier requires two or more independent RSS sources or a human decision. Telegram-only clusters are tracked in `telegram_event_clusters`.
 
 ---
 
@@ -326,12 +371,17 @@ The schema uses **pgvector** with 384-dimensional embeddings:
 -- Messages (semantic search)
 content_embedding vector(384)
 
--- Entities (semantic matching)
-name_embedding vector(384)
+-- Curated entities
+embedding vector(384)
+
+-- OpenSanctions entities
+entity_embedding vector(384)
 
 -- External news (cross-validation)
-title_embedding vector(384)
-content_embedding vector(384)
+embedding vector(384)
+
+-- Telegram event clusters
+cluster_embedding vector(384)
 ```
 
 ### HNSW Indexes
@@ -340,17 +390,12 @@ High-performance approximate nearest neighbor search:
 
 ```sql
 -- Message embeddings
-CREATE INDEX idx_messages_embedding
+CREATE INDEX idx_messages_content_embedding
 ON messages USING hnsw (content_embedding vector_cosine_ops)
 WITH (m = 16, ef_construction = 64);
 
--- Entity name embeddings
-CREATE INDEX idx_curated_entities_embedding
-ON curated_entities USING hnsw (name_embedding vector_cosine_ops);
-
--- News embeddings
-CREATE INDEX idx_external_news_embedding
-ON external_news USING hnsw (title_embedding vector_cosine_ops);
+-- Also HNSW: opensanctions_entities.entity_embedding (idx_opensanctions_entities_embedding),
+-- telegram_event_clusters.cluster_embedding (idx_clusters_embedding)
 ```
 
 ### Similarity Search
@@ -378,6 +423,8 @@ search_vector TSVECTOR
 -- GIN index for fast search
 CREATE INDEX idx_messages_search_vector
 ON messages USING GIN (search_vector);
+
+-- Weights: original content = A, English translation = B
 ```
 
 ### Search Trigger
@@ -387,15 +434,15 @@ CREATE OR REPLACE FUNCTION messages_search_vector_update()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.search_vector :=
-        setweight(to_tsvector('simple', COALESCE(NEW.content, '')), 'A') ||
-        setweight(to_tsvector('simple', COALESCE(NEW.content_translated, '')), 'B');
+        setweight(to_tsvector('english', COALESCE(NEW.content, '')), 'A') ||
+        setweight(to_tsvector('english', COALESCE(NEW.content_translated, '')), 'B');
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER messages_search_vector_trigger
-BEFORE INSERT OR UPDATE ON messages
-FOR EACH ROW EXECUTE FUNCTION messages_search_vector_update();
+    BEFORE INSERT OR UPDATE ON messages
+    FOR EACH ROW EXECUTE FUNCTION messages_search_vector_update();
 ```
 
 ---
@@ -426,10 +473,28 @@ erDiagram
 
 ---
 
-## Table Summary (45 tables)
+## Table Summary (60+ tables)
 
 | Category | Tables |
 |----------|--------|
+| **Core** | users (legacy), channels, channel_submissions, messages, message_quarantine, telegram_accounts, shadow_account_state |
+| **Media** | storage_boxes, media_files, message_media, duplicate_clusters |
+| **Auth / access** | feed_tokens, feed_subscriptions, api_keys, export_jobs, user_roles |
+| **AI/LLM** | llm_prompts, model_configuration, message_tags, tag_stats, message_reclassifications, classification_fact_checks, enrichment_llm_attempts, geolocation_llm_attempts, decision_log |
+| **Entities** | curated_entities, opensanctions_entities, message_entities, opensanctions_message_entities, entity_relationships |
+| **Events and maps** | events, event_messages, event_sources, event_config, telegram_event_clusters, cluster_messages, location_gazetteer, message_locations |
+| **RSS** | rss_feeds, news_sources, external_news, message_validations, message_news_correlations |
+| **Translation** | translation_config, translation_usage |
+| **Config** | platform_config, folder_rules, military_slang |
+| **Social graph** | telegram_users, message_comments, message_reactions, message_replies, message_forwards, channel_interactions, message_engagement_timeline, viral_posts |
+| **User activity** | user_bookmarks, user_comments, admin_audit_log |
+| **Operations** | schema_migrations, enrichment_progress, dr_backup_history, dr_failover_history |
+
+Materialized views (refreshed nightly by the analytics service): `message_social_graph`, `channel_influence_network`, `top_influencers`, `unified_message_entities`, `top_forwarded_messages`, `analytics_daily_summary`.
+
+The exhaustive per-table reference is [Database Tables](../reference/database-tables.md).
+
+----------|--------|
 | **Core** | users, channels, messages, message_quarantine |
 | **Media** | media_files, message_media |
 | **Auth** | feed_tokens, export_jobs |
@@ -530,7 +595,7 @@ LIMIT 20;
 
 -- Full-text search (uses GIN index)
 SELECT * FROM messages
-WHERE search_vector @@ plainto_tsquery('simple', $1)
+WHERE search_vector @@ plainto_tsquery('english', $1)
 ORDER BY telegram_date DESC;
 ```
 

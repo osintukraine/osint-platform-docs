@@ -9,10 +9,10 @@ Guide to upgrading the OSINT Intelligence Platform safely.
 Before any upgrade:
 
 - [ ] **Backup database**: `./scripts/backup.sh` or manual pg_dump
-- [ ] **Backup Telegram session**: `cp -r data/sessions data/sessions.backup`
+- [ ] **Backup Telegram sessions**: `cp -r telegram_sessions telegram_sessions.backup` (`backup.sh` also archives them)
 - [ ] **Backup .env**: `cp .env .env.backup`
 - [ ] **Note current versions**: `docker compose ps` and `git log -1 --oneline`
-- [ ] **Read CHANGELOG.md** for breaking changes
+- [ ] **Read the commit log / release notes** for breaking changes (`git log --oneline HEAD..origin/master`)
 - [ ] **Schedule maintenance window** (10-30 minutes typical)
 - [ ] **Notify users** if applicable
 
@@ -27,13 +27,24 @@ Production updates use the deploy script, which pulls the code, applies pending 
 ```bash
 ./scripts/deploy.sh --dry-run    # preview
 ./scripts/deploy.sh              # pull, migrate, restart
-./scripts/deploy.sh --build      # also rebuild images first
+./scripts/deploy.sh --build      # also rebuild all images first
+./scripts/deploy.sh --build-pytorch                    # rebuild only the PyTorch-based services
+./scripts/deploy.sh --build-service media-worker       # rebuild only named services (repeatable)
+# --build-pytorch and --build-service can be combined: both sets are built
+./scripts/deploy.sh --skip-health                      # skip the final health check
+./scripts/deploy.sh --force-recreate                   # recreate containers even if nothing changed
 ./scripts/deploy.sh --quick      # pull and restart, skip migrations
 ```
 
 After an update that changes `infrastructure/models/models.txt`, run `./scripts/fetch-models.sh` (see [Embedding Models](model-provisioning.md)); `deploy.sh` does not do it.
 
+Before a large `--build` (for example a `shared/python/` change that rebuilds every service), run `./scripts/warm-build-cache.sh` to pre-build the images first, so the deploy's own build step is a warm-cache no-op and downtime stays short.
+
 **Downtime**: a few minutes (container restart).
+
+### Post-deploy health check
+
+After restarting, `deploy.sh` inspects **every container the deploy created** — crash loops, unexpected restarts, non-zero exits and `unhealthy` status. If any fail, it stops and prints the offending container names, their last log lines and the rollback command, so a bad build is caught at deploy time instead of in production. (`--skip-health` bypasses this; do not use it in production.)
 
 ### Schema Changes
 
@@ -75,7 +86,7 @@ Check what is applied:
 ./scripts/migrate.sh --status
 ```
 
-Recent migrations that matter to operators: 034 to 035 (runtime and RSS admin settings), 036 (media lane columns), 037 (classifier prompt v12, inserted inactive), 038 (`message_reclassifications` and the pending-topic index).
+Migrations are numbered sequentially (currently up to the 058 series). `./scripts/migrate.sh --status` is the source of truth for what your database has; read the header of any pending migration before applying it, as large index builds are called out there. Migrations that insert a new classifier prompt version leave it inactive until you activate it (see [LLM Gateway](external-llm.md#prompt-versions)).
 
 ---
 
@@ -95,10 +106,11 @@ docker compose exec postgres pg_dump -U osint_user \
 
 # 2. Recreate database with new schema
 docker compose down
-docker volume rm osint-intelligence-platform_postgres_data
+docker volume ls | grep postgres_data      # note the exact volume name
+docker volume rm <project>_postgres_data
 docker compose up -d postgres
 
-# 3. Wait for schema creation
+# 3. Wait for schema creation (init.sql)
 sleep 10
 
 # 4. Import data (may need transformation)
@@ -154,37 +166,54 @@ UPDATE messages SET new_field = computed_value WHERE new_field = '';
 
 ## Rolling Updates
 
-For zero-downtime updates of stateless services:
-
-### Processor Workers
+Code lives in the Docker images. There are **no source bind mounts** any more, so a code change does **not** take effect until its services are rebuilt. Always rebuild through `deploy.sh` — not a manual `docker compose ... --build` — so the post-deploy health check runs (see below):
 
 ```bash
-# Scale down gracefully (drain queue)
-docker compose exec redis redis-cli XLEN telegram_messages
-# Wait until queue is small (<100)
-
-# Update one worker at a time
-docker compose up -d --no-deps --build processor-worker-1
-sleep 30  # Verify healthy
-docker compose up -d --no-deps --build processor-worker-2
+# Rebuild + recreate only the named services (repeatable flag), then health-check
+./scripts/deploy.sh --build-service <service> [--build-service <service> ...]
 ```
+
+!!! warning "`shared/python/` changes rebuild everything"
+    `shared/python/` is baked into every service image, so a change there affects
+    every service. Rebuild all of them — in practice a full `./scripts/deploy.sh --build`.
+
+### Processor / shared changes — rebuild all six
+
+The processor is a **family of six services, each with its own image**: `processor-worker`,
+`processor-worker-backfill`, `media-worker`, `backlog-reprocess`, `backlog-worker` and
+`backlog-enrich`. A change to processor code (or to `shared/python/`) must rebuild **all six**:
+
+```bash
+# Queue depth first — messages stay in the Redis stream across the restart
+docker compose exec redis redis-cli XLEN telegram:messages:realtime
+docker compose exec redis redis-cli XLEN telegram:messages:backfill
+
+./scripts/deploy.sh \
+  --build-service processor-worker \
+  --build-service processor-worker-backfill \
+  --build-service media-worker \
+  --build-service backlog-reprocess \
+  --build-service backlog-worker \
+  --build-service backlog-enrich
+```
+
+`processor-worker` runs N replicas (`PROCESSOR_WORKER_REPLICAS`); messages are consumed from
+the Redis stream once the rebuilt workers are back.
 
 ### API
 
 ```bash
-# API is stateless, quick restart
-docker compose up -d --no-deps --build api
+# API is stateless — rebuild its image and recreate
+./scripts/deploy.sh --build-service api
 ```
 
 ### Listener
 
-```bash
-# Listener maintains Telegram session - restart carefully
-docker compose stop listener
-docker compose up -d --build listener
+The listener holds a Telegram session; recreating it reconnects:
 
-# Verify reconnected
-docker compose logs --tail=50 listener | grep "connected"
+```bash
+./scripts/deploy.sh --build-service listener
+docker compose logs --tail=50 listener | grep -i "connected"
 ```
 
 ---
@@ -212,9 +241,10 @@ docker compose up -d
 docker compose down
 
 # 2. Restore database from backup
-docker volume rm osint-intelligence-platform_postgres_data
+docker volume rm <project>_postgres_data
 docker compose up -d postgres
-docker compose exec -T postgres psql -U osint_user -d osint_platform < backup.sql
+# Restore the dump made by backup.sh (see Backup & Restore)
+./scripts/restore.sh backups/<timestamp>
 
 # 3. Revert code
 git checkout <previous-commit>
@@ -264,15 +294,12 @@ When updating multiple components:
 
 Pin versions in production:
 
+The compose file already pins most third-party images (Redis, Prometheus, Grafana, Loki, exporters, Yente, MinIO). `postgres` uses the locally built `osint-platform-postgres:latest` (PostgreSQL 16 with pgvector), and `ollama` and `nocodb` use `:latest`. If you need reproducible rebuilds, pin those two in `docker-compose.yml` as well.
+
 ```yaml
-# docker-compose.yml
 services:
-  postgres:
-    image: postgres:16.1  # Pin major.minor
-  redis:
-    image: redis:7.2-alpine
   ollama:
-    image: ollama/ollama:0.1.32
+    image: ollama/ollama:<pinned-version>
 ```
 
 ### Python Dependencies
@@ -301,8 +328,8 @@ docker compose ps
 curl http://localhost:8000/health
 
 # 3. Messages processing
-docker compose exec redis redis-cli XLEN telegram_messages
-# Should not be growing
+docker compose exec redis redis-cli XLEN telegram:messages:realtime
+# Should not keep growing
 
 # 4. No errors in logs
 docker compose logs --tail=100 | grep -i error
@@ -340,9 +367,9 @@ docker compose logs --since 720h | grep -i "warning\|deprecated"
 ### Quarterly
 
 ```bash
-# Full backup and restore test
+# Full backup, then a restore test on a scratch host
 ./scripts/backup.sh
-./scripts/restore-test.sh
+./scripts/restore.sh backups/<timestamp> --dry-run
 
 # Review dependencies for security updates
 pip-audit  # If installed

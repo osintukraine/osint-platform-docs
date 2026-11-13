@@ -5,7 +5,7 @@ The OSINT Platform implements Redis-backed rate limiting on expensive API endpoi
 ## Overview
 
 **Algorithm**: Sliding window using Redis sorted sets
-**Scope**: Per-IP rate limiting (supports X-Forwarded-For for proxied requests)
+**Scope**: Per client key: `ip:<address>` for anonymous callers, `user:<id>` for sessions, `apikey:<id>` for API keys (forwarded-IP headers are trusted only from internal networks)
 **Behavior**: Fail-open on Redis errors (logs warning, allows request)
 
 ```
@@ -32,6 +32,22 @@ Rate limits are configured via environment variables (requests per minute):
 | `MAP_SUGGEST_RATE_LIMIT` | 60 | `/api/map/locations/suggest` | Location autocomplete |
 | `MAP_REVERSE_RATE_LIMIT` | 60 | `/api/map/locations/reverse` | Reverse geocoding |
 | `MAP_CLUSTER_MESSAGES_RATE_LIMIT` | 60 | `/api/map/clusters/{id}/messages` | Cluster expansion |
+| `MEDIA_REDIRECT_RATE_LIMIT` | 300 | `/api/media/internal/media-redirect/...` | Cold-path media (anti-leeching; hot-path files come from the Caddy buffer and bypass the API) |
+
+`/api/map/trajectories` shares `MAP_MESSAGES_RATE_LIMIT`. `/api/map/hot-locations` and `/api/map/recent-messages` have no limiter. The map WebSocket has its own limits (`WEBSOCKET_RATE_LIMIT`, `WEBSOCKET_MAX_CONNECTIONS_PER_IP`; see [Map API](map-api.md#websocket-api)).
+
+### Tiers
+
+`rate_limit_dependency(category=...)` (no fixed number) picks a limit from the caller's tier, in requests per minute:
+
+| Tier | default | media | export | map |
+|------|---------|-------|--------|-----|
+| anonymous | 60 | 30 | 10 | 120 |
+| authenticated | 120 | 60 | 30 | 240 |
+| premium | 300 | 150 | 100 | 600 |
+| admin | 1000 | 500 | 500 | 1000 |
+
+An API key's tier comes from `api_keys.rate_limit_tier`; sessions are `authenticated`, or `admin` for admins. The map and media endpoints above pass a fixed limit, which overrides the tier.
 
 **Note**: Higher defaults (120/min) for messages/clusters endpoints account for frequent map interactions during pan/zoom.
 
@@ -52,20 +68,19 @@ HTTP/1.1 429 Too Many Requests
 X-RateLimit-Limit: 120
 X-RateLimit-Remaining: 0
 X-RateLimit-Reset: 1702992060
-Retry-After: 45
+Retry-After: 60
 
-{
-  "detail": "Rate limit exceeded. Please try again later.",
-  "retry_after": 45
-}
+{"detail": "Rate limit exceeded. Please try again later."}
 ```
+
+`Retry-After` is the full window (60 s), not the time left in it.
 
 ## Implementation Details
 
 ### Sliding Window Algorithm
 
 Uses Redis sorted sets where:
-- Key: `rate_limit:map:{endpoint}:{client_ip}`
+- Key: `rate_limit:map:{endpoint}:{client_key}` (client key as above, e.g. `ip:192.168.1.1`)
 - Score: Request timestamp (Unix epoch)
 - Member: Unique request identifier
 
@@ -79,14 +94,7 @@ pipe.expire(key, window_seconds + 1)               # Cleanup TTL
 
 ### Client IP Detection
 
-Supports reverse proxy scenarios:
-
-```python
-# Priority order:
-1. X-Forwarded-For header (first entry)
-2. X-Real-IP header (nginx)
-3. Direct client.host
-```
+`get_client_ip()` supports reverse proxies (Caddy) without allowing spoofing: `X-Forwarded-For` (first entry) and `X-Real-IP` are honoured **only** when the direct connection comes from an internal network (Docker `172.16.0.0/12`, `10/8`, `192.168/16`, loopback). Otherwise the socket address is used. Ports are stripped so one IP shares one bucket.
 
 ### Fail-Open Behavior
 
@@ -102,24 +110,29 @@ On Redis connection errors, the limiter:
 ### As FastAPI Dependency
 
 ```python
-from src.utils.rate_limit import rate_limit_dependency
+from ..utils.rate_limit import rate_limit_dependency
 
+# Fixed limit
 @router.get("/expensive")
 async def expensive_endpoint(
     request: Request,
-    rate_limit: None = Depends(rate_limit_dependency(
-        requests_per_minute=30,
-        endpoint_name="expensive"
-    ))
+    _rate_limit: None = Depends(rate_limit_dependency(30, "expensive")),
 ):
-    # Rate limiting handled by dependency
     return {"data": "..."}
+
+# Tier-based limit (recommended for new endpoints)
+@router.get("/files")
+async def files(
+    request: Request,
+    _rate_limit: None = Depends(rate_limit_dependency(category="media")),
+):
+    ...
 ```
 
 ### Direct Usage
 
 ```python
-from src.utils.rate_limit import RateLimiter
+from ..utils.rate_limit import RateLimiter
 
 limiter = RateLimiter()
 allowed, info = await limiter.check_rate_limit(
@@ -135,10 +148,11 @@ if not allowed:
 ### Adding Headers to Responses
 
 ```python
-from src.utils.rate_limit import add_rate_limit_headers
+from ..utils.rate_limit import add_rate_limit_headers
 
 @router.get("/data")
 async def get_data(request: Request, response: Response):
+    # Needs the rate_limit_dependency on the route (it stores the info on request.state)
     await add_rate_limit_headers(request, response)
     return {"data": "..."}
 ```
@@ -146,9 +160,9 @@ async def get_data(request: Request, response: Response):
 ## Redis Key Structure
 
 ```
-rate_limit:map:messages:192.168.1.1
-rate_limit:map:clusters:192.168.1.1
-rate_limit:map:heatmap:10.0.0.1
+rate_limit:map:map_messages:ip:192.168.1.1
+rate_limit:map:map_clusters:ip:192.168.1.1
+rate_limit:map:map_heatmap:user:3f2a...
 ```
 
 Keys auto-expire after window + 1 second for cleanup.
@@ -161,8 +175,8 @@ Rate limit events are logged:
 {
   "level": "warning",
   "message": "Rate limit exceeded",
-  "client_id": "192.168.1.1",
-  "endpoint": "messages",
+  "client_id": "ip:192.168.1.1",
+  "endpoint": "map_messages",
   "limit": 120,
   "current_count": 121
 }
@@ -175,8 +189,8 @@ Redis errors are also logged:
   "level": "warning",
   "message": "Rate limit Redis error (failing open)",
   "error": "Connection refused",
-  "client_id": "192.168.1.1",
-  "endpoint": "messages"
+  "client_id": "ip:192.168.1.1",
+  "endpoint": "map_messages"
 }
 ```
 
@@ -213,14 +227,10 @@ map.on('moveend', () => {
 });
 ```
 
-## Future Enhancements
+## Not Yet Implemented
 
-Potential improvements (not yet implemented):
-
-1. **API Key Authentication**: Higher limits for authenticated integrations
-2. **Per-User Limits**: User-based rather than IP-based for authenticated users
-3. **Tiered Limits**: Different limits for different user roles
-4. **Global Rate Limits**: Cross-endpoint limits to prevent distributed abuse
+1. **Global rate limits**: no cross-endpoint cap to stop distributed abuse
+2. **Tiers on the map endpoints**: they use fixed limits, so authenticated users and API keys get the same map limits as anonymous callers
 
 ## Related Documentation
 
@@ -230,6 +240,4 @@ Potential improvements (not yet implemented):
 
 ---
 
-**File Location**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/utils/rate_limit.py`
-
-**Last Updated**: 2025-12-19
+**File Location**: `services/api/src/utils/rate_limit.py` in the platform repository

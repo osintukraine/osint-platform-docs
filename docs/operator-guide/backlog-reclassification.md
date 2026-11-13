@@ -2,6 +2,8 @@
 
 Messages archived while the LLM was unavailable (or in the CPU era) have `osint_topic = 'pending'`: they are in the archive but have no topic or importance. The **backlog worker** works through them with the LLM, newest first, on the gateway's *batch* lane. It also re-checks messages that were flagged as spam.
 
+This page covers the `backlog-worker`. Two sibling services in the same profile, `backlog-enrich` and `backlog-reprocess`, are described at the end.
+
 Developer details: [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_GATEWAY.md).
 
 ## Requirements
@@ -26,9 +28,9 @@ Two passes, each newest first:
 
 1. **Spam re-check** (when `backlog_spam_first` is on). Each message flagged as spam is judged again and the verdict is applied:
     - still spam: stays spam;
-    - not spam and Ukraine-relevant: `is_spam` is cleared and it returns to the feed;
+    - not spam and Ukraine-relevant: `spam_review_status` is set to `requeued` and the post is sent back through the whole pipeline (backfill stream: classified again, translated, media queued, tagged), so it needs the [`backfill` profile](processing-modes.md#backfill-processing) to be running;
     - not spam and not Ukraine-relevant: `is_spam` is cleared and the message is hidden with reason `off_topic`.
-2. **Pending pass.** Messages with `osint_topic = 'pending'` get a topic and importance.
+2. **Pending pass.** Messages with `osint_topic = 'pending'` get a topic and importance. It is skipped while `backlog_reprocess_enabled` is on (the reprocess job covers it); the spam re-check then runs every 10 minutes.
 
 Every verdict (spam, relevance, archive decision, analysis text, model, prompt) is stored in the `message_reclassifications` table, so you can review what the LLM decided. Apart from the cases above, already archived posts are not hidden or un-hidden by this worker.
 
@@ -49,6 +51,17 @@ docker compose exec postgres psql -U osint_user -d osint_platform -c \
 ## Stopping it
 
 Switch `backlog_reclassify_enabled` off in the admin page. The worker idles; nothing is rolled back. To stop the container, run `docker compose stop backlog-worker` (or remove `llm-gateway` from `COMPOSE_PROFILES`).
+
+## Sibling jobs
+
+| Service (profile `llm-gateway`) | Admin switch (default off) | What it does |
+|---|---|---|
+| `backlog-enrich` | `backlog_enrich_enabled` (`backlog_enrich_concurrency`, window `backlog_enrich_from` / `backlog_enrich_to`) | Gives archived posts without tags keywords, entities, places and tone |
+| `backlog-reprocess` | `backlog_reprocess_enabled`, `backlog_reprocess_group`, `backlog_reprocess_concurrency` | Sends archived posts of one group (1 spam flags, 2 never LLM-classified, 3 before prompt v12, 5 prompt v12) back through the pipeline for the classification council. It makes no LLM call itself; the backfill workers classify |
+
+Run one reprocess group at a time and check the result before starting the next.
+
+All backlog jobs slow down on their own when the live processor's LLM latency rises (p95 above 20 s removes one call in flight, below 15 s adds one).
 
 !!! note
     Backlog traffic shares the GPU with live classification. If realtime latency suffers, lower `backlog_concurrency`.

@@ -13,55 +13,61 @@ The Map Interface transforms Telegram messages into geospatial intelligence by:
 
 ## Map Layers
 
-### Messages Layer (Blue Markers)
+Toggle layers in the sidebar under **Map Layers**. The sidebar also has a region switch (**Conflict Zone** or **Worldwide**), source and confidence filters, a **Hot Locations (24h)** list and a **Recent Messages** list.
 
-Individual geocoded Telegram posts with location mentions.
+!!! warning "Experimental"
+    The map shows a banner because locations are detected automatically from message text. Treat positions as approximate and check the source message.
 
-**Click a marker to see**:
+### Message Markers
+
+Individual geocoded Telegram posts with a location mention. The marker shows a flag for the source channel (Ukrainian, Russian or unknown affiliation), with a halo that gets larger the less precise the location is.
+
+**Hover or click a marker to see**:
 - Message content preview
 - Channel name and time
-- Location name and confidence score
-- Extraction method (gazetteer, nominatim, llm_relative)
+- Location name and a confidence label (High, Medium or Low)
 
-**Confidence Levels**:
-- **0.95**: Gazetteer match (offline database)
-- **0.85**: Nominatim API (OpenStreetMap)
-- **0.75**: LLM relative location ("10km north of X")
+**How confidence is set**, by how the location was found:
+- **High (0.95)**: found in the offline place-name database (GeoNames)
+- **Medium-high (0.85)**: resolved by OpenStreetMap search (Nominatim)
+- **Lower (0.75)**: worked out from a relative description such as "10km north of X"
 
-**Server-Side Clustering**: At zoom < 12, nearby markers automatically cluster with count badges.
+**Zoomed out**, nearby markers merge into numbered groups. Zoom in to see individual posts.
 
-### Clusters Layer (Colored Markers)
+### Event Clusters
 
-Detected event clusters from message velocity spikes.
+Groups of posts about the same event, detected when several channels report similar content close together in time and place.
 
-**Color-Coded Tiers**:
+**Color-coded tiers**:
 
 | Color | Tier | Description |
 |-------|------|-------------|
 | Red | Rumor | 1 channel reporting |
 | Yellow | Unconfirmed | 2-3 channels, same affiliation |
-| Orange | Confirmed | 3+ channels, cross-affiliation |
-| Green | Verified | Human analyst confirmed |
+| Green | Confirmed | 3+ channels, cross-affiliation |
+| Blue | Verified | 2+ independent RSS news sources report it (automatic), or an analyst verified it |
 
-**Click a cluster to**:
-- View summary and claim type
-- See channel count and detection time
-- Expand to show constituent messages
-- Promote to verified event (admin)
+**Click a cluster** to see its tier, summary, message and channel counts and detection time, then expand it to fan out the individual messages.
 
-**Tier Progression**: Tiers automatically upgrade as more channels report the same event.
+**Tier progression**: tiers upgrade automatically as more channels or news sources report the same event.
 
-### Heatmap Layer
+### Verified Events
 
-Geographic density visualization of message activity.
+Shows confirmed events as structured event records.
 
-**Color Gradient**:
-- Blue → Green → Yellow → Red (low to high activity)
+### Heat Map
 
-**Use Cases**:
+Geographic density of message activity, from blue (low) through green and yellow to red (high). Radius and opacity can be adjusted in the sidebar.
+
+**Use cases**:
 - Identify geographic hotspots
 - Track activity shifts over time
 - Find coverage gaps
+
+### Trajectories and Vessels
+
+- **Trajectories**: drone flight paths reconstructed from reports
+- **Vessels**: tracked shadow-fleet vessels
 
 ## Controls
 
@@ -69,111 +75,39 @@ Geographic density visualization of message activity.
 
 Filter messages and clusters by time range.
 
-**Quick Presets**: Last 24h, 7 days, 30 days, custom range
+**Quick presets**: Last 24h, Last 7d, Last 30d, All time. Drag the handles to choose a custom range, or press play to replay activity over time. The map updates as you move.
 
-**Usage**: Drag handles to select start/end dates. Map updates in real-time.
+### Sources and Confidence
 
-### Polygon Filter
+Use the sidebar filters to show only Ukrainian, Russian or unknown-affiliation channels, and to hide low-confidence locations.
 
-Draw custom geographic boundaries to focus on specific areas.
+### Finding a Place
 
-**How to Draw**:
-1. Click "Polygon Tool" button
-2. Click to place vertices (minimum 3)
-3. Double-click to close polygon
-4. Only content inside boundary is shown
-
-**Preset Polygons**: Donetsk, Luhansk, Kherson, Zaporizhzhia oblasts, Crimea
-
-### Location Search
-
-Navigate to specific locations using autocomplete.
-
-**How to Use**:
-1. Type location name (min 2 characters)
-2. Select from suggestions (ordered by population)
-3. Map pans and zooms to location
-
-**Data Source**: 30,000+ UA/RU locations from GeoNames (searches both ASCII and Cyrillic names)
+Click a location in **Hot Locations (24h)** to jump there, or click a post in **Recent Messages**. To search for a message near a named place, use the location filter on the [Search](searching.md) page.
 
 ## Real-Time Updates
 
-The map receives new geocoded messages via WebSocket.
-
-**Connection Status** (top right):
-- Green: Connected, receiving live updates
-- Yellow: Reconnecting
-- Red: Disconnected (falls back to HTTP polling)
-
-**When a new location is geocoded**:
-1. Marker fades in with pulse animation
-2. Toast notification shows location name
-
-## Cluster Interaction
-
-### Expanding Clusters
-
-Click cluster marker → "Expand Messages" → Shows spider pattern with all constituent messages.
-
-### Cluster Actions (Admin)
-
-- **Promote to Event**: Convert confirmed cluster to structured event record
-- **Change Tier**: Manually override tier (requires verification notes)
-- **Archive**: Hide false positives (soft delete, can restore)
-
-## Export & Sharing
-
-### Share Current View
-
-Click "Share" to generate URL with:
-- Bounding box and zoom level
-- Enabled layers
-- Timeline range
-- Polygon filter (if active)
-
-### Export Data
-
-Download filtered data as:
-- **GeoJSON**: For QGIS, ArcGIS, Leaflet
-- **CSV**: For Excel, R, Python
-- **KML**: For Google Earth
-
-**Limit**: Maximum 10,000 messages per export
-
-## Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `P` | Toggle polygon draw mode |
-| `M` | Toggle messages layer |
-| `C` | Toggle clusters layer |
-| `H` | Toggle heatmap layer |
-| `S` | Focus search box |
-| `Esc` | Clear filters / Exit draw mode |
-| `[` `]` | Previous/next day |
+With **Live Updates** on, new geocoded messages appear on the map as they arrive. The sidebar shows the connection status; if it drops, the map reconnects automatically.
 
 ## Troubleshooting
 
 ### No Messages Appearing
-- Check bounding box (default: Ukraine region)
-- Expand timeline to "Last 30 days"
-- Verify Messages layer is enabled
-- Lower minimum confidence slider
+- Check the region switch: **Conflict Zone** only covers Ukraine and its border regions, use **Worldwide** for elsewhere
+- Widen the timeline (for example "All time")
+- Lower the confidence filter and enable all source filters
 
 ### Clusters Not Showing
-- Zoom out to see aggregated view
-- Enable all tier filters
-- Expand timeline (cluster formation takes time)
+- Zoom out to see the aggregated view
+- Enable the Event Clusters layer
+- Widen the timeline (cluster formation takes time)
 
-### WebSocket Not Connecting
-- Check browser console for errors
-- System falls back to HTTP polling automatically
-- May be blocked by corporate firewalls
+### Live Updates Not Connecting
+- Reload the page
+- Corporate firewalls can block live connections; the map still works but needs a reload to refresh
 
 ### Slow Performance
-- Apply timeline filter (reduce to last 7 days)
-- Use polygon filter to limit area
-- Enable server-side clustering (zoom out)
+- Apply a shorter timeline (for example 7 days)
+- Zoom in or out to reduce the number of markers
 
 ## Related Documentation
 

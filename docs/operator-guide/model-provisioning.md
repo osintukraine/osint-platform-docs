@@ -21,7 +21,7 @@ Run it on every fresh install and after changing `models.txt`, before starting t
 ls data/models
 ```
 
-After fetching a new model, recreate the services that load it (`docker compose up -d --force-recreate processor-worker backlog-worker`). Without the model files the processor cannot load the spam filter.
+After fetching a new model, recreate the services that load it (`docker compose up -d --force-recreate processor-worker processor-worker-backfill backlog-worker`, plus `backlog-enrich` / `backlog-reprocess` if you run them). Without the model files the processor cannot load the spam filter.
 
 ## Spam filter thresholds
 

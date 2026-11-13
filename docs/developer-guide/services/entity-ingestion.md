@@ -50,12 +50,12 @@ graph LR
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `main.py` | 204 | Service orchestration, file watching loop |
-| `file_watcher.py` | 132 | Directory monitoring and status tracking |
-| `csv_validator.py` | 156 | Schema and data validation |
-| `entity_processor.py` | 223 | Database insertion with embedding generation |
-| `requirements.txt` | 19 | Dependencies (pandas, sentence-transformers, PyTorch) |
-| `Dockerfile` | 27 | Multi-stage build using shared PyTorch base image |
+| `src/main.py` | 203 | Service orchestration, file watching loop |
+| `src/file_watcher.py` | 131 | Directory monitoring and status tracking |
+| `src/csv_validator.py` | 155 | Schema and data validation |
+| `src/entity_processor.py` | 222 | Database insertion with embedding generation |
+| `requirements.txt` | | Dependencies (pandas, sentence-transformers) |
+| `Dockerfile` | | Single stage, `FROM osint-platform-pytorch-cpu:latest` (PyTorch is in the shared base image); installs `procps` for the healthcheck |
 
 ### Service Flow
 
@@ -154,7 +154,7 @@ The `CSVValidator` class performs comprehensive checks:
 
 ## Entity Types
 
-The system supports 12 entity types defined in both the validator and database model:
+The system supports 12 entity types, defined in the validator and in the `curated_entities` CHECK constraint in `infrastructure/postgres/init.sql`:
 
 | Type | Category | Example Use Case | Source |
 |------|----------|------------------|--------|
@@ -171,10 +171,8 @@ The system supports 12 entity types defined in both the validator and database m
 | `location` | Geography | Strategic locations, bases | Root.NK |
 | `event` | Historical | Battles, operations, annexations | Root.NK |
 
-!!! warning "Type Validation"
-    The database has a `CheckConstraint` that only allows 8 types (original set), while the CSV validator allows 12 types. Attempting to insert fine-grained types (`military_vehicle`, `military_weapon`, `electronic_warfare`, `component`) will cause a database constraint violation.
-
-    **Resolution**: Use `equipment` for all hardware types until the database constraint is updated.
+!!! warning "ORM model constraint is stale"
+    The `CuratedEntity` SQLAlchemy model (`shared/python/models/curated_entity.py`) still declares a `valid_entity_type` CheckConstraint with only the original 8 types. The database created from `init.sql` allows all 12, so inserts work. This only matters if the schema is ever generated from the ORM (`create_all`); update the model constraint before doing that.
 
 ## Database Schema
 
@@ -183,10 +181,10 @@ Entities are stored in the `curated_entities` table:
 ```sql
 CREATE TABLE curated_entities (
     -- Primary key
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
 
     -- Entity classification
-    entity_type VARCHAR(50) NOT NULL,  -- equipment, individual, organization, etc.
+    entity_type VARCHAR(50) NOT NULL,  -- one of the 12 types above (CHECK constraint)
 
     -- Core fields
     name TEXT NOT NULL,
@@ -212,24 +210,29 @@ CREATE TABLE curated_entities (
     -- Full-text search (generated column)
     search_vector TSVECTOR GENERATED ALWAYS AS (
         setweight(to_tsvector('english', name), 'A') ||
-        setweight(to_tsvector('english', COALESCE(description, '')), 'B')
+        setweight(to_tsvector('english', COALESCE(description, '')), 'B') ||
+        setweight(to_tsvector('english', COALESCE(notes, '')), 'C')
     ) STORED,
 
     -- Timestamps
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
 
     CONSTRAINT valid_entity_type CHECK (entity_type IN (
         'equipment', 'individual', 'organization', 'location',
-        'event', 'military_unit', 'ship', 'aircraft'
-    ))
+        'event', 'military_unit', 'ship', 'aircraft',
+        'military_vehicle', 'military_weapon', 'electronic_warfare', 'component'
+    ))   -- inline CHECK in init.sql
 );
 
 -- Indexes
 CREATE INDEX idx_curated_entities_type ON curated_entities(entity_type);
 CREATE INDEX idx_curated_entities_source ON curated_entities(source_reference);
+CREATE INDEX idx_curated_entities_hash ON curated_entities(content_hash);
 CREATE INDEX idx_curated_entities_search ON curated_entities
     USING gin(search_vector);
+CREATE INDEX idx_curated_entities_name_trgm ON curated_entities
+    USING gin (name gin_trgm_ops);
 CREATE INDEX idx_curated_entities_embedding ON curated_entities
     USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 100);
@@ -249,7 +252,7 @@ ORDER BY embedding <=> query_embedding
 LIMIT 10;
 ```
 
-**search_vector**: Full-text search index combining name (weight A) and description (weight B):
+**search_vector**: Full-text search index combining name (weight A), description (weight B) and notes (weight C):
 ```sql
 -- Text search
 SELECT name, description
@@ -373,7 +376,7 @@ For large datasets or resource-constrained environments:
 ENTITY_GENERATE_EMBEDDINGS=false
 ```
 
-Entities will be inserted without embeddings. You can generate them later using the enrichment service.
+Entities will be inserted without embeddings. No enrichment task backfills `curated_entities.embedding` at present, so a later backfill needs a one-off script like the sketch under Integration below.
 
 ### Performance Impact
 
@@ -398,7 +401,7 @@ Set in `docker-compose.yml` or `.env` file:
 
 ```bash
 # Service control
-ENTITY_INGESTION_ENABLED=true          # Enable/disable service
+ENTITY_INGESTION_ENABLED=true          # Code default is false; compose default is true. When false the process logs a warning and exits 0
 
 # File watching
 ENTITY_CSV_DIR=/data/entities/csv/     # Directory to monitor
@@ -412,21 +415,28 @@ ENTITY_BATCH_SIZE=100                  # Entities per database transaction
 ENTITY_GENERATE_EMBEDDINGS=true        # Enable embedding generation
 ENTITY_EMBEDDING_MODEL=all-MiniLM-L6-v2  # Sentence-transformers model
 
-# Database (from shared settings)
+# Database and shared settings (compose supplies these)
 POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
 POSTGRES_DB=osint_platform
 POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
+POSTGRES_PASSWORD=...                  # required; compose refuses to start without it
+MINIO_ACCESS_KEY / MINIO_SECRET_KEY / JWT_SECRET_KEY   # required by the shared models import
+
+# Embedding model is loaded from the local cache only
+HF_HOME=/app/.cache/huggingface
+HF_HUB_OFFLINE=1
 ```
+
+`.env.example` also lists `ENTITY_MATCHING_THRESHOLD`; this service does not read it.
 
 ### Docker Compose
 
-The service is in the `opensanctions` profile (disabled by default):
+The service runs under the `enrichment-standard`, `enrichment-full`, `enrichment` and `opensanctions` profiles (not started without one of them):
 
 ```yaml
 entity-ingestion:
-  profiles: [opensanctions]
+  profiles: ["enrichment-standard", "enrichment-full", "enrichment", "opensanctions"]
   build:
     context: .
     dockerfile: services/entity-ingestion/Dockerfile
@@ -440,6 +450,7 @@ entity-ingestion:
   volumes:
     - ./data/entities:/data/entities  # Read-write access
     - ./data/huggingface:/app/.cache/huggingface  # Model cache
+    - ./data/models:/models:ro  # pinned models (scripts/fetch-models.sh)
 
   networks:
     - backend
@@ -449,7 +460,7 @@ entity-ingestion:
     interval: 60s
     timeout: 10s
     retries: 3
-    start_period: 120s  # Allow time for model download
+    start_period: 120s  # Allow time for model loading
 ```
 
 ### Volume Mounts
@@ -457,7 +468,8 @@ entity-ingestion:
 | Host Path | Container Path | Purpose |
 |-----------|---------------|---------|
 | `./data/entities` | `/data/entities` | CSV input + status output |
-| `./data/huggingface` | `/app/.cache/huggingface` | Shared model cache (avoids re-downloading) |
+| `./data/huggingface` | `/app/.cache/huggingface` | Shared model cache (the container runs offline) |
+| `./data/models` | `/models` (read-only) | Pinned models from `scripts/fetch-models.sh` |
 
 ## Running the Service
 
@@ -466,8 +478,8 @@ entity-ingestion:
 The service is in a Docker Compose profile and must be explicitly enabled:
 
 ```bash
-# Start with opensanctions profile
-docker-compose --profile opensanctions up -d entity-ingestion
+# Start with a profile that includes it
+docker-compose --profile enrichment-standard up -d entity-ingestion
 
 # Or start all opensanctions services
 docker-compose --profile opensanctions up -d
@@ -576,6 +588,9 @@ To re-process a file, either:
    rm ./data/entities/processed/status.json
    # Service will re-process all CSVs on next scan
    ```
+
+!!! warning "Status is keyed by file name only"
+    `status.json` keys are bare file names (`f.name`), not relative paths. Two files with the same name in different subdirectories are treated as the same file, and the second is never processed.
 
 ### Recursive Scanning
 
@@ -783,21 +798,11 @@ docker-compose logs entity-ingestion | grep -i embedding
 
 **Common issues**:
 
-1. **Model download failure**:
+1. **Model not in the local cache** (the container sets `HF_HUB_OFFLINE=1`):
    ```
-   HTTPError: 503 Server Error: Service Unavailable for url: https://huggingface.co/...
+   OSError: We couldn't connect to 'https://huggingface.co' ... / can't find model
    ```
-   **Fix**: Check internet connection or use offline mode:
-   ```bash
-   # Download model locally first
-   docker-compose run --rm entity-ingestion python -c "
-   from sentence_transformers import SentenceTransformer
-   model = SentenceTransformer('all-MiniLM-L6-v2')
-   "
-
-   # Then set offline mode
-   HF_HUB_OFFLINE=1
-   ```
+   **Fix**: Put `all-MiniLM-L6-v2` into `./data/huggingface` or pin it with `scripts/fetch-models.sh`, then restart. Note the service fails at startup if embeddings are enabled and the model is missing, because `EmbeddingGenerator` loads it in `__init__`.
 
 2. **Out of memory**:
    ```
@@ -839,7 +844,7 @@ docker-compose logs entity-ingestion | grep -i embedding
    # Wait for next scan or reduce interval
    docker-compose down
    # Edit .env: ENTITY_SCAN_INTERVAL=60
-   docker-compose --profile opensanctions up -d entity-ingestion
+   docker-compose --profile enrichment-standard up -d entity-ingestion
    ```
 
 ### Duplicate Entities
@@ -880,22 +885,12 @@ HAVING COUNT(*) > 1;
 CHECK constraint "valid_entity_type" violated
 ```
 
-**Fix**: Ensure `entity_type` is in allowed set:
-```python
-# Valid types (from database constraint)
-ALLOWED_TYPES = {
-    'equipment', 'individual', 'organization', 'location',
-    'event', 'military_unit', 'ship', 'aircraft'
-}
-
-# NOT allowed (validator accepts but database rejects)
-INVALID_TYPES = {
-    'military_vehicle', 'military_weapon',
-    'electronic_warfare', 'component'
-}
+**Fix**: The validator and `init.sql` accept the same 12 types, so this normally cannot happen. If it does, the database was created from an older schema (or from the ORM `create_all`, whose constraint lists only 8 types). Compare:
+```sql
+SELECT pg_get_constraintdef(oid) FROM pg_constraint
+WHERE conname = 'valid_entity_type' AND conrelid = 'curated_entities'::regclass;
 ```
-
-**Workaround**: Use `equipment` for all hardware types.
+and re-create the constraint with all 12 types.
 
 ## Performance Considerations
 
@@ -950,16 +945,16 @@ For 1,000 entities:
 | **CPU** | 1 core | Single-threaded processing |
 | **Memory** | 2 GB | Includes sentence-transformers model (~500 MB) |
 | **Disk** | 500 MB | HuggingFace model cache |
-| **Network** | 100 MB | One-time model download |
+| **Network** | none | Offline (`HF_HUB_OFFLINE=1`); the model must be pre-cached |
 
 ## Integration with Other Services
 
 ### Enrichment Service
 
-The enrichment service can generate embeddings for entities inserted without them:
+`curated_entities` is read by the processor's `entity_matcher.py` and touched by the enrichment `wikidata_enrichment` task. There is no existing task that fills missing embeddings; a one-off backfill would look like this (illustrative, not implemented):
 
 ```python
-# In enrichment service
+# Illustrative sketch, not in the codebase
 async def generate_entity_embeddings():
     # Find entities missing embeddings
     query = select(CuratedEntity).where(CuratedEntity.embedding.is_(None))
@@ -983,16 +978,13 @@ async def generate_entity_embeddings():
 Entities are accessible via API:
 
 ```bash
-# List entities by type
-curl http://localhost:8000/api/entities?entity_type=equipment&limit=10
+# Search entities (curated + OpenSanctions)
+curl "http://localhost:8000/api/entities/search?q=tank&source=curated&limit=10"
 
-# Search entities
-curl http://localhost:8000/api/entities/search?q=tank
-
-# Semantic search (requires embeddings)
-curl -X POST http://localhost:8000/api/entities/similar \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Russian military vehicle", "limit": 5}'
+# Entity detail, linked messages and relationships
+curl http://localhost:8000/api/entities/curated/{entity_id}
+curl http://localhost:8000/api/entities/curated/{entity_id}/messages
+curl http://localhost:8000/api/entities/curated/{entity_id}/relationships
 ```
 
 ### Frontend
@@ -1009,13 +1001,9 @@ Entities power autocomplete and entity tagging:
 
 ```bash
 cd ~/code/osintukraine/osint-intelligence-platform/services/entity-ingestion
-
-# Install dev dependencies
-pip install pytest pytest-asyncio aioresponses
-
-# Run tests
-pytest tests/ -v
 ```
+
+The service currently has no `tests/` directory; add tests there (pytest, pytest-asyncio) when changing the validator or processor.
 
 ### Adding New Entity Type
 
@@ -1024,25 +1012,22 @@ pytest tests/ -v
    VALID_ENTITY_TYPES = {
        'equipment', 'individual', 'organization',
        'location', 'event', 'military_unit', 'ship', 'aircraft',
+       'military_vehicle', 'military_weapon', 'electronic_warfare', 'component',
        'new_type'  # Add here
    }
    ```
 
-2. **Update database constraint** (`infrastructure/postgres/init.sql`):
+2. **Update database constraint** (`infrastructure/postgres/init.sql`, and the ORM constraint in `shared/python/models/curated_entity.py`; add a migration under `infrastructure/postgres/migrations/` for existing databases):
    ```sql
    CONSTRAINT valid_entity_type CHECK (entity_type IN (
        'equipment', 'individual', 'organization', 'location',
        'event', 'military_unit', 'ship', 'aircraft',
+       'military_vehicle', 'military_weapon', 'electronic_warfare', 'component',
        'new_type'  -- Add here
    ))
    ```
 
-3. **Recreate database**:
-   ```bash
-   docker-compose down
-   docker volume rm osint-intelligence-platform_postgres_data
-   docker-compose up -d postgres
-   ```
+3. **Apply to existing databases** with a migration that drops and re-creates `valid_entity_type`. Do not recreate the Postgres volume: that deletes all platform data.
 
 ### Custom Embedding Models
 
@@ -1076,6 +1061,10 @@ CREATE INDEX idx_curated_entities_embedding ON curated_entities
     USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 100);
 ```
+
+## Metrics
+
+The service exports no Prometheus metrics. Observe it through logs (`Scan iteration`, `SUCCESS: n/m entities inserted`, `No new data`), `status.json`, and the `curated_entities` row count. The compose healthcheck only checks that `python.*src.main` is running (`pgrep`).
 
 ## Related Documentation
 

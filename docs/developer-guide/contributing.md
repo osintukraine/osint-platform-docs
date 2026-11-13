@@ -77,11 +77,14 @@ git checkout -b feature/my-new-feature
 ### 3. Test Your Changes
 
 ```bash
-# Run unit tests
+# Run unit tests (from the repo root)
 pytest
 
 # Run specific service tests
 pytest services/processor/tests/ -v
+
+# Frontend
+cd services/frontend-nextjs && npm run lint && npm run type-check && npm run test:run
 
 # Test in Docker
 docker-compose up -d
@@ -146,11 +149,11 @@ git push origin feature/my-new-feature
 
 ### Python
 
-- **Style**: PEP 8, enforced by `ruff`
+- **Style**: PEP 8, enforced by `ruff` (run `ruff check .`); `mypy` for types
 - **Type hints**: Required for all public functions
 - **Docstrings**: Google style
 - **Line length**: Maximum 100 characters
-- **Imports**: Sorted by `isort`
+- **Imports**: Sorted by ruff's `I` rules (config in `pyproject.toml`)
 
 ```python
 async def process_message(
@@ -177,7 +180,7 @@ async def process_message(
 
 ### TypeScript
 
-- **Style**: ESLint + Prettier (auto-formatted)
+- **Style**: ESLint (`npm run lint`); type check with `npm run type-check`
 - **Types**: Strict mode, no `any`
 - **Components**: Functional with hooks
 - **Exports**: Named exports preferred
@@ -226,7 +229,7 @@ ON messages(channel_id, telegram_date DESC);
 
 ### Minimum Standards
 
-- **Coverage**: 80% for new code
+- **Coverage**: `pytest.ini` enforces `--cov-fail-under=80`; pass `--no-cov` when running a single file
 - **Unit tests**: All new functions
 - **Integration tests**: API endpoints
 
@@ -255,6 +258,7 @@ pytest --cov=services --cov-report=term-missing
 pytest -m unit           # Fast unit tests
 pytest -m integration    # Integration tests
 pytest -m "not slow"     # Skip slow tests
+# Markers: unit, integration, api, slow, requires_db, requires_redis, requires_ollama
 ```
 
 ---
@@ -268,7 +272,7 @@ Update documentation when:
 3. **Environment variables**: Update env vars reference
 4. **Schema changes**: Update database schema docs
 
-Documentation lives in `osint-platform-docs` repository.
+Documentation lives in the `osint-platform-docs` repository; code-adjacent notes live in the platform repo's `docs/` directory.
 
 ---
 
@@ -276,10 +280,12 @@ Documentation lives in `osint-platform-docs` repository.
 
 ### Automated Checks
 
-- Linting (ruff, ESLint)
-- Type checking (mypy, TypeScript)
-- Unit tests (pytest)
-- Build verification (Docker)
+Run these locally before opening a PR (the repository has no CI workflow checked in):
+
+- Linting (`ruff`, ESLint)
+- Type checking (`mypy`, `tsc --noEmit`)
+- Unit tests (`pytest`, `vitest`)
+- Build verification (`docker-compose build <service>`)
 
 ### Manual Review
 
@@ -293,7 +299,7 @@ Maintainers check:
 
 ### Merge Criteria
 
-- All CI checks pass
+- Lint, type checks and tests pass
 - At least 1 approving review
 - No unresolved comments
 - Branch is up to date with `develop`
@@ -306,7 +312,7 @@ Maintainers check:
 
 !!! danger "Critical Don'ts"
     - **NEVER** create standalone Telegram clients (use passed client)
-    - **NEVER** use Alembic migrations (edit init.sql)
+    - **NEVER** use Alembic (archived). Schema changes go in `init.sql` **and** a numbered SQL migration in `infrastructure/postgres/migrations/`
     - **NEVER** commit secrets or credentials
     - **NEVER** push directly to `master` or `develop`
     - **NEVER** skip tests for "quick fixes"
@@ -325,7 +331,7 @@ Maintainers check:
 ## Getting Help
 
 - **Bugs**: [GitHub Issues](https://github.com/osintukraine/osint-intelligence-platform/issues)
-- **Questions**: GitHub Discussions
+- **Questions**: GitHub Issues
 - **Security**: Email maintainers directly
 
 ---

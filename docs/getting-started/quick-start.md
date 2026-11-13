@@ -49,6 +49,7 @@ DEEPL_API_KEY=YOUR_DEEPL_API_KEY_HERE
 # Change all CHANGE_ME passwords
 POSTGRES_PASSWORD=strong_random_password_here
 REDIS_PASSWORD=another_strong_password_here
+MINIO_ROOT_PASSWORD=strong_minio_admin_password
 MINIO_ACCESS_KEY=minio_access_key_here
 MINIO_SECRET_KEY=minio_secret_key_minimum_32_chars_here
 JWT_SECRET_KEY=random_256_bit_key_here
@@ -64,6 +65,7 @@ For production deployments, also configure:
 - `LLM_PROVIDER` (`ollama` for a local model, `openai` for a GPU gateway, `none` for no LLM) and, for Ollama, `OLLAMA_MODEL`; see [LLM Gateway and Providers](../operator-guide/external-llm.md)
 - `LLM_ENABLED=true` (enables AI classification)
 - `TRANSLATION_ENABLED=true` (auto-translate messages)
+- `COMPOSE_PROFILES` (which optional services start, see Step 5)
 
 See the `.env.example` file for complete configuration options.
 
@@ -88,9 +90,11 @@ python3 scripts/telegram_auth.py
 ```
 
 This will:
-1. Prompt for your phone number (must match `TELEGRAM_PHONE` in `.env`)
+1. Prompt for your phone number (with country code)
 2. Send a verification code to your Telegram app
-3. Create a session file in `./telegram_sessions/`
+3. Create the session files in `./telegram_sessions/`
+
+For a second account (`--account russia` / `--account ukraine`) or to list existing sessions (`--list`), see [Telegram Setup](../operator-guide/telegram-setup.md).
 
 !!! warning "Session File Security"
     The session file (`telegram_sessions/*.session`) contains authentication credentials. **Never commit it to version control.** It's already in `.gitignore`.
@@ -107,21 +111,21 @@ This will start:
 
 - **Core Infrastructure**: PostgreSQL, Redis, MinIO, Ollama
 - **Application Services**: Listener, Processor, API, Frontend
-- **Optional Services**: Monitoring, enrichment workers (see profiles below)
+- **Optional Services**: Monitoring, enrichment workers, authentication and more (profiles, see below)
 
 !!! tip "Start Additional Services"
-    Enable optional services using Docker Compose profiles:
+    Enable optional services with Docker Compose profiles. Set them once in `.env` so every `docker-compose` command sees them:
 
     ```bash
-    # Start with monitoring stack
-    docker-compose --profile monitoring up -d
-
-    # Start with enrichment workers (AI tagging, embeddings)
-    docker-compose --profile enrichment up -d
-
-    # Start everything
-    docker-compose --profile monitoring --profile enrichment up -d
+    # .env
+    COMPOSE_PROFILES=enrichment-standard,monitoring
     ```
+
+    Available profiles include `enrichment-lite`, `enrichment-standard`, `enrichment-full` (increasing numbers of background enrichment workers), `monitoring`, `auth`, `opensanctions`, `notifications`, `backfill`, `llm-gateway` and `multi-account`. `.env.example` lists them all.
+
+    `enrichment-lite` runs the core background workers (fast pool, router, Telegram and decision tasks, maintenance, cluster detection). `enrichment-standard` adds AI tagging, event detection, fact-checking, LLM geolocation and the entity/sanctions services. Without any enrichment profile, messages are still archived but background enrichment does not run.
+
+    If you turn on historical backfill (`BACKFILL_ENABLED`), also add the `backfill` profile, or backfilled messages are never stored.
 
 ## Step 6: Verify Installation
 
@@ -141,11 +145,11 @@ docker-compose logs -f <service_name>
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| **Frontend** | http://localhost:3000 | No auth required |
+| **Frontend** | http://localhost:3000 | No auth required (unless the `auth` profile is on) |
 | **API Docs** | http://localhost:8000/docs | No auth required |
-| **NocoDB** (optional) | http://localhost:8080 | admin@osint.local / change-this-password |
-| **Grafana** (optional) | http://localhost:3001 | admin / admin |
-| **MinIO Console** | http://localhost:9001 | minioadmin / minioadmin |
+| **NocoDB** | http://localhost:8080 | `NOCODB_ADMIN_EMAIL` / `NOCODB_ADMIN_PASSWORD` from `.env` |
+| **Grafana** (`monitoring` profile) | http://localhost:3001 | `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` from `.env` |
+| **MinIO Console** | http://localhost:9001 | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` from `.env` |
 
 !!! success "Platform is Running!"
     If you can access http://localhost:3000 and see the frontend, the platform is operational.
@@ -177,14 +181,14 @@ docker-compose logs -f listener
 
 You should see:
 ```
-INFO: Discovered new channel in folder Archive: @channel_username
-INFO: Subscribing to channel @channel_username...
+INFO: Discovered: Channel Name (@channel_username) ...
+INFO: Added new channel: Channel Name (@channel_username)
 ```
 
 !!! tip "Folder Naming Rules"
     - `Archive-*` → LLM archives most content (lenient mode)
-    - `Monitor-*` → LLM archives only high-value OSINT (strict mode)
-    - `Discover-*` → Very strict + 14-day probation for new channels
+    - `Monitor-*` → LLM archives only more important content; low importance is never archived (strict mode)
+    - `Discover-*` → Very strict; new channels are evaluated for about a week after 30+ messages, then promoted or dropped
 
     **Important**: Telegram limits folder names to **12 characters**. Use `-UA` or `-RU` suffixes, not full country names.
 
@@ -210,8 +214,8 @@ Once a message arrives in your monitored channel:
 ### Essential Configuration
 
 - **Add more channels**: Drag channels into Telegram folders
-- **Configure spam filter**: Edit `spam_patterns` table in NocoDB
-- **Adjust importance rules**: Edit `importance_rules` table
+- **Tune classification and spam thresholds**: admin settings (Admin → Config in the frontend, or `scripts/admin-config.sh`); see [Configuration](../operator-guide/configuration.md)
+- **Review rejected or spam-flagged messages**: Admin → Spam in the frontend
 
 ### Learn Core Features
 
@@ -228,7 +232,7 @@ Once a message arrives in your monitored channel:
 
 ### Advanced Topics
 
-- [LLM Integration](../developer-guide/llm-integration.md) - Switch LLM models at runtime
+- [LLM Integration](../developer-guide/llm-integration.md) - How classification uses the LLM
 - [Enrichment Service](../developer-guide/services/enrichment.md) - Background AI tasks
 - [Architecture Overview](../developer-guide/architecture.md) - Technical deep dive
 
@@ -270,9 +274,9 @@ docker-compose exec ollama ollama list
 **Symptom**: Services keep restarting, `docker stats` shows high memory
 
 **Solution**:
-1. Reduce Processor replicas: Edit `docker-compose.yml`, set `replicas: 1`
+1. Reduce Processor replicas: set `PROCESSOR_WORKER_REPLICAS=1` in `.env`
 2. Use smaller LLM model: set a smaller `OLLAMA_MODEL` in `.env`
-3. Disable enrichment workers: use `COMPOSE_PROFILES=enrichment-lite` or none
+3. Run fewer enrichment workers: use `COMPOSE_PROFILES=enrichment-lite` or none
 
 ### Port Conflicts
 

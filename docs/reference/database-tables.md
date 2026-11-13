@@ -2,9 +2,9 @@
 
 Complete reference documentation for all database tables in the OSINT Intelligence Platform.
 
-**Source**: `/infrastructure/postgres/init.sql`
-**Database**: PostgreSQL 16+ with pgvector, pg_trgm, btree_gin extensions
-**Last Updated**: 2026-10-23
+**Source**: `infrastructure/postgres/init.sql` (fresh installs) plus `infrastructure/postgres/migrations/NNN_*.sql` (production updates, currently up to 058)
+**Database**: PostgreSQL 16+ with pgvector, PostGIS, pg_trgm, btree_gin extensions
+**Last Updated**: 2026-10-27
 
 ---
 
@@ -20,6 +20,8 @@ Complete reference documentation for all database tables in the OSINT Intelligen
 - [Configuration & Runtime Settings](#configuration-runtime-settings)
 - [Enrichment & Background Tasks](#enrichment-background-tasks)
 - [Audit & Decision Tracking](#audit-decision-tracking)
+- [Access, Operations and Disaster Recovery](#access-operations-and-disaster-recovery)
+- [Materialized Views](#materialized-views)
 
 ---
 
@@ -88,6 +90,9 @@ All Telegram messages after spam filtering.
 - `media_status` (VARCHAR): media lane state: NULL, pending, downloading, archived, failed, unavailable, expired (migration 036)
 - `media_attempts`, `media_next_attempt_at`, `media_claimed_at`: media-worker retry and claim bookkeeping
 - `album_message_ids` (BIGINT[]): Telegram ids of all items of an album
+- `admin_hidden`, `admin_importance_override`, `admin_topic_override`, `admin_notes` (+ `*_at`/`*_by`): moderator actions from the admin sidebar (migration 027)
+- `duplicate_of_message_id`, `duplicate_confidence`, `duplicate_reason`: perceptual-hash duplicate detection (migration 028; see `duplicate_clusters`)
+- `deleted_at`, `deleted_by`, `deletion_reason`: soft delete
 - `is_hidden`, `hidden_reason`, `hidden_at`, `hidden_by`: hide state used by fact-check and the spam re-check (`off_topic`); present in production databases, missing from `init.sql` on fresh installs at the time of writing
 
 **Important Indexes**:
@@ -317,9 +322,9 @@ Authenticated RSS/Atom/JSON feed subscriptions.
 
 **Key Columns**:
 - `id` (UUID PRIMARY KEY)
-- `user_id` (INTEGER FK → users)
+- `kratos_identity_id` (UUID): Ory Kratos identity that owns the token
 - `token_hash` (BYTEA UNIQUE): SHA-256 of token
-- `token_prefix` (CHAR(8)): User-visible identifier (e.g., "ft_a1b2")
+- `token_prefix` (VARCHAR(16)): User-visible identifier (e.g., "ft_abc123")
 - `signing_secret` (BYTEA): 32-byte HMAC signing key
 - `label` (VARCHAR): User-defined label ("My Feedly")
 - `revoked_at` (TIMESTAMPTZ)
@@ -332,7 +337,7 @@ Authenticated RSS/Atom/JSON feed subscriptions.
 - `idx_feed_tokens_last_used`
 
 **Foreign Keys**:
-- `user_id` → `users(id)` ON DELETE CASCADE
+- None: the owner is a Kratos identity, not a `users` row. `feed_subscriptions` references `feed_tokens(id)`.
 
 ---
 
@@ -440,16 +445,19 @@ Real-world incidents detected from RSS articles and Telegram clustering.
 - `rss_source_count` (INTEGER): Number of news sources validating
 - `telegram_channel_count` (INTEGER): Number of channels discussing
 - `telegram_message_count` (INTEGER): Total messages linked
-- `content_embedding` (vector(384)): For similarity/deduplication
+- `first_seen_at`, `last_activity_at` (TIMESTAMPTZ): Activity window used for auto-archive
 - `search_vector` (TSVECTOR): Full-text search
 - `archived_at` (TIMESTAMPTZ): NULL = active
+- `deleted_at`, `deleted_by`, `deletion_reason`: Soft delete by an admin
+
+Events have no embedding column of their own: `find_similar_events` compares against the embedding of each event's primary RSS article (`event_sources` to `external_news.embedding`).
 
 **Important Indexes**:
 - `idx_events_tier_status` (WHERE archived_at IS NULL)
 - `idx_events_is_major` (WHERE is_major = TRUE)
 - `idx_events_last_activity`
 - `idx_events_event_type`
-- `idx_events_embedding` (IVFFLAT)
+- `idx_events_event_date`, `idx_events_deleted` (partial)
 - `idx_events_search_vector` (GIN)
 
 **Related Tables**: `event_messages`, `event_sources`, `event_config`
@@ -521,11 +529,12 @@ Configurable thresholds for event detection.
 **Default Values**:
 - `breaking_to_developing_hours`: 2
 - `developing_to_confirmed_rss`: 1
-- `confirmed_to_verified_rss`: 3
+- `confirmed_to_verified_rss`: 3 (legacy value; the tier functions promote to verified at 2+ independent RSS sources, see Tiered Event Validation)
 - `auto_archive_inactive_days`: 7
 - `cluster_min_channels`: 3
 - `cluster_time_window_hours`: 2
 - `embedding_match_threshold`: 0.85
+- `embedding_candidate_threshold`: 0.75
 - `novelty_threshold`: 0.88
 
 ---
@@ -1493,6 +1502,75 @@ User comments on messages (analyst notes).
 
 ---
 
+## Access, Operations and Disaster Recovery
+
+Tables added by later migrations. Columns shown are the key ones.
+
+### `api_keys`
+
+User API keys (migration 012). `id` (UUID), `kratos_identity_id` (UUID), `key_hash` (BYTEA UNIQUE; only the hash is stored), `key_prefix`, `name`, `scopes` (TEXT[], default `read`), `expires_at`, `revoked_at`, `last_used_at`, `use_count`, `rate_limit_tier` (see [rate limiting](api-endpoints.md#rate-limiting)).
+
+---
+
+### `feed_subscriptions`
+
+Saved feed definitions under a feed token (migration 020). `feed_token_id` (FK to `feed_tokens`, cascade), `params_hash`, `feed_type`, `feed_params` (JSONB), `summary`, `label`, `last_accessed_at`, `access_count`. Unique on (`feed_token_id`, `params_hash`).
+
+---
+
+### `channel_submissions`
+
+Channel suggestions from users (migrations 012, 013). `channel_link`, `channel_name`, `reason`, `source_origin` (`ua`, `ru`, `unknown`), `status` (`pending`, `queued`, `accepted`, `rejected`), `assigned_folder`, `rejection_reason`, `reviewed_by_user_id`, `joined_channel_id` (FK to `channels`).
+
+---
+
+### `duplicate_clusters`
+
+Groups of near-duplicate messages (migration 028). `original_message_id` (FK to `messages`), `cluster_size`, `primary_detection_method`, `avg_confidence`, `max_confidence`, `min_confidence`, `auto_hidden_count`, `manually_reviewed`, `reviewed_by`.
+
+---
+
+### `classification_fact_checks`
+
+One audit per message by the fact-check worker (migration 022, action columns in 024). Original and fact-check verdicts (`original_*`, `factcheck_*`: topic, spam flag, spam type, confidence, prompt version), match flags (`classification_match`, `topic_match`, `spam_match`), `discrepancy_type`, human review fields (`human_reviewed`, `human_correct_*`, `reviewed_by`) and `action_taken`. Unique per `message_id`. The `classification_discrepancies` view lists mismatches.
+
+---
+
+### `enrichment_llm_attempts` and `geolocation_llm_attempts`
+
+Attempt ledgers so the LLM enrichment workers do not retry the same message forever (migrations 041, 039). `enrichment_llm_attempts` is keyed on (`task`, `message_id`) with `found` and `attempted_at`; `geolocation_llm_attempts` is keyed on `message_id`.
+
+---
+
+### `spam_reference_examples`
+
+Reference texts for the embedding spam / off-topic filter (migration 019). `category` (`spam`, `ukraine_relevant`, `off_topic`), `language` (`en`, `ru`, `uk`, `multi`), `example_text`, `subcategory`, `weight`, `is_active`.
+
+---
+
+### `curated_entity_alias_history`
+
+Audit of alias changes on `curated_entities` (migration 049): `entity_id`, `old_aliases` (TEXT[]), `reason`, `changed_at`.
+
+---
+
+### `telegram_accounts`, `shadow_account_state`, `dr_backup_history`, `dr_failover_history`
+
+Disaster recovery for multi-account Telegram setups (migration 014), used by `shadow-sync`.
+
+- `telegram_accounts`: `name` (UNIQUE), `cluster`, `session_file`, `role` (default `standby`), `priority`, `health_status`, `banned_at`, `ban_reason`, `channels_synced`, `last_sync_at`.
+- `shadow_account_state`: per channel and shadow account (`channel_id`, `shadow_account`, `sync_status`, `folder_synced`, `retry_count`, `error_message`). Unique per pair.
+- `dr_backup_history`: DR exports (`backup_type`, `storage_path`, `channels_exported`, `accounts_exported`, `status`).
+- `dr_failover_history`: failovers (`cluster`, `from_account`, `to_account`, `trigger_type`, `status`, `channels_affected`).
+
+---
+
+### `schema_migrations`
+
+Applied SQL migrations (`version`, `description`, `applied_at`, `checksum`, `applied_by`). See `infrastructure/postgres/migrations/README.md`.
+
+---
+
 ## Materialized Views
 
 ### `message_social_graph`
@@ -1540,6 +1618,12 @@ Unified view of curated + OpenSanctions entities.
 **Refresh Command**: `REFRESH MATERIALIZED VIEW unified_message_entities;`
 
 **Key Columns**: message_id, entity_id, entity_source (curated/opensanctions), name, score, match_method
+
+---
+
+### `top_forwarded_messages` and `analytics_daily_summary`
+
+Pre-computed forward rankings (API `/api/social-graph/virality/top-forwarded`) and daily analytics totals (API `/api/analytics/*`). `analytics_daily_summary` has a unique index so it can be refreshed `CONCURRENTLY` (migrations 032, 057).
 
 ---
 
@@ -1605,6 +1689,7 @@ Returns user role: anonymous, authenticated, admin, moderator
 - **pg_trgm**: Fuzzy text search with trigrams
 - **btree_gin**: Compound GIN indexes
 - **pg_stat_statements**: Query performance tracking
+- **postgis**: Spatial queries for the map (GiST covering indexes on `message_locations`)
 
 ---
 
@@ -1641,9 +1726,9 @@ Events progress through tiers based on source count:
 - **breaking**: Initial detection
 - **developing**: 2+ hours old
 - **confirmed**: 1+ RSS sources
-- **verified**: 3+ RSS sources
+- **verified**: 2+ independent RSS sources, or human verification
 
-Configuration in `event_config` table.
+Thresholds in the `event_config` table apply to the event updater; the Telegram-cluster tier functions (migration 043) count distinct sources across all feeds.
 
 ---
 
@@ -1667,7 +1752,7 @@ Used for frequent, high-quality searches (messages, opensanctions_entities).
 
 ### IVFFLAT Indexes (pgvector)
 
-Used for large datasets with less frequent searches (events, curated_entities, external_news).
+Used for large datasets with less frequent searches (curated_entities, external_news).
 
 **Parameters**: lists=100
 
@@ -1698,7 +1783,7 @@ WHERE clauses optimize storage and query performance:
 ### Vector Search Performance
 
 - **messages.content_embedding**: HNSW for <100ms semantic search on 1M+ messages
-- **events.content_embedding**: IVFFLAT for event deduplication (less frequent)
+- **external_news.embedding**: IVFFLAT, also used for event deduplication through each event's primary article
 - **Similarity thresholds**: 0.85 for auto-linking, 0.75 for LLM confirmation, 0.88 for novelty detection
 
 ### Full-Text Search Performance

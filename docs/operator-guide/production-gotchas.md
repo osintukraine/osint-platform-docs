@@ -2,7 +2,7 @@
 
 Hard-won lessons from deploying and operating the OSINT Intelligence Platform. **Check this page before your first production deployment.**
 
-!!! warning "Last Updated: December 2025"
+!!! warning "Based on real production issues"
     These gotchas are based on real production issues. If you encounter something not listed here, please contribute!
 
 ---
@@ -16,7 +16,7 @@ Hard-won lessons from deploying and operating the OSINT Intelligence Platform. *
 | Need to know what's public | Which endpoints require auth? | [Public vs Authenticated](#public-vs-authenticated-endpoints) |
 | New stack manager | How to use the Python tooling | [Stack Manager](#stack-manager) |
 | Media archival fails silently | No files appearing in MinIO | [Storage Boxes](#storage-boxes-default-entry) |
-| Session file not found | Telegram auth fails after upgrade | [Session Naming](#session-file-location-changes) |
+| Session file not found | Telegram auth fails after upgrade | [Session Files](#session-file-location-and-names) |
 
 ---
 
@@ -43,13 +43,13 @@ FastAPI doesn't automatically respect the `X-Forwarded-Proto` header that Caddy 
 
 ### Solution
 
-This is **already fixed** in the codebase (December 2025). The fix adds `ProxyHeadersMiddleware` from uvicorn:
+This is **already fixed** in the codebase. The fix adds `ProxyHeadersMiddleware` from uvicorn:
 
 ```python
 # services/api/src/main.py
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
+app.add_middleware(ProxyHeadersMiddleware, ...)  # reads X-Forwarded-Proto / -For only
 ```
 
 **If you're on the latest code, you don't need to do anything.**
@@ -88,8 +88,9 @@ frontend:
 frontend:
   build:
     args:
-      NEXT_PUBLIC_API_URL: https://example.com
-      NEXT_PUBLIC_BASE_URL: https://example.com
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL}
+      NEXT_PUBLIC_MINIO_URL: ${NEXT_PUBLIC_MINIO_URL}
   environment:
     # These are for SSR only
     API_URL: http://api:8000
@@ -97,13 +98,13 @@ frontend:
 
 ### Solution
 
-1. Add your `NEXT_PUBLIC_*` variables to `build.args` in `docker-compose.yml`
-2. Rebuild the frontend: `docker-compose build frontend`
-3. Restart: `docker-compose up -d frontend`
+1. Set `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_BASE_URL` and `NEXT_PUBLIC_MINIO_URL` in `.env` (the compose file passes them as `build.args`)
+2. Rebuild the frontend: `docker compose build frontend`
+3. Restart: `docker compose up -d frontend`
 
 ### Prevention
 
-- Always check `build.args` when deploying to a new domain
+- Always check the `NEXT_PUBLIC_*` values in `.env` when deploying to a new domain
 - After changing `NEXT_PUBLIC_*` values, you **must rebuild**, not just restart
 - Test by checking Network tab in browser DevTools
 
@@ -161,15 +162,15 @@ The platform includes a Python-based stack manager (`scripts/stack_manager/`) th
 ### Basic Usage
 
 ```bash
-# Start all services
+# Start core services
 ./scripts/stack-manager-py.sh start
 
-# Stop all services
-./scripts/stack-manager-py.sh stop
+# Stop services
+./scripts/stack-manager-py.sh stop --all
 
-# View logs (with streaming and Ctrl+C support)
-./scripts/stack-manager-py.sh logs api
-./scripts/stack-manager-py.sh logs processor
+# View logs (-f to stream, Ctrl+C safe)
+./scripts/stack-manager-py.sh logs -f api
+./scripts/stack-manager-py.sh logs -f processor-worker
 
 # Check hardware tier
 ./scripts/stack-manager-py.sh hardware show
@@ -179,16 +180,15 @@ The platform includes a Python-based stack manager (`scripts/stack_manager/`) th
 
 - **Streaming logs**: Real-time log output with proper Ctrl+C handling
 - **Profile-aware**: Automatically discovers services based on active profiles
-- **Service deduplication**: Handles multiple compose files without duplicate services
-- **Hardware detection**: Shows current hardware tier and recommended settings
+- **Production overlay**: `-e production` adds `docker-compose.production.yml`
+- **Hardware detection**: Detects the hardware tier and writes sizing defaults into `.env`
 
 ### Multi-File Compose Support
 
 For production deployments with multiple compose files:
 
 ```bash
-export COMPOSE_FILE="docker-compose.yml:docker-compose.production.yml"
-./scripts/stack-manager-py.sh start
+./scripts/stack-manager-py.sh -e production start
 ```
 
 See also: [Stack Manager Reference](stack-manager.md)
@@ -209,7 +209,7 @@ Media archival requires a default storage box entry in the database. Without it,
 
 ### Root Cause
 
-The `storage_boxes` table must have at least one entry with `is_default = true`. Migration 017 adds this automatically for new installs, but older installations may be missing it.
+The `storage_boxes` table must have at least one row (the placeholder row with id `default`). `init.sql` and migration 017 create it for new installs, but older installations may be missing it. There is no `is_default` column; boxes are chosen by `is_active`, `is_full`, `is_readonly` and `priority`. Update the placeholder host values for your real storage, see [Hetzner Storage](hetzner-storage.md).
 
 ### Solution
 
@@ -217,17 +217,20 @@ Check if you have a default storage box:
 
 ```sql
 -- Connect to database
-docker-compose exec postgres psql -U osint_user -d osint_platform
+docker compose exec postgres psql -U osint_user -d osint_platform
 
 -- Check for default storage box
-SELECT id, name, is_default FROM storage_boxes WHERE is_default = true;
+SELECT id, account_region, is_active, is_full, is_readonly, priority FROM storage_boxes;
 ```
 
-If no rows returned, add one:
+If no rows are returned, run `./scripts/migrate.sh` or insert the default row:
 
 ```sql
-INSERT INTO storage_boxes (name, box_type, is_default, is_active, created_at)
-VALUES ('local', 'local', true, true, NOW());
+INSERT INTO storage_boxes (id, hetzner_host, hetzner_user, hetzner_port, mount_path,
+                           minio_endpoint, minio_port, capacity_gb, priority, account_region, is_active)
+VALUES ('default', 'your-storagebox.de', 'u000000', 23, '/mnt/hetznerstorage',
+        'minio', 9000, 5000, 100, 'eu', true)
+ON CONFLICT (id) DO NOTHING;
 ```
 
 ### Prevention
@@ -237,53 +240,35 @@ VALUES ('local', 'local', true, true, NOW());
 
 ---
 
-## Session File Location Changes
+## Session File Location and Names
 
 ### Problem
 
-Telegram session file location changed in December 2025. If you're upgrading from an older version, your session files may be in the wrong location.
-
-### Changes Made
-
-| Item | Old | New |
-|------|-----|-----|
-| Session directory | `/app/data/` | `/data/sessions/` |
-| Mount propagation | `:rshared` flag | Removed (incompatible with SSHFS) |
+Telegram session files live in the `telegram_sessions/` directory of the repository (a bind-mounted volume, `/app/sessions` inside containers). Sessions copied from an older layout, or from another machine, are not picked up, and one session file shared by two processes gets revoked by Telegram (`AuthKeyDuplicated`).
 
 ### Symptoms
 
 - Telegram authentication fails after upgrade
 - "Session file not found" errors in listener logs
-- Prompted to re-authenticate even though session exists
+- Prompted to re-authenticate even though a session exists
+- `AuthKeyDuplicated` after copying a session to a second host
 
 ### Solution
 
-Move your existing session files:
+Each service role opens its own file: `listener`, `discovery`, `enrichment`, `analytics` for the default account, and `<role>-<account>` (for example `listener-russia`) for named accounts. Sessions are bound to their server and IP, so re-authenticate on the new host instead of copying files:
 
 ```bash
-# On your server
-cd /path/to/osint-intelligence-platform
-
-# Check where your old sessions are
-ls -la data/*.session
-
-# Create new directory if needed
-mkdir -p data/sessions
-
-# Move session files
-mv data/*.session data/sessions/
+python3 scripts/telegram_auth.py --list     # which sessions exist
+python3 scripts/telegram_auth.py            # default account (add --account NAME for others)
+docker compose restart listener
 ```
 
-Then restart the listener:
-
-```bash
-docker-compose restart listener
-```
+See [Telegram Setup](telegram-setup.md) for the full layout.
 
 ### Prevention
 
-- When upgrading, check release notes for breaking changes
-- Back up your session files before major upgrades
+- Back up `telegram_sessions/` before major upgrades (`./scripts/backup.sh` does this)
+- Never run two processes on the same session file
 
 ---
 

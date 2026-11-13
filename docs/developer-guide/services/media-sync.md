@@ -4,28 +4,29 @@
 
 ## Overview
 
-The Media Sync Service handles the asynchronous transfer of media files from the local SSD buffer to Hetzner Storage Boxes via MinIO. This decouples fast local writes from slow network uploads, allowing the processor to return immediately after saving media locally.
+The Media Sync Service handles the asynchronous transfer of media files from the local SSD buffer to remote storage. By default (`SYNC_MODE=filesystem`) it copies files straight onto the Hetzner SSHFS mount; the legacy `minio` mode uploads to MinIO instead. This decouples fast local writes from slow network transfers, allowing the processor to return immediately after saving media locally.
 
-**Pipeline Position**: `Processor → Local Buffer → Media Sync → MinIO → Hetzner Storage`
+**Pipeline Position**: `Processor / media-worker → Local Buffer → Media Sync → Hetzner SSHFS mount` (or MinIO in legacy mode)
 
 !!! note "Media lane"
-    With the `media_lane_enabled` admin setting on, the `media-worker` service (not the processor) downloads media into the buffer in the background. See [Media Lanes](../../operator-guide/media-lanes.md).
+    With the `media_lane_enabled` admin setting on, the `media-worker` service (not the processor) downloads media into the buffer in the background (one `media-worker` per Telegram account in multi mode: `media-worker-russia`, `media-worker-ukraine`). See [Media Lanes](../../operator-guide/media-lanes.md).
 
 **Key Technologies**:
 
 - **Redis**: Job queue with BRPOP (blocking pop)
-- **MinIO**: S3-compatible object storage client
+- **Filesystem copy** (`shutil.copy2` on the Hetzner SSHFS mount): default sync mode
+- **MinIO**: S3-compatible client, legacy `minio` mode only (`MinioClientPool`)
 - **asyncio**: High-performance async I/O
 - **SQLAlchemy**: Database updates for sync status
 
 **Core Responsibilities**:
 
 1. Monitor Redis queue for pending sync jobs
-2. Upload files from local buffer to MinIO
-3. Verify upload integrity (size comparison)
-4. Update database with sync timestamp
+2. Copy files from the local buffer to the Hetzner mount (or upload to MinIO in legacy mode)
+3. Verify integrity (size comparison)
+4. Update `media_files.synced_at` (and clear `local_path`) plus `storage_boxes` usage
 5. Delete local files after successful sync
-6. Handle failures with exponential backoff retry
+6. Handle failures with linearly increasing retry delays
 
 ## Architecture
 
@@ -46,16 +47,16 @@ graph TB
     subgraph "External Services"
         REDIS[(Redis Queue)]
         PG[(PostgreSQL)]
-        MINIO[MinIO]
-        HETZNER[Hetzner Storage Box]
+        HETZNER[Hetzner SSHFS mount]
+        MINIO[MinIO - legacy mode]
     end
 
     PROC -->|1. Write media| BUFFER
     PROC -->|2. Queue sync job| REDIS
     REDIS -->|BRPOP| WORKER
     WORKER -->|Read file| BUFFER
-    WORKER -->|Upload| MINIO
-    MINIO -->|SSHFS| HETZNER
+    WORKER -->|copy2 default| HETZNER
+    WORKER -.->|legacy minio mode| MINIO
     WORKER -->|Update synced_at| PG
     WORKER -->|Delete after sync| BUFFER
     WORKER -->|On error| RETRY
@@ -78,20 +79,20 @@ sequenceDiagram
     participant BUFFER as Local Buffer
     participant REDIS as Redis Queue
     participant WORKER as Media Sync Worker
-    participant MINIO as MinIO
+    participant DEST as Hetzner mount (or MinIO)
     participant DB as PostgreSQL
 
     PROC->>BUFFER: 1. Write media file
     PROC->>DB: 2. Insert media_files record
-    PROC->>REDIS: 3. LPUSH sync job
+    PROC->>REDIS: 3. LPUSH sync job (media:sync:pending)
     Note over PROC: Returns immediately
 
     WORKER->>REDIS: BRPOP (blocking, 5s timeout)
     REDIS-->>WORKER: Job data (JSON)
     WORKER->>BUFFER: Read file
-    WORKER->>MINIO: fput_object(s3_key)
-    WORKER->>MINIO: stat_object (verify size)
-    WORKER->>DB: UPDATE synced_at = NOW()
+    WORKER->>DEST: copy to s3_key path (minio mode: fput_object)
+    WORKER->>DEST: verify size
+    WORKER->>DB: UPDATE synced_at, clear local_path, update storage_boxes
     WORKER->>BUFFER: Delete local file
 ```
 
@@ -102,12 +103,17 @@ sequenceDiagram
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `REDIS_URL` | Redis connection string | `redis://localhost:6379/0` | Yes |
-| `DATABASE_URL` | PostgreSQL connection | - | Yes |
-| `MINIO_ENDPOINT` | MinIO endpoint | `localhost:9000` | Yes |
-| `MINIO_ACCESS_KEY` | MinIO access key | `minioadmin` | Yes |
-| `MINIO_SECRET_KEY` | MinIO secret key | `minioadmin` | Yes |
-| `MINIO_BUCKET` | Target bucket name | `osint-media` | No |
-| `MINIO_SECURE` | Use HTTPS | `false` | No |
+| `DATABASE_URL` | PostgreSQL connection (asyncpg) | dev URL in code | Yes |
+| `SYNC_MODE` | `filesystem` (copy to Hetzner mount) or `minio` (legacy). Compose sets it from `MEDIA_SYNC_MODE` | `filesystem` | No |
+| `HETZNER_MEDIA_PATH` | Destination mount (filesystem mode); the worker refuses to start if it is missing | `/mnt/hetzner-media/osint-media` | filesystem mode |
+| `WORKER_ID` | Worker identifier in logs | `sync-worker-<pid>` (compose: `media-sync-1`) | No |
+| `MINIO_ENDPOINT` | MinIO endpoint | `localhost:9000` | minio mode |
+| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | MinIO credentials | `minioadmin` | minio mode |
+| `MINIO_BUCKET` | Target bucket (compose: `MINIO_BUCKET_NAME`) | `osint-media` | minio mode |
+| `MINIO_SECURE` | Use HTTPS | `false` | minio mode |
+
+!!! note "No Prometheus metrics"
+    The worker exposes no metrics endpoint. It logs counters (files synced, failed, bytes) on shutdown; monitor via the Redis queue lengths and `media_files.synced_at` queries in [Monitoring](#monitoring).
 
 ### Queue Configuration
 
@@ -127,7 +133,8 @@ RETRY_DELAY_SECONDS = 5                        # Base delay
 services:
   media-sync:
     volumes:
-      - ${MEDIA_BUFFER_PATH:-./data/media-buffer}:/var/cache/osint-media-buffer:rshared
+      - ${MEDIA_BUFFER_PATH:-./data/media-buffer}:/var/cache/osint-media-buffer
+      - /mnt/hetznerstorage/osint-platform:/mnt/hetzner-media   # SSHFS destination
 ```
 
 !!! danger "Critical: Same Buffer Path as Processor"
@@ -135,7 +142,7 @@ services:
 
 ## Multi-Box Storage Support
 
-The media-sync worker supports multiple storage boxes using `MinioClientPool`:
+Every job must carry a `storage_box_id` (jobs without one are sent straight to the failed queue). In legacy `minio` mode the worker routes uploads per box using `MinioClientPool`:
 
 ```python
 from storage import MinioClientPool
@@ -167,7 +174,7 @@ async with session() as db:
   "sha256": "abc123...",
   "s3_key": "media/ab/c1/abc123.jpg",
   "local_path": "/var/cache/osint-media-buffer/media/ab/c1/abc123.jpg",
-  "storage_box_id": "russia-1",   // Routes to minio-russia-1
+  "storage_box_id": "russia-1",   // minio mode: routes to that box's endpoint
   "file_size": 12345,
   "queued_at": "2024-01-15T12:00:00"
 }
@@ -180,8 +187,9 @@ After successful sync, the worker updates box usage:
 ```sql
 UPDATE storage_boxes
 SET used_bytes = used_bytes + :file_size,
-    reserved_bytes = GREATEST(0, reserved_bytes - :file_size)
-WHERE id = :storage_box_id
+    reserved_bytes = GREATEST(0, reserved_bytes - :file_size),
+    used_gb = (used_bytes + :file_size) / (1024.0 * 1024.0 * 1024.0)
+WHERE id = (SELECT storage_box_id FROM media_files WHERE sha256 = :sha256)
 ```
 
 ## Key Concepts
@@ -206,14 +214,15 @@ media/{hash[:2]}/{hash[2:4]}/{hash}.{ext}
 
 Example: `media/ab/c1/abc123def456.jpg`
 
-### Exponential Backoff
+### Retry Backoff
 
-Failed uploads retry with increasing delays:
+Failed transfers are re-queued after a delay that grows linearly (`RETRY_DELAY_SECONDS * attempt`):
 
 - Attempt 1: 5 seconds
 - Attempt 2: 10 seconds
 - Attempt 3: 15 seconds
-- After 3 failures: Move to failed queue
+- After 3 retries (4th failure): move to `media:sync:failed`
+- `ValueError` (missing `storage_box_id`, minio-mode size mismatch) is not retried and goes straight to the failed queue
 
 ## Job Format
 
@@ -276,7 +285,7 @@ docker-compose up -d media-sync
 # View logs
 docker-compose logs -f media-sync
 
-# Scale to multiple workers
+# Scale to multiple workers (compose sets a fixed WORKER_ID; it only affects log labels)
 docker-compose up -d --scale media-sync=3
 ```
 
@@ -288,9 +297,9 @@ pip install -r requirements.txt
 
 export REDIS_URL=redis://localhost:6379/0
 export DATABASE_URL=postgresql+asyncpg://osint_user:password@localhost:5432/osint_platform
-export MINIO_ENDPOINT=localhost:9000
-export MINIO_ACCESS_KEY=minioadmin
-export MINIO_SECRET_KEY=minioadmin
+export SYNC_MODE=filesystem
+export HETZNER_MEDIA_PATH=/tmp/media-dest   # must exist
+# legacy minio mode: SYNC_MODE=minio plus MINIO_ENDPOINT/MINIO_ACCESS_KEY/MINIO_SECRET_KEY
 
 python -m src.worker
 ```
@@ -302,17 +311,17 @@ python -m src.worker
 **Symptom**: `media:sync:pending` length increasing
 
 **Causes**:
-- Slow network to Hetzner
-- Sync workers down/crashed
-- MinIO overloaded
+- Slow SSHFS link to Hetzner
+- Sync workers down/crashed (check the Hetzner mount exists: the worker exits at start if not)
+- MinIO overloaded (minio mode only)
 
 **Solutions**:
 ```bash
 # Scale workers
 docker-compose up -d --scale media-sync=5
 
-# Check MinIO health
-docker-compose logs minio | tail -50
+# Check the mount is alive (filesystem mode)
+docker-compose exec media-sync ls /mnt/hetzner-media/osint-media | head
 ```
 
 ### Files Not Syncing
@@ -325,13 +334,11 @@ docker-compose ps media-sync
 # Check queue has jobs
 docker-compose exec redis redis-cli LLEN media:sync:pending
 
-# Test MinIO connectivity
-docker-compose exec media-sync python3 -c "
-from minio import Minio
-client = Minio('minio:9000', 'minioadmin', 'minioadmin', secure=False)
-print(client.bucket_exists('osint-media'))
-"
+# Filesystem mode: confirm destination is writable
+docker-compose exec media-sync sh -c 'touch /mnt/hetzner-media/osint-media/.probe && echo ok'
 ```
+
+In `minio` mode, test connectivity with the `minio` Python client using your `MINIO_*` credentials.
 
 ### Permanent Failures
 
@@ -341,13 +348,14 @@ docker-compose exec redis redis-cli LRANGE media:sync:failed 0 0
 ```
 
 **Common errors**:
-- `File missing from both local buffer and MinIO`
-- `Size mismatch: expected X, got Y`
-- `Connection refused` (MinIO down)
+- `File missing from both local buffer and Hetzner` (or `MinIO` in legacy mode): logged and counted as failed, not re-queued
+- `Size mismatch after copy` (filesystem) / `Size mismatch: expected X, got Y` (minio)
+- `Job missing storage_box_id`
+- `Connection refused` (MinIO down, minio mode)
 
 **Requeue failed jobs**:
 ```bash
-docker-compose exec redis redis-cli RPOPLPUSH media:sync:failed media:sync:pending
+docker-compose exec redis redis-cli LMOVE media:sync:failed media:sync:pending RIGHT LEFT
 ```
 
 ## Performance
@@ -356,7 +364,7 @@ docker-compose exec redis redis-cli RPOPLPUSH media:sync:failed media:sync:pendi
 |-----------|-----------|---------------|
 | Queue pop (Redis) | N/A | <1ms |
 | Local file read | 100 MB/s | <100ms |
-| MinIO upload | 10-50 files/sec | 1-10s |
+| Remote copy/upload | depends on link | 1-10s |
 | Database update | N/A | <50ms |
 
 **Bottleneck**: Network upload to Hetzner (limited by uplink bandwidth).

@@ -10,6 +10,7 @@ The platform uses a **hybrid storage architecture** designed for:
 2. **Cost-effective scaling** - Hetzner Storage Boxes (~€3.80/TB/month)
 3. **High availability** - Redis-cached routing (99%+ hit rate)
 4. **Zero data loss** - Local buffer first, async sync to Hetzner
+5. **Text first, media later** - With the media lane on (runtime setting `media_lane_enabled`), the processor archives the message text and sets `media_status = 'pending'`; the `media-worker` service claims those rows and downloads the media in the background (`services/processor/src/media_lane.py`, `media_worker.py`). Both paths use the same `MediaArchiver`, so everything below applies to either.
 
 ## Architecture Diagram
 
@@ -22,7 +23,7 @@ Telegram Message with Media
          │
          ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                          Processor Service                                │
+│               Processor / media-worker (MediaArchiver)                    │
 │                                                                          │
 │  1. Download to .tmp/                                                    │
 │     /var/cache/osint-media-buffer/.tmp/{uuid}.tmp                       │
@@ -60,9 +61,6 @@ Telegram Message with Media
 │     WHERE sha256 = :sha256                                              │
 │                                                                          │
 │  5. Delete local file (space reclaimed)                                 │
-│                                                                          │
-│  6. Populate Redis cache:                                                │
-│     SET media:route:{sha256} {storage_box_id} EX 86400                  │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -92,19 +90,17 @@ Browser Request: GET /media/ab/cd/abcd1234.jpg
 │                           API Service                                    │
 │                                                                          │
 │  Layer 3: Redis Cache Lookup                                            │
-│  └── Key: media:route:{sha256_prefix}                                   │
-│  └── HIT? → Return 302 redirect to storage box URL                      │
-│      Header: X-Cache-Status: hit                                        │
+│  └── Key: media:route:{sha256}                                          │
+│  └── HIT? → Look up the box's MinIO endpoint, 307 redirect              │
 │                                                                          │
 │  Layer 4: Database Lookup (cache miss)                                  │
 │  └── SELECT storage_box_id FROM media_files WHERE sha256 = :hash       │
-│  └── Populate Redis cache (24h TTL)                                     │
-│  └── Return 302 redirect                                                │
-│      Header: X-Cache-Status: miss                                       │
+│  └── Populate Redis cache (7-day TTL)                                   │
+│  └── 307 redirect to /minio-{box}/{bucket}/{key}                        │
 └──────────────────────────────────────────────────────────────────────────┘
          │
          ▼
-    HTTP 302 Redirect → Storage Box URL
+    HTTP 307 Redirect → /minio-{box}/osint-media/media/ab/cd/... (Caddy proxies to the box's MinIO)
 ```
 
 ## Key Components
@@ -158,7 +154,7 @@ def _get_local_buffer_path(self, sha256: str, extension: str) -> Path:
 }
 ```
 
-**Failed Queue**: `media:sync:failed` (after 3 retries)
+**Failed Queue**: `media:sync:failed` (after 3 retries, or immediately on a storage configuration error). `retry_count` is added by the worker when it re-queues a job.
 
 **Code** (`services/processor/src/media_archiver.py`):
 ```python
@@ -228,36 +224,25 @@ class MediaSyncWorker:
 
 **Purpose**: Eliminate database lookups for media routing
 
-**Key Format**: `media:route:{sha256_prefix}`
+**Key Format**: `media:route:{sha256}` (the hash taken from the URL path, without directories or extension)
 
 **Value**: Storage box ID (e.g., "default", "russia-1")
 
-**TTL**: 86,400 seconds (24 hours)
+**TTL**: 604,800 seconds (7 days). Populated by the API on a cache miss, not by media-sync.
 
 **Code** (`services/api/src/routers/media.py`):
 ```python
-# Check Redis cache first
-cached_box = await redis.get(f"media:route:{clean_hash}")
-if cached_box:
-    return RedirectResponse(
-        url=f"/storage/{cached_box}/{path}",
-        status_code=307,
-        headers={
-            "X-Cache-Status": "hit",
-            "X-Media-Source": "storage-box"
-        }
-    )
+# services/api/src/routers/media.py (simplified)
+storage_box = await r.get(f"media:route:{clean_hash}")
+if not storage_box:
+    row = await db.execute(text("SELECT storage_box_id FROM media_files WHERE sha256 = :hash LIMIT 1"), ...)
+    if not row:
+        raise HTTPException(404, f"Media file not found: {clean_hash}")
+    storage_box = row[0] or "default"
+    await r.setex(f"media:route:{clean_hash}", 604800, storage_box)
 
-# Cache miss - query database
-result = await db.execute(
-    text("SELECT storage_box_id FROM media_files WHERE sha256 = :hash"),
-    {"hash": clean_hash}
-)
-box_id = result.scalar_one_or_none()
-
-# Populate cache
-if box_id:
-    await redis.setex(f"media:route:{clean_hash}", CACHE_TTL, box_id)
+# Multi-box: the browser fetches the file through Caddy's per-box route
+return RedirectResponse(url=f"/minio-{storage_box}/{MINIO_BUCKET}/{file_hash}", status_code=307)
 ```
 
 ### 5. Caddy Media Routing
@@ -265,8 +250,9 @@ if box_id:
 **Location**: `infrastructure/caddy/Caddyfile.ory`
 
 **Strategy**:
-1. **Fast path**: Try local buffer with `file` matcher
-2. **Fallback**: Rewrite to API redirect endpoint
+1. **Anti-hotlinking**: requests with a `Referer` from another domain get 403 (no Referer, localhost and `SITE_DOMAIN` are allowed)
+2. **Fast path**: Try local buffer with `file` matcher
+3. **Fallback**: Rewrite to API redirect endpoint
 
 ```caddyfile
 handle /media/* {
@@ -303,9 +289,16 @@ CREATE TABLE IF NOT EXISTS storage_boxes (
     hetzner_host VARCHAR(255) NOT NULL,          -- "uXXXXXX.your-storagebox.de"
     hetzner_user VARCHAR(50) NOT NULL,           -- "uXXXXXX"
     hetzner_port INTEGER DEFAULT 23,
-    mount_path VARCHAR(255) NOT NULL,            -- "/mnt/hetzner-storage"
+    mount_path VARCHAR(255) NOT NULL,            -- "/mnt/hetzner/russia-1"
+    minio_endpoint VARCHAR(255),                 -- Docker service name, e.g. "minio-russia-1"
+    minio_port INTEGER DEFAULT 9000,
     capacity_gb INTEGER NOT NULL,
-    used_gb INTEGER DEFAULT 0,
+    used_gb INTEGER DEFAULT 0,                   -- legacy
+    used_bytes BIGINT DEFAULT 0,                 -- source of truth
+    reserved_bytes BIGINT DEFAULT 0,             -- in-flight uploads
+    high_water_mark INTEGER DEFAULT 90,          -- % at which writes stop
+    is_readonly BOOLEAN DEFAULT false,
+    priority INTEGER DEFAULT 100,                -- lower = preferred
     account_region VARCHAR(20) NOT NULL,         -- "russia" or "ukraine"
     is_active BOOLEAN DEFAULT true,
     is_full BOOLEAN DEFAULT false,
@@ -314,24 +307,20 @@ CREATE TABLE IF NOT EXISTS storage_boxes (
 );
 ```
 
-### media_files Table (Extended Columns)
+### media_files Table (storage columns)
 
 ```sql
--- Added columns for storage routing
-ALTER TABLE media_files ADD COLUMN IF NOT EXISTS
-    storage_box_id VARCHAR(50) REFERENCES storage_boxes(id);
-ALTER TABLE media_files ADD COLUMN IF NOT EXISTS
-    synced_at TIMESTAMP WITHOUT TIME ZONE;       -- NULL = pending sync
-ALTER TABLE media_files ADD COLUMN IF NOT EXISTS
-    local_path TEXT;                             -- Path in local buffer (if not synced)
-ALTER TABLE media_files ADD COLUMN IF NOT EXISTS
-    last_accessed_at TIMESTAMP WITHOUT TIME ZONE;
-ALTER TABLE media_files ADD COLUMN IF NOT EXISTS
-    access_count INTEGER DEFAULT 0;
+-- In init.sql's media_files definition (alongside sha256, s3_key, file_size, mime_type, reference_count)
+storage_box_id VARCHAR(50) REFERENCES storage_boxes(id),
+synced_at TIMESTAMP WITHOUT TIME ZONE,       -- NULL = pending sync
+local_path TEXT,                             -- Path in local buffer (until synced)
+last_accessed_at TIMESTAMP WITHOUT TIME ZONE,
+access_count INTEGER DEFAULT 0,
+phash_image BIGINT, phash_video BIGINT,      -- perceptual hashes for duplicate detection
 
--- Indexes for performance
+-- Indexes
 CREATE INDEX idx_media_files_pending_sync ON media_files(synced_at) WHERE synced_at IS NULL;
-CREATE INDEX idx_media_files_routing ON media_files(sha256, storage_box_id);
+CREATE INDEX idx_media_files_storage_box ON media_files(storage_box_id);
 ```
 
 ## API Endpoints
@@ -346,22 +335,22 @@ CREATE INDEX idx_media_files_routing ON media_files(sha256, storage_box_id);
 1. Extract hash from path (`ab/cd/abcd1234.jpg` → `abcd1234`)
 2. Check Redis cache: `media:route:{hash}`
 3. Cache miss: Query `media_files.storage_box_id`
-4. Cache result (24h TTL)
-5. Return 302 redirect
+4. Cache result (7-day TTL)
+5. Return 307 redirect
 
 **Response Headers**:
 ```http
-HTTP/1.1 302 Found
-Location: /storage/default/media/ab/cd/abcd1234.jpg
-X-Media-Source: storage-box
-X-Cache-Status: hit|miss|populated
+HTTP/1.1 307 Temporary Redirect
+Location: /minio-russia-1/osint-media/media/ab/cd/abcd1234.jpg
 ```
+
+Rate limited per IP by `MEDIA_REDIRECT_RATE_LIMIT` (default 300/min, see [Rate Limiting](rate-limiting.md)); unknown hashes return 404.
 
 ### Cache Invalidation
 
 **Endpoint**: `POST /api/media/internal/media-invalidate/{file_hash}`
 
-**Purpose**: Invalidate Redis cache when file is moved or deleted
+**Purpose**: Invalidate Redis cache when file is moved or deleted (admin only)
 
 ### Cache Statistics
 
@@ -370,9 +359,11 @@ X-Cache-Status: hit|miss|populated
 **Response**:
 ```json
 {
-  "cache_size": 15234,
-  "estimated_hit_rate": 0.994,
-  "cache_ttl_seconds": 86400
+  "cached_files": 15234,
+  "redis_memory_mb": 45.2,
+  "cache_db": 2,
+  "ttl_seconds": 604800,
+  "note": "99%+ hit rate expected after warm-up"
 }
 ```
 
@@ -464,7 +455,7 @@ box = await selector.get_box_for_file(
 **Selection Algorithm:**
 
 1. Query eligible boxes (active, not full, not readonly)
-2. Filter boxes below high water mark (default 90%)
+2. Filter boxes below their `high_water_mark` (default 90%)
 3. Find lowest usage percentage
 4. Select all boxes within 5% of lowest
 5. Round-robin among selected boxes
@@ -477,9 +468,10 @@ Located in `shared/python/storage/minio_pool.py`:
 from storage import MinioClientPool
 
 pool = MinioClientPool(
-    access_key="minioadmin",
-    secret_key="minioadmin",
-    bucket_name="osint-media"
+    access_key=MINIO_ACCESS_KEY,
+    secret_key=MINIO_SECRET_KEY,
+    secure=False,
+    bucket_name="osint-media",
 )
 
 # Get client for specific box (lazy-loaded, cached)
@@ -547,7 +539,12 @@ Then regenerate Caddy routes and Docker Compose:
 ```bash
 python scripts/generate-caddy-storage-routes.py > infrastructure/caddy/storage-routes.snippet
 python scripts/generate-minio-services.py > docker-compose.storage.yml
+
+# Then start the new MinIO container
+docker-compose -f docker-compose.yml -f docker-compose.storage.yml up -d
 ```
+
+`./scripts/storage-admin.sh regen` does both generation steps (it needs `DATABASE_URL` in the environment or `.env`).
 
 ### Configuration Generation
 
@@ -571,7 +568,7 @@ handle /minio-russia-1/* {
 ```yaml
 services:
   minio-russia-1:
-    image: minio/minio:latest
+    image: minio/minio:latest   # generated; pin a release in production
     command: server /data --console-address ":9001"
     volumes:
       - /mnt/hetzner/russia-1:/data
@@ -582,11 +579,11 @@ services:
 
 Located in `services/enrichment/src/tasks/storage_health.py`:
 
-Runs every 5 minutes to:
+Runs every 5 minutes (`STORAGE_HEALTH_INTERVAL`, seconds) to:
 
 1. Verify SSHFS mounts are responsive
 2. Reconcile `used_bytes` with actual disk usage
-3. Set `is_full` when above high water mark
+3. Set `is_full` when above the box's high water mark (cleared again 5 points below it)
 4. Record `last_health_check` timestamp
 
 ```python
@@ -600,14 +597,7 @@ storage_boxes_unhealthy_total
 
 ### Custom Storage Box Selection
 
-Override in `media_archiver.py`:
-```python
-def _select_storage_box(self, account_region: str) -> str:
-    """Select storage box based on account region and capacity."""
-    # Query storage_boxes table for available boxes
-    # Implement round-robin or least-full strategy
-    pass
-```
+`MediaArchiver._select_storage_box(session, file_size)` (`services/processor/src/media_archiver.py`) returns a fixed box when `storage_box_id` is set, otherwise asks `BoxSelector.get_box_for_file(session, file_size, region=self.account_region)` and falls back to `"default"` on error. To change the policy, adjust `BoxSelector` (`shared/python/storage/box_selector.py`) rather than the archiver.
 
 ### Cache Warming
 

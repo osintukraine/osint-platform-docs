@@ -17,8 +17,8 @@ This reference documentation provides comprehensive details about:
 - **API**: FastAPI with OpenAPI/Swagger documentation
 - **Message Queue**: Redis Streams for async processing
 - **Object Storage**: MinIO (S3-compatible) for media
-- **AI**: Ollama for self-hosted LLM inference
-- **Tech Stack**: Python 3.11+, Next.js 14, Bun
+- **AI**: Self-hosted LLM through an OpenAI-compatible gateway (`LLM_PROVIDER=openai`) or local Ollama; embeddings use all-MiniLM-L6-v2
+- **Tech Stack**: Python 3.11+, Next.js 15 (React 19) on Node.js
 
 ## Architecture Patterns
 
@@ -28,8 +28,8 @@ Telegram → Listener → Redis → Processor → PostgreSQL/MinIO → Enrichmen
 ```
 
 **Service Tiers**:
-- **Real-time** (Processor): <1s per message, LLM classification, spam filtering
-- **Background** (Enrichment): Hours OK, embeddings, tagging, translation
+- **Real-time** (Processor): embedding spam filter, LLM classification, persistence
+- **Background** (Enrichment, Backlog): Hours OK, embeddings, tagging, translation, geolocation, event detection, backlog re-classification
 - **Maintenance**: Hourly tasks, channel cleanup, discovery evaluation
 
 ## API Conventions
@@ -46,9 +46,10 @@ GET /api/messages
 Authorization: Bearer YOUR_JWT_TOKEN
 ```
 
-Authentication is optional (configurable via `AUTH_PROVIDER`):
+Authentication is optional (configurable via `AUTH_PROVIDER`, default `none`):
 - `none` - No authentication (private VPN deployments)
 - `jwt` - Simple JWT tokens
+- `cloudron` - Cloudron deployments
 - `ory` - Ory Kratos/Oathkeeper (zero-trust)
 
 ### Pagination
@@ -78,7 +79,7 @@ Common query parameters:
 - `q` - Full-text search query
 - `days` - Filter by last N days
 - `channel_id` - Filter by channel
-- `topic` - Filter by OSINT topic
+- `topic` - Filter by OSINT topic (the exact parameter names differ per endpoint; see [API Endpoints](api-endpoints.md))
 - `importance_level` - Filter by importance (high/medium/low)
 
 ### Error Responses
@@ -135,7 +136,6 @@ Deduplication: Same file = same hash = single storage.
 
 **Tables with embeddings**:
 - `messages.content_embedding` - Message semantic search
-- `events.content_embedding` - Event similarity
 - `curated_entities.entity_embedding` - Entity matching
 - `opensanctions_entities.entity_embedding` - Sanctions entities
 - `external_news.embedding` - RSS article search
@@ -162,16 +162,20 @@ ORDER BY ts_rank(search_vector, plainto_tsquery('english', 'query')) DESC;
 
 Services are grouped by profile:
 
-- **Default**: Core services (listener, processor, API, frontend)
-- **enrichment**: Background enrichment workers
-- **monitoring**: Prometheus, Grafana, exporters
-- **opensanctions**: Entity intelligence (Yente + ElasticSearch)
-- **auth**: Ory Kratos/Oathkeeper authentication
-- **dev**: Development tools (Dashy, MailSlurper, MkDocs)
+- **Default**: Core services (listener, processor, media worker, API, frontend, RSS ingestor, Postgres, Redis, MinIO, Ollama)
+- **enrichment-lite / enrichment-standard / enrichment-full**: Background enrichment workers (`enrichment` is a legacy alias)
+- **llm-gateway**: Backlog and gateway-capable batch workers
+- **monitoring**: Prometheus, Grafana, Loki, exporters, notifier, ntfy
+- **opensanctions**: Entity intelligence (Yente + Elasticsearch)
+- **auth**: Ory Kratos/Oathkeeper, CrowdSec, Caddy
+- **multi-account / dr / backfill**: Multi-account listeners, shadow-sync, backfill workers
+- **tools**: NocoDB and MkDocs
+
+Full list: [Docker Services](docker-services.md#profiles).
 
 **Start specific profiles**:
 ```bash
-docker-compose --profile enrichment --profile monitoring up -d
+docker compose --profile enrichment-lite --profile monitoring up -d
 ```
 
 ## Configuration Hierarchy
@@ -181,13 +185,14 @@ Configuration precedence (highest to lowest):
 1. Environment variables
 2. `.env` file
 3. `docker-compose.yml` defaults
-4. Database `platform_config` table (runtime config)
-5. Code defaults
+4. Code defaults
+
+Settings with a runtime key (admin page **Admin, Config, Platform Settings**) are stored in the database and take effect without a restart; the `.env` value is only their fallback. See [Environment Variables](environment-variables.md#variables-that-admin-settings-override).
 
 **Runtime configuration** (no restart needed):
 - LLM prompts (`llm_prompts` table)
 - Model selection (`model_configuration` table)
-- Platform settings (`platform_config` table)
+- Platform and runtime settings (`platform_config` table)
 
 ## Resource Requirements
 
@@ -208,6 +213,7 @@ Configuration precedence (highest to lowest):
 - **PostgreSQL**: ~100GB for 1M messages
 - **MinIO**: ~300GB for media archive
 - **Ollama**: ~20GB for models if used (none needed for classification with an LLM gateway; the small `all-minilm` serves search)
+- **Loki**: logs, sized by retention
 - **Monitoring**: ~50GB for metrics (30 days retention)
 
 ## Version Information
@@ -216,21 +222,23 @@ Configuration precedence (highest to lowest):
 - **API Version**: v1 (implicit in `/api/*` paths)
 - **PostgreSQL**: 16+ (required for pgvector)
 - **Python**: 3.11+
-- **Node.js**: 20+ (frontend)
+- **Node.js**: 24 (frontend image)
 - **Docker**: 27+
 - **Docker Compose**: 2.20+
 
 ## Schema Management
 
-**No Alembic migrations**. Schema is managed via `init.sql`:
+**No Alembic migrations.** Fresh installs build the schema from `infrastructure/postgres/init.sql`. Running databases are updated with numbered SQL files in `infrastructure/postgres/migrations/` (applied by hand with `psql`, recorded in `schema_migrations`). Every schema change goes into both places:
 
-1. Make changes to `~/code/osintukraine/osint-intelligence-platform/infrastructure/postgres/init.sql`
-2. Rebuild database:
+1. Add `infrastructure/postgres/migrations/NNN_description.sql` (UP and DOWN sections)
+2. Mirror the change in `init.sql` for future installs
+3. Apply to an existing database:
    ```bash
-   docker-compose down
-   docker volume rm osint-intelligence-platform_postgres_data
-   docker-compose up -d postgres
+   docker compose exec -T postgres psql -U osint_user -d osint_platform \
+     < infrastructure/postgres/migrations/NNN_description.sql
    ```
+
+Recreating the database (`docker compose down`, remove the `postgres_data` volume) is only for throwaway development setups.
 
 ## Additional Resources
 

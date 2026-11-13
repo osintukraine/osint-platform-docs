@@ -2,7 +2,10 @@
 
 **Time: ~15 minutes**
 
-In this tutorial, you'll set up real-time Discord notifications for critical intelligence using n8n workflows and RSS feeds. Your team will receive instant alerts in Discord channels whenever high-value intelligence is detected.
+In this tutorial, you'll set up near-real-time Discord notifications for critical intelligence using n8n workflows and RSS feeds. Your team will receive alerts in Discord channels whenever high-value intelligence is detected.
+
+!!! note "n8n is not part of the platform stack"
+    The platform has no Discord integration of its own and does not ship an n8n container. This tutorial uses your own n8n instance (self-hosted or n8n Cloud) to poll a platform RSS feed and post to a Discord webhook. For built-in push notifications, the platform's `notifier` service publishes to ntfy; see [Notifications](../user-guide/notifications.md).
 
 ---
 
@@ -23,9 +26,9 @@ After this tutorial, you will be able to:
 Before starting, make sure you have:
 
 - A Discord server with admin permissions (or ability to manage webhooks)
-- The OSINT platform running with API and RSS endpoints active
-- At least one RSS feed created (see [Create Custom RSS Feed](create-custom-rss-feed.md) tutorial)
-- n8n service running (`docker-compose up -d n8n`)
+- The OSINT platform running with the API active
+- At least one signed RSS feed URL created (see [Create Custom RSS Feed](create-custom-rss-feed.md) tutorial; with the default `FEED_AUTH_REQUIRED=true` a plain `/rss/search?...` URL returns 401)
+- An n8n instance that can reach your platform's public URL (or the `api` container, if n8n runs on the same Docker network)
 - Basic understanding of Discord webhook URLs
 - ~15 minutes of uninterrupted time
 
@@ -112,8 +115,8 @@ If it doesn't work, check:
 
 Now we'll create a workflow in n8n to automatically poll your RSS feed and send alerts.
 
-1. Open n8n at `http://localhost:5678`
-2. Sign in (default: email: test@n8n.com, password: password)
+1. Open your n8n instance (for a local Docker install, `http://localhost:5678`)
+2. Sign in with the owner account you created when setting up n8n
 3. Click **Create Workflow** or **New Workflow**
 4. Give it a name: `OSINT Discord Alerts`
 5. Click **Create**
@@ -130,9 +133,9 @@ We'll add a node that reads your RSS feed:
 2. Search for **RSS Feed**
 3. Click **RSS Feed** (from the list)
 4. Configure the node:
-   - **URL**: Paste your RSS feed URL from the [Create Custom RSS Feed](create-custom-rss-feed.md) tutorial
+   - **URL**: Paste your signed RSS feed URL from the [Create Custom RSS Feed](create-custom-rss-feed.md) tutorial (the `token` and `sig` parameters must stay in the URL)
      ```
-     http://localhost:8000/rss/search?importance_level=high&days=1
+     https://your-domain.com/rss/search?importance_level=high&days=1&token=<token-id>&sig=<signature>
      ```
    - **Poll Time**: Set to `5m` (checks feed every 5 minutes)
 
@@ -150,7 +153,7 @@ Now we'll add the node that sends messages to Discord:
 
 1. Click the **+** button to add another node
 2. Search for **Discord Webhook**
-3. Click **Discord Webhook** (from the HTTP node or use HTTP node)
+3. Click **Discord** (webhook mode), or use an **HTTP Request** node
 4. Configure the node:
    - **URL**: Paste your Discord webhook URL:
      ```
@@ -208,7 +211,7 @@ New Alert: Russian Forces Advance Near Bakhmut
 New Alert: Russian Forces Advance Near Bakhmut
 Combat report from military sources. Significant tactical movement detected.
 
-[View Message](http://localhost:8000/messages/12345)
+(link to the message)
 ```
 
 **If the test worked:** Jump to Step 8.
@@ -251,17 +254,17 @@ In your Discord server, create additional channels:
 Create separate workflows for different feed types:
 
 **Workflow 1: Military Intelligence**
-- RSS URL: `http://localhost:8000/rss/search?q=military&importance_level=high&days=1`
+- RSS URL: signed version of `/rss/search?q=military&importance_level=high&days=1`
 - Webhook: Point to `#osint-military` channel
 - Polling: Every 5 minutes
 
 **Workflow 2: Political Updates**
-- RSS URL: `http://localhost:8000/rss/search?q=political&importance_level=high&days=1`
+- RSS URL: signed version of `/rss/search?q=political&importance_level=high&days=1`
 - Webhook: Point to `#osint-political` channel
 - Polling: Every 5 minutes
 
 **Workflow 3: Critical Only**
-- RSS URL: `http://localhost:8000/rss/search?q=critical&importance_level=high&days=1`
+- RSS URL: signed version of `/rss/search?q=critical&importance_level=high&days=1`
 - Webhook: Point to `#osint-critical` channel
 - Polling: Every 2 minutes (faster for critical)
 
@@ -452,9 +455,9 @@ To change:
 
 3. **Verify RSS feed has items:**
    ```bash
-   curl http://localhost:8000/rss/search?importance_level=high&days=1
+   curl -s "<your signed feed URL>" | grep -c "<item>"
    ```
-   Should return items with `<item>` tags
+   Should print a number above 0. A 401 response means the token or signature is wrong; regenerate the signed URL.
 
 4. **Check Discord permissions:**
    - Server Settings → Webhooks
@@ -470,7 +473,7 @@ To change:
 1. **Check RSS field names:** The JSON template might use wrong field names
    ```bash
    # Get actual RSS fields
-   curl http://localhost:8000/rss/search?importance_level=high&days=1 | grep -i title
+   curl -s "<your signed feed URL>" | grep -i "<title>"
    ```
 
 2. **Update template with correct fields:**
@@ -496,9 +499,9 @@ To change:
    - Fewer checks = fewer alerts
 
 2. **Filter RSS feed:**
-   - Change RSS URL to be more specific:
+   - Sign a more specific feed URL, e.g. parameters
      ```
-     http://localhost:8000/rss/search?importance_level=high&q=specific-keyword&days=1
+     importance_level=high&q=specific-keyword&days=1
      ```
 
 3. **Create separate workflows:**
@@ -506,27 +509,15 @@ To change:
    - One for routine (slow polling)
    - Prevents overwhelming one channel
 
-### "n8n service isn't running"
+### "Can't reach n8n or n8n can't reach the platform"
 
-**Problem:** Can't access n8n at http://localhost:5678
+**Problem:** n8n is down, or the RSS node fails with a connection error.
 
 **Solutions:**
 
-1. **Start n8n:**
-   ```bash
-   docker-compose up -d n8n
-   ```
-
-2. **Verify it's running:**
-   ```bash
-   docker-compose ps n8n
-   ```
-   Should show "Up"
-
-3. **Check logs:**
-   ```bash
-   docker-compose logs n8n | tail -50
-   ```
+1. **Check n8n itself** (it is not managed by the platform's compose file): `docker ps | grep n8n` or your n8n host's status page.
+2. **Check n8n can reach the feed URL:** run `curl -s -o /dev/null -w "%{http_code}\n" "<signed feed URL>"` from the n8n host/container. It must print `200`.
+3. **Same Docker network:** if n8n runs in a container, `localhost` is the n8n container, not the platform. Use your public domain, or the API's service name (`http://api:8000/...`) only if n8n is attached to the platform's `backend` network. Signed URLs are tied to the query string, not the host, so the host can differ.
 
 ### "Discord webhook URL is invalid"
 
@@ -591,7 +582,7 @@ Now that you have Discord alerts working, you can:
    - Route to dedicated team member channel
 
 5. **Scale to Production** - Deploy this to your production server
-   - Update RSS URLs to point to production domain
+   - Sign new feed URLs on the production domain
    - Create Discord webhooks on production server
    - Set up monitoring/alerting on workflow failures
 

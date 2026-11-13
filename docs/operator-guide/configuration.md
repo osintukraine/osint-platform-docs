@@ -19,6 +19,8 @@ Configuration comes from three tiers, from most static to most dynamic. Knowing 
 
 For a tier-2 setting the precedence is: **admin override > `.env` variable > built-in default**. **Reset** in the admin page removes the override, so the service falls back to `.env`. Each setting shows whether it applies live or needs a service restart, which `.env` variable it overrides, and the value each running service instance actually uses (with a warning when a service cannot apply the configured value, for example translation on without `DEEPL_API_KEY`).
 
+Because a tier-2 override lives in the database, `.env` can drift from what services actually use. To write the database overrides back into `.env` (after changing a setting, or before a rebuild that should bake in the current values), run `./scripts/admin-config.sh sync-env [KEY...]` — it backs up `.env` first, writes the given keys (or all non-secret overrides) under a marked block, and never writes secrets.
+
 Only settings registered in [`runtime_keys.py`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/shared/python/config/runtime_keys.py) are wired to a service; a stored row that is not in that registry is shown as "not applied". Examples of tier-2 settings: `llm_classification_enabled`, `realtime_use_embedding`, `embedding_spam_threshold`, `llm_prefilter_spam_similarity`, `media_lane_enabled`, `backlog_reclassify_enabled`, `backlog_spam_first`, `backlog_concurrency`, and the RSS ingestion, correlation and validation settings.
 
 Folder-based channel management (`Archive-*`, `Monitor-*`, `Discover-*` Telegram folders) is fixed in code; only the sync interval (`FOLDER_SYNC_INTERVAL`, seconds, minimum 30) is configurable.
@@ -49,6 +51,8 @@ COMPOSE_PROFILES=enrichment-lite,monitoring,auth,llm-gateway
 ```
 
 or pass them per command (`docker compose --profile monitoring up -d`). The full profile table (`enrichment-lite`, `enrichment-standard`, `enrichment-full`, `llm-gateway`, `monitoring`, `auth`, `opensanctions`, `notifications`, `tools`, `multi-account`, `dr`, `backfill`, `cloudflare`) is in [Docker Services](../reference/docker-services.md#profiles).
+
+`TELEGRAM_MODE` (`single` or `multi`, unset means `single`) selects the Telegram services. Do not edit it by hand: `./scripts/switch-telegram-mode.sh single|multi` writes it together with `SINGLE_ACCOUNT_REPLICAS` and the `multi-account` entry in `COMPOSE_PROFILES`, and `deploy.sh` refuses to run if they disagree.
 
 ## Scaling Configuration
 

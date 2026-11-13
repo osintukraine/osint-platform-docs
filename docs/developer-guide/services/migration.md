@@ -4,7 +4,10 @@
 
 The Migration Service handles the migration of historical data from legacy tg-archive SQLite databases to the new OSINT Intelligence Platform. This service is designed to transfer 3 years of archived Telegram data while applying production-quality spam filtering and deduplication.
 
-**Status**: Under Development
+**Status**: Under Development. Only Phase 1 (indexing) and the storage backends exist as code.
+
+!!! warning "What exists in the code repository"
+    `services/migration/` contains `src/indexers/` (`sqlite_indexer.py`, `sqlite_schema.py`), `src/storage/` (`storage_backend.py`, `minio_backend.py`, `hetzner_backend.py`), `tests/` (storage experiments) and a README. There is **no** `main.py`, controller, CLI, Dockerfile, `requirements.txt`, config YAML or `docker-compose.yml` service; the indexer is a library with no `__main__`. Everything under "Phase 2", "Phase 3", "Configuration" and "Progress Tracking" below is the **planned design**, not working code. The service README's `python src/main.py` quick start refers to a file that does not exist.
 
 **Purpose**: Migrate historical tg-archive data to PostgreSQL and MinIO with enrichment and filtering
 
@@ -44,12 +47,11 @@ services/migration/
 │   │   ├── storage_backend.py
 │   │   ├── minio_backend.py
 │   │   └── hetzner_backend.py
-│   ├── processors/         # Message enrichment pipeline
-│   ├── media/              # Media handling
-│   └── utils/              # Progress tracking, validation
-├── tests/                  # Unit tests and integration tests
-└── migrations/             # Progress tracking database
+├── tests/                  # Storage backend experiments (see Testing)
+└── __init__.py             # Package docstring, __version__ = "0.1.0"
 ```
+
+Planned but not present: `src/processors/` (enrichment pipeline), `src/media/`, `src/utils/`, `src/controllers/` and `migrations/` (progress database).
 
 ### Schema Mapping
 
@@ -150,7 +152,7 @@ The migration follows a phased approach with validation checkpoints.
 3. Identify media references and file paths
 4. Generate inventory report
 
-**Implementation**: `src/indexers/sqlite_indexer.py`
+**Implementation**: `src/indexers/sqlite_indexer.py` (`SQLiteIndexer` returns `DatabaseInventory` objects; it globs `*/data.sqlite` under the sites directory and skips paths containing `backup`. `extract_message`, `extract_media` and `get_messages_batch` read rows for later phases, filtering to `type = 'message'`)
 
 ```python
 from migration.src.indexers.sqlite_indexer import SQLiteIndexer
@@ -174,6 +176,9 @@ total_media = sum(inv.total_media for inv in inventories)
 - Media reference inventory
 
 ### Phase 2: Database Migration (Week 3-6)
+
+!!! note "Planned"
+    Not implemented. `sqlite_schema.py` defines `SPAM_CONTENT_PATTERNS` (four literal strings) but nothing applies them, and the processor's production spam filter is not wired in.
 
 **Goal**: Migrate messages to PostgreSQL with enrichment
 
@@ -209,6 +214,9 @@ The migration reuses the production spam filter from the processor service:
     OSINT scoring can be disabled during migration for faster processing. Enrichment can be run afterward as a batch job using the enrichment service.
 
 ### Phase 3: Media Migration (Week 7-10)
+
+!!! note "Planned"
+    Not implemented; only the storage backends it would use exist.
 
 **Goal**: Copy media files to S3 with deduplication
 
@@ -294,8 +302,8 @@ from migration.src.storage.minio_backend import MinIOBackend
 
 storage = MinIOBackend(
     endpoint="localhost:9000",
-    access_key="minioadmin",
-    secret_key="minioadmin",
+    access_key="<MINIO_ACCESS_KEY>",
+    secret_key="<MINIO_SECRET_KEY>",
     secure=False
 )
 
@@ -320,7 +328,7 @@ with open("video.mp4", "rb") as f:
 
 Bridges S3 API to Hetzner Storage Box via filesystem mount (SSHFS/WebDAV/CIFS).
 
-**Implementation**: `src/storage/hetzner_backend.py`
+**Implementation**: `src/storage/hetzner_backend.py` (also has `verify_mount()`; the constructor raises `ValueError` if the mount point is missing or not a directory)
 
 ```python
 from migration.src.storage.hetzner_backend import HetznerS3Bridge
@@ -385,15 +393,22 @@ await storage.put_object(bucket, key, data, length)
 
 ### Phase 1: Run Indexing
 
-Scan all legacy databases and build inventory:
+Scan all legacy databases and build inventory. There is no CLI; call the indexer from Python from the repository root:
 
-```bash
-python -m services.migration.src.indexers.sqlite_indexer \
-    --sites-dir /path/to/tg-archive-video/sites \
-    --output-json /tmp/migration_inventory.json
+```python
+import asyncio
+from pathlib import Path
+from services.migration.src.indexers.sqlite_indexer import SQLiteIndexer
+
+inventories = asyncio.run(
+    SQLiteIndexer().scan_all_databases(Path("/path/to/tg-archive-video/sites"))
+)
+print(sum(i.total_messages for i in inventories), "messages")
 ```
 
-**Expected Output**:
+`DatabaseInventory` has `db_name`, `db_path`, `total_messages`, `total_media`, `date_range`, `channels` and `media_refs`; there is no JSON export.
+
+**Expected Output** (printed by `scan_all_databases`):
 
 ```
 ============================================================
@@ -459,9 +474,12 @@ python -m services.migration.src.controllers.migration_controller \
 
 ## Configuration
 
-Migration behavior is configured via YAML file.
+!!! note "Planned"
+    No configuration loader exists. The YAML below is the intended design.
 
-**Location**: `services/migration/config/migration_config.yaml`
+Migration behavior would be configured via a YAML file.
+
+**Location** (planned): `services/migration/config/migration_config.yaml`
 
 ```yaml
 # Source databases
@@ -513,20 +531,22 @@ progress:
 
 ### Environment Variables
 
-The following environment variables can be used:
+No code in `services/migration/` reads environment variables. The placeholders in the planned YAML (and the service README's `SOURCE_DB_PATH`, `MIGRATION_BATCH_SIZE`) are design-only. When wiring it up, use the platform's `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` and `POSTGRES_*` variables. Names below are not read by anything today.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `POSTGRES_PASSWORD` | PostgreSQL password | (required) |
-| `MINIO_ROOT_USER` | MinIO access key | `minioadmin` |
-| `MINIO_ROOT_PASSWORD` | MinIO secret key | `minioadmin` |
-| `MIGRATION_LOG_LEVEL` | Logging verbosity | `INFO` |
+| Variable | Description |
+|----------|-------------|
+| `POSTGRES_PASSWORD` | PostgreSQL password |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | MinIO credentials (platform compose uses `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`) |
+| `MIGRATION_LOG_LEVEL` | Logging verbosity |
 
 ## Progress Tracking
 
-Migration progress is tracked in a SQLite database to support resumption after interruption.
+!!! note "Planned"
+    Not implemented; no `progress.db` or `migrations/` directory exists.
 
-**Location**: `services/migration/migrations/progress.db`
+Migration progress would be tracked in a SQLite database to support resumption after interruption.
+
+**Location** (planned): `services/migration/migrations/progress.db`
 
 ### Progress Schema
 
@@ -598,7 +618,7 @@ database  uavideos              pending     0/126212      0.0%
 
 ### Resuming Migration
 
-If migration is interrupted, it can be resumed from the last checkpoint:
+Planned behaviour: an interrupted migration resumes from the last checkpoint:
 
 ```bash
 # Migration automatically detects incomplete phases
@@ -608,19 +628,12 @@ python -m services.migration.src.controllers.migration_controller \
 
 ## Testing
 
-The migration service includes comprehensive tests.
+`services/migration/tests/` holds storage-approach experiments only (`test_direct_mount.py`, `test_storage_approaches.md`, `docker-compose.storage-test.yml`, two setup scripts). `test_direct_mount.py` is a script of `test_*` functions that talks to a live MinIO (`test_minio_connection`, `test_create_bucket`, `test_upload_new_file`, ...), not a self-contained pytest suite. There are no tests for the indexer or the backend classes.
 
 ### Running Tests
 
 ```bash
-# All tests
-pytest services/migration/tests/
-
-# SQLite indexer tests
-pytest services/migration/tests/test_sqlite_indexer.py -v
-
-# Storage backend tests
-pytest services/migration/tests/test_storage_backends.py -v
+python services/migration/tests/test_direct_mount.py   # needs the test MinIO below
 ```
 
 ### Test Storage Setup
@@ -637,13 +650,12 @@ For testing storage backends, use the provided setup scripts:
 
 ### Integration Tests
 
-The migration service includes integration tests that validate the complete flow:
+Bring up the test storage stack, run the script, tear it down:
 
 ```bash
-# Run integration tests with Docker Compose
 cd services/migration/tests
 docker-compose -f docker-compose.storage-test.yml up -d
-pytest test_integration.py -v
+python test_direct_mount.py
 docker-compose -f docker-compose.storage-test.yml down
 ```
 
@@ -744,20 +756,11 @@ docker-compose restart minio
       batch_size: 5000  # Increase from 1000
     ```
 
-4. **Skip media migration** and run separately:
-    ```bash
-    # Migrate database only first
-    python -m services.migration.src.controllers.migration_controller \
-        --phase database
-
-    # Then migrate media in background
-    nohup python -m services.migration.src.controllers.migration_controller \
-        --phase media &
-    ```
+4. **Skip media migration** and run it separately (planned: the controller does not exist yet).
 
 ## Rollback Strategy
 
-Migration is designed to be non-destructive.
+Migration is designed to be non-destructive. Because only the read-only indexer exists today, there is currently nothing to roll back.
 
 ### Rollback Principles
 
@@ -776,15 +779,13 @@ pkill -f migration
 
 # 2. Drop migrated data from PostgreSQL (if needed)
 docker-compose exec postgres psql -U osint_user -d osint_platform -c "
-  TRUNCATE messages, media_files, message_media, channels CASCADE;
+  TRUNCATE messages, media_files, message_media, channels CASCADE;  -- destroys ALL platform data, not just migrated rows
 "
 
-# 3. Reset progress tracker
-rm services/migration/migrations/progress.db
+# 3. Reset progress tracker (planned; no progress.db exists yet)
+rm -f services/migration/migrations/progress.db
 
-# 4. Restart from Phase 1
-python -m services.migration.src.indexers.sqlite_indexer \
-    --sites-dir /path/to/tg-archive-video/sites
+# 4. Restart from Phase 1 (re-run the indexer snippet above)
 ```
 
 !!! warning "MinIO Data"
@@ -792,17 +793,17 @@ python -m services.migration.src.indexers.sqlite_indexer \
 
     ```bash
     # List migrated media
-    mc ls local/media/migrated/
+    mc ls local/<bucket>/migrated/
 
     # Remove migrated media
-    mc rm --recursive --force local/media/migrated/
+    mc rm --recursive --force local/<bucket>/migrated/
     ```
 
 ## Expected Outcomes
 
 ### Data Volume Reduction
 
-The migration applies production-quality filtering to reduce data volume:
+Planned targets (estimates, not measured results):
 
 | Metric | Before | After | Reduction |
 |--------|--------|-------|-----------|
@@ -858,6 +859,6 @@ Target quality thresholds:
 
 ---
 
-**Last Updated**: 2025-12-09
+**Last Updated**: 2026-10-27
 
-**Status**: Under Development - Phase 1 (Indexing) Complete
+**Status**: Under Development - library-only indexer and storage backends exist; Phases 2-4 are design

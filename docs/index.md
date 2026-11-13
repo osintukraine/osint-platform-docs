@@ -78,13 +78,13 @@ A fully self-hosted OSINT platform with:
 ## Key Features
 
 - **Real-time Telegram Monitoring**: Archive messages, media, and metadata from hundreds of channels
-- **Multi-model AI Enrichment**: Entity extraction, sentiment analysis, and AI tagging using self-hosted Ollama
+- **AI Enrichment**: Entity extraction, sentiment analysis, AI tagging and geolocation using a self-hosted LLM (GPU gateway or Ollama)
 - **Semantic Search**: Vector-based search with pgvector for natural language queries
 - **Entity Knowledge Graph**: OpenSanctions/Yente integration, Wikidata enrichment, custom entity lists
 - **RSS Feed Management**: Create custom feeds with advanced filtering for any search query
-- **Multi-channel Notifications**: Real-time alerts via Discord, Telegram, email, or any webhook
-- **Spam Filtering**: Multi-layer spam detection with >95% accuracy
-- **Content Deduplication**: SHA-256-based media deduplication saves 50-70% storage
+- **Notifications**: Push alerts through the built-in ntfy server; RSS feeds can be bridged to Discord, email or webhooks
+- **Spam Filtering**: Embedding pre-filter plus LLM verdict, with re-checks by the backlog worker
+- **Content Deduplication**: SHA-256-based media deduplication stores identical files once
 - **LLM-as-Arbiter**: AI decides what to archive based on folder tier (lenient/strict/discovery)
 
 ## Architecture Overview
@@ -111,6 +111,11 @@ The platform follows a **producer-consumer architecture** with clear separation 
 git clone https://github.com/osintukraine/osint-intelligence-platform.git
 cd osint-intelligence-platform
 
+# Configure, then follow the Quick Start for the one-time steps
+cp .env.example .env            # set Telegram API credentials and passwords
+./scripts/build-pytorch-services.sh
+python3 scripts/telegram_auth.py
+
 # Start the platform
 docker-compose up -d
 
@@ -121,7 +126,7 @@ docker-compose logs -f
 open http://localhost:3000
 ```
 
-For detailed installation instructions, see the [Operator Guide](operator-guide/installation.md).
+For the full walkthrough, see the [Quick Start](getting-started/quick-start.md); for production installs, see the [Operator Guide](operator-guide/installation.md).
 
 ## Documentation Goals
 

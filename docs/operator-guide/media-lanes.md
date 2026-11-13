@@ -13,7 +13,7 @@ Design record: [media lanes plan](https://github.com/osintukraine/osint-intellig
 2. Make sure the `media-worker` service is running (it is part of the core stack, no profile needed). Scale it with `MEDIA_WORKER_REPLICAS` (default 1). `MEDIA_DOWNLOAD_TIMEOUT_S` (default 1800) is the per-file timeout.
 3. Turn on the admin setting `media_lane_enabled` (Admin, Config, Platform Settings). The default is **off**, which keeps the old behaviour (download inline, then save).
 
-The media-worker and the processor share one Telegram account, so keep media concurrency modest.
+The media-worker and the processor share one Telegram account, so keep media concurrency modest. In multi-account mode (`TELEGRAM_MODE=multi`) there is one media worker per account (`media-worker-russia`, `media-worker-ukraine`), each downloading only its account's channels, and the default `media-worker` is stopped. The lane must be on in that mode: the processors download inline only for default-account channels, and `switch-telegram-mode.sh multi` refuses to switch otherwise.
 
 ## Media status
 

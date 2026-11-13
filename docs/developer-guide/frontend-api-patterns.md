@@ -9,9 +9,9 @@ Guide for making API calls from the Next.js frontend.
 The frontend has two patterns for API calls:
 
 1. **Centralized API client** (`lib/api.ts`) - Preferred for standard pages
-2. **Direct fetch with NEXT_PUBLIC_API_URL** - Used in admin pages
+2. **Admin client** (`lib/admin-api.ts`: `adminFetch`, `adminGet`, `adminPost`, `adminApi`, ...) - Used by admin pages; always sends session cookies
 
-The centralized client handles server vs client context automatically.
+The centralized client handles server vs client context automatically. For data that several components share or refresh, use TanStack Query hooks in `hooks/` (for example `useNetworkGraph.ts`) on top of these clients.
 
 ---
 
@@ -24,21 +24,22 @@ The centralized client handles server vs client context automatically.
 ### How It Works
 
 ```typescript
-// lib/api.ts (line 27)
+// lib/api.ts (simplified; the real function also validates the URL and throws on a bad one)
 function getApiUrl(): string {
   // Server-side (Next.js server components)
   if (typeof window === 'undefined') {
     return process.env.API_URL || 'http://api:8000';
   }
 
-  // Client-side (browser) - use relative URLs or NEXT_PUBLIC_API_URL
+  // Client-side (browser): relative URLs when unset, so /api/* goes through Caddy
   return process.env.NEXT_PUBLIC_API_URL || '';
 }
 ```
 
 **Key points:**
 - **Server-side** (SSR): Uses `API_URL` → `http://api:8000` (Docker internal network)
-- **Client-side** (browser): Uses `NEXT_PUBLIC_API_URL` or empty string (relative URLs)
+- **Client-side** (browser): Uses `NEXT_PUBLIC_API_URL` or empty string (relative URLs, routed Caddy → Oathkeeper → API)
+- `authFetch(url, options)` is a `fetch` wrapper with `credentials: 'include'`; use it for calls that need the Ory Kratos session cookie
 
 ### Available Functions
 
@@ -50,6 +51,10 @@ import {
   getChannels,
   getChannel,
   getEntity,
+  searchEntities,
+  getMessageNetwork,
+  getChannelNetwork,
+  getMessageSocialGraph,
   getEntityMessages,
   getEntityRelationships,
   getMessageValidation,
@@ -66,9 +71,10 @@ import {
 // app/messages/[id]/page.tsx
 import { getMessage, getSimilarMessages } from '@/lib/api';
 
-export default async function MessagePage({ params }: { params: { id: string } }) {
-  const message = await getMessage(parseInt(params.id));
-  const similar = await getSimilarMessages(parseInt(params.id), 5);
+export default async function MessagePage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;  // Next.js 15: params is async
+  const message = await getMessage(parseInt(id));
+  const similar = await getSimilarMessages(parseInt(id), 5);
 
   return (
     <div>
@@ -81,45 +87,21 @@ export default async function MessagePage({ params }: { params: { id: string } }
 
 ---
 
-## Direct Fetch Pattern (Admin Pages)
+## Admin Pages
 
-Admin pages use direct fetch with `NEXT_PUBLIC_API_URL`:
-
-```typescript
-// app/admin/page.tsx (line 33)
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-
-// Usage
-const response = await fetch(`${API_URL}/api/admin/stats`);
-```
-
-### Why Admin Pages Are Different
-
-Admin pages often:
-- Call endpoints not in the centralized client
-- Need more control over fetch options
-- Are client-side only (use `'use client'`)
-
-### Admin Page Pattern
+Admin pages call `lib/admin-api.ts`, which includes credentials (session cookies) with every request and throws an `Error` carrying the API's `detail`:
 
 ```typescript
 // app/admin/channels/page.tsx
 'use client';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { adminGet, adminPost } from '@/lib/admin-api';
 
-export default function AdminChannelsPage() {
-  const [channels, setChannels] = useState([]);
-
-  useEffect(() => {
-    fetch(`${API_URL}/api/admin/channels`)
-      .then(res => res.json())
-      .then(data => setChannels(data));
-  }, []);
-
-  return <div>{/* ... */}</div>;
-}
+const channels = await adminGet<Channel[]>('/api/admin/channels');
+await adminPost('/api/admin/channels/42/restore', {});
 ```
+
+`adminGet`, `adminPost`, `adminPut`, `adminPatch`, `adminDelete` wrap `adminFetch`; the same functions are grouped in the `adminApi` object. Do not use raw `fetch()` in admin pages: without `credentials: 'include'` the browser does not send the Kratos cookie and the API answers 401.
 
 ---
 
@@ -127,6 +109,31 @@ export default function AdminChannelsPage() {
 
 | Variable | Context | Default | Purpose |
 |----------|---------|---------|---------|
+| `API_URL` | Server-side (runtime) | `http://api:8000` | Internal Docker network |
+| `NEXT_PUBLIC_API_URL` | Client-side (**build time**) | empty = relative URLs | Browser access to the API |
+| `NEXT_PUBLIC_MEDIA_URL` | Client-side (build time) | empty = relative `/media/...` | Override media base URL (CDN) |
+| `NEXT_PUBLIC_BASE_URL` | Client-side (build time) | `http://localhost:3000` | Absolute URLs for OpenGraph tags |
+| `INTERNAL_API_URL` | `next.config.js` rewrites | `http://api:8000` | Dev fallback: proxies `/media/*` to the API |
+| `MINIO_URL` | Server-side | `http://minio:9000/osint-media` | Internal object storage |
+
+!!! warning "NEXT_PUBLIC_* are baked into the bundle"
+    Next.js inlines `NEXT_PUBLIC_*` at build time. The frontend `Dockerfile` takes them as build `ARG`s (set under `build.args` in `docker-compose.yml`); changing them in the runtime environment has no effect on browser code. Rebuild: `docker-compose build frontend`.
+
+### Docker Compose Configuration
+
+```yaml
+# docker-compose.yml
+frontend:
+  build:
+    args:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-http://localhost:3000}
+  environment:
+    - API_URL=http://api:8000
+    - MINIO_URL=http://minio:9000/osint-media
+```
+
+----------|---------|---------|---------|
 | `API_URL` | Server-side | `http://api:8000` | Internal Docker network |
 | `NEXT_PUBLIC_API_URL` | Client-side | `http://localhost:8000` | Browser access to API |
 | `MINIO_URL` | Server-side | `http://minio:9000/telegram-archive` | Internal media storage |
@@ -151,25 +158,15 @@ frontend:
 The centralized client uses a `fetchApi` helper with built-in features:
 
 ```typescript
-// lib/api.ts (line 101)
+// lib/api.ts (simplified)
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
-  const url = `${getApiUrl()}${path}`;
-
-  // Get auth token if available
-  const token = getAuthToken();
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options?.headers as Record<string, string>),
-  };
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const response = await fetch(url, {
+  // Browser GETs with the same path that are in flight share one request
+  // (not on the server: the map would be shared between users)
+  ...
+  const response = await fetch(`${getApiUrl()}${path}`, {
     ...options,
-    headers,
-    cache: 'no-store',  // Dynamic data, no caching
+    headers,             // Content-Type JSON + Bearer token when window.__AUTH_TOKEN__ is set
+    cache: 'no-store',   // Dynamic data, no caching
   });
 
   if (!response.ok) {
@@ -183,7 +180,8 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
 
 ### Features
 
-- **Automatic auth** - Injects Bearer token if available
+- **Automatic auth** - Injects a Bearer token if `window.__AUTH_TOKEN__` is set (session-cookie calls go through `authFetch`)
+- **Request sharing** - Identical in-flight browser GETs are de-duplicated
 - **Error handling** - Parses error.detail from API responses
 - **No caching** - Uses `cache: 'no-store'` for dynamic data
 - **Expected error filtering** - Doesn't log expected errors (missing embeddings, etc.)
@@ -192,18 +190,21 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
 
 ## Media URLs
 
-For archived media (images, videos), use `getMediaUrl()`:
+For archived media (images, videos), use `getMediaUrl()`. It always returns a browser-accessible URL, even during SSR:
 
 ```typescript
 import { getMediaUrl } from '@/lib/api';
 
-// Convert S3 key to full URL
-const imageUrl = getMediaUrl(message.s3_key);
-// Returns: http://localhost:9000/telegram-archive/media/2f/a1/abc123.jpg
+// Convert S3 key to a URL (relative: Caddy routes /media/* to the local buffer or storage box)
+const imageUrl = getMediaUrl(item.url);
+// Returns: /media/2f/a1/abc123.jpg  (or NEXT_PUBLIC_MEDIA_URL + path)
 
-// For OpenGraph tags (must be publicly accessible)
-const ogImageUrl = getMediaUrl(message.s3_key, true);  // forceExternal=true
+// For OpenGraph tags (must be absolute and publicly accessible)
+const ogImageUrl = getMediaUrl(item.url, true);  // forceExternal=true
+// Returns: ${NEXT_PUBLIC_BASE_URL}/media/2f/a1/abc123.jpg
 ```
+
+Messages carry `media_items: MediaItem[]` (`url` is the S3 key, plus `mime_type` and a semantic `media_type`); `media_urls` is deprecated. See [Media Storage](media-storage.md) for how files reach `/media/*`.
 
 ---
 
@@ -233,12 +234,12 @@ interface Message {
   channel_id: number;
   content: string;
   content_translated: string | null;
-  telegram_date: string;
+  telegram_date: string | null;
   is_spam: boolean;
   osint_topic: string | null;
   importance_level: string | null;
   media_type: string | null;
-  s3_key: string | null;
+  media_items: MediaItem[];
   // ... more
 }
 
@@ -246,17 +247,25 @@ interface SearchParams {
   q?: string;
   channel_id?: number;
   topic?: string;
+  importance_level?: string;
   days?: number;
-  limit?: number;
-  offset?: number;
-  sort?: 'desc' | 'asc';
+  page?: number;
+  page_size?: number;
+  cursor?: string;        // keyset cursor from next_cursor; page is ignored when set
+  sort_by?: string;
+  sort_order?: 'asc' | 'desc';
+  // ... more filters
 }
 
 interface SearchResult {
   items: Message[];
   total: number;
-  offset: number;
-  limit: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+  total_is_estimate?: boolean;  // true when total is a planner estimate
 }
 ```
 
@@ -317,7 +326,7 @@ catch (err) {
 The validation endpoint uses a special pattern with 202 status:
 
 ```typescript
-// lib/api.ts (line 285)
+// lib/api.ts
 export async function getMessageValidation(
   messageId: number
 ): Promise<ValidationResponse | ValidationPendingResponse | null> {
@@ -351,10 +360,10 @@ export async function getMessageValidation(
 | Scenario | Pattern |
 |----------|---------|
 | Standard pages (messages, search, entities) | Use `lib/api.ts` functions |
-| Admin pages | Direct fetch with `NEXT_PUBLIC_API_URL` |
-| New endpoints not in client | Add to `lib/api.ts` or use direct fetch |
+| Admin pages | `lib/admin-api.ts` (`adminGet`, `adminPost`, ...) |
+| New endpoints not in client | Add to `lib/api.ts` (or `lib/api/<area>.ts`, e.g. `vessels.ts`) |
 | Server components (SSR) | `lib/api.ts` works automatically |
-| Client components | `lib/api.ts` or direct fetch |
+| Client components with shared or refreshing data | TanStack Query hook in `hooks/` calling `lib/api.ts` |
 
 ### Adding New API Functions
 

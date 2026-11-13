@@ -37,19 +37,21 @@ AUTH_REQUIRED=false
 # .env configuration
 AUTH_PROVIDER=jwt
 AUTH_REQUIRED=true
-JWT_SECRET_KEY=<generate-random-256-bit-key>
+JWT_SECRET_KEY=<generate-random-256-bit-key>   # at least 32 characters, API refuses to start otherwise
+JWT_ADMIN_PASSWORD=<admin-password>            # without it the built-in admin user cannot log in
 JWT_ALGORITHM=HS256
 JWT_EXPIRATION_MINUTES=60
-JWT_REFRESH_EXPIRATION_DAYS=30
 ```
 
 **How It Works:**
 
-1. User logs in with email/password via `/api/auth/login`
-2. API returns JWT access token + refresh token
-3. Frontend stores token in localStorage
-4. All API requests include `Authorization: Bearer <token>` header
-5. API validates JWT signature and expiration
+1. User logs in with username/password via `POST /auth/login` on the API
+2. API returns a JWT access token (`access_token`, `token_type`, `expires_in`)
+3. The client sends `Authorization: Bearer <token>` with every request
+4. API validates JWT signature and expiration
+
+!!! note "Path prefix"
+    The auth router is mounted at `/auth` (not `/api/auth`). Behind the production Caddy, `/auth/*` is routed to the frontend, so JWT login is intended for direct API access (development or small private deployments), not the production Caddy setup.
 
 **Generate JWT Secret:**
 
@@ -61,16 +63,14 @@ openssl rand -hex 32
 **Features:**
 
 - Simple setup (no external dependencies)
-- Stateless (no session storage required)
-- Fast validation (HMAC signature check)
-- Refresh token support
+- Stateless tokens (HMAC signature check)
+- Admins can create users with `POST /auth/users`; users can change their password with `POST /auth/users/me/password`
 
 **Limitations:**
 
-- Manual user management
-- No password recovery flow
-- No OAuth2 providers
-- No MFA support
+- Small local user store (a built-in `admin` user plus users added via the API), not a database-backed identity system
+- No refresh-token or token-verify endpoint (log in again when the token expires)
+- No password recovery flow, OAuth2 providers or MFA
 
 ### 3. Cloudron Mode (Cloudron App Store)
 
@@ -85,8 +85,8 @@ AUTH_REQUIRED=true
 **How It Works:**
 
 1. Cloudron authenticates user
-2. Cloudron injects headers: `Cloudron-UserId`, `Cloudron-Email`
-3. API reads headers and creates session
+2. Cloudron injects the user's identity into the request
+3. The API's Cloudron provider reads it and builds the user context
 
 !!! info "Cloudron Only"
     This mode only works when deployed via Cloudron App Store. Headers are injected by Cloudron's reverse proxy.
@@ -104,13 +104,19 @@ AUTH_REQUIRED=true
 KRATOS_SECRET_COOKIE=<openssl rand -base64 32>
 KRATOS_SECRET_CIPHER=<openssl rand -base64 24>  # Must be exactly 32 chars
 
-# OAuth providers (optional)
+KRATOS_BROWSER_URL=https://your-domain.com   # public URL Kratos renders into redirects/CORS
+
+# Optional first admin (created once by the kratos-init container)
+INITIAL_ADMIN_EMAIL=admin@yourdomain.com
+INITIAL_ADMIN_PASSWORD=<strong-password>
+
+# OAuth providers (optional, see Step 2 below)
 GOOGLE_CLIENT_ID=your_google_client_id
 GOOGLE_CLIENT_SECRET=your_google_client_secret
 GITHUB_CLIENT_ID=your_github_client_id
 GITHUB_CLIENT_SECRET=your_github_client_secret
 
-# SMTP (required for production)
+# SMTP (required for recovery/verification emails in production)
 SMTP_CONNECTION_URI=smtps://apikey:YOUR_SENDGRID_API_KEY@smtp.sendgrid.net:465
 SMTP_FROM_ADDRESS=noreply@yourdomain.com
 SMTP_FROM_NAME=OSINT Platform
@@ -119,23 +125,26 @@ SMTP_FROM_NAME=OSINT Platform
 **Architecture:**
 
 ```
-User → Frontend → Ory Kratos (authentication) → Session Cookie
-                                                      ↓
-                                              Ory Oathkeeper (access proxy)
-                                                      ↓
-                                                   API Server
+Browser → Caddy → /kratos/*  → Ory Kratos (login, registration, sessions)
+                → /api/*, /  → Oathkeeper → validates ory_kratos_session cookie → API / Frontend
 ```
+
+Oathkeeper injects `X-User-ID`, `X-User-Email` and `X-User-Role` after validating the session. The API only trusts these headers from trusted proxy addresses, and also validates the `ory_kratos_session` cookie against Kratos itself. The role comes from the identity's `metadata_public.role`.
 
 **Features:**
 
 - **Email/password authentication** with bcrypt (cost 12)
-- **OAuth2 providers** (Google, GitHub)
-- **Password recovery** via email verification codes
-- **Email verification** required for registration
-- **MFA support** (TOTP, backup codes)
+- **OAuth2 providers** (Google, GitHub), disabled until client credentials are configured
+- **Password recovery and email verification** via one-time codes
+- **MFA support** (TOTP and lookup/backup codes; settings require the highest available assurance level)
 - **Session management** with secure cookies
-- **Account settings UI** (password change, MFA setup)
-- **Self-service flows** (registration, login, recovery)
+- **Self-service flows** (registration, login, recovery, settings), served by the Next.js frontend under `/auth/*`
+
+!!! warning "Review the shipped Kratos defaults before going live"
+    - `docker-entrypoint.sh` starts Kratos with `--dev`. Dev mode relaxes cookie and URL security checks; decide whether that is acceptable for your deployment.
+    - The `require_verified_address` login hook is commented out in `kratos.yml.template`, so unverified emails can log in. Enable it if you need verified accounts.
+    - Without `SMTP_CONNECTION_URI`, Kratos points at a `mailslurper` host that is not started by default, so recovery/verification emails are never delivered.
+    - Anyone who can reach the registration page can create an account (role `authenticated`). Restrict registration at the proxy or identity schema if the platform is not meant to be open.
 
 ## Setup Instructions
 
@@ -160,31 +169,26 @@ JWT_ALGORITHM=HS256
 JWT_EXPIRATION_MINUTES=60
 ```
 
-**Step 3: Create Admin User**
+**Step 3: Log in as the built-in admin**
 
 ```bash
-# Use API to create admin user (development)
-curl -X POST http://localhost:8000/api/auth/register \
+# The built-in user is "admin"; its password is JWT_ADMIN_PASSWORD
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{
-    "email": "admin@localhost",
-    "password": "change-this-password",
-    "role": "admin"
-  }'
+  -d '{"username":"admin","password":"<JWT_ADMIN_PASSWORD>"}' \
+  | jq -r '.access_token')
 ```
 
-**Step 4: Test Login**
+**Step 4: Create more users and test**
 
 ```bash
-# Get JWT token
-TOKEN=$(curl -X POST http://localhost:8000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@localhost","password":"change-this-password"}' \
-  | jq -r '.access_token')
+# Create a user (admin only; default role is viewer)
+curl -X POST http://localhost:8000/auth/users \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"username":"analyst1","password":"change-this-password","email":"analyst1@example.com","roles":["analyst"]}'
 
-# Test authenticated endpoint
-curl http://localhost:8000/api/user/me \
-  -H "Authorization: Bearer $TOKEN"
+# Check who you are
+curl http://localhost:8000/auth/users/me -H "Authorization: Bearer $TOKEN"
 ```
 
 ### Ory Kratos Setup (Production)
@@ -208,11 +212,14 @@ echo "KRATOS_SECRET_CIPHER=$CIPHER_SECRET" >> .env
 
 **Step 2: Configure OAuth Providers (Optional)**
 
+!!! note "Verify OAuth is actually enabled"
+    `kratos.yml.template` defines the `google` and `github` providers with `client_id: disabled`. `docker-compose.yml` passes `GOOGLE_CLIENT_ID` etc. to the Kratos container, but Kratos cannot override list entries such as `providers` from plain environment variables. To enable a provider, put the client ID and secret into the provider entry of the template, restart Kratos, and test the login flow.
+
 **Google OAuth:**
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
 2. Create OAuth 2.0 Client ID
-3. Set authorized redirect URI: `http://localhost:4433/self-service/methods/oidc/callback/google`
+3. Set authorized redirect URI: `https://your-domain.com/kratos/self-service/methods/oidc/callback/google`
 4. Add to `.env`:
 
 ```bash
@@ -224,7 +231,7 @@ GOOGLE_CLIENT_SECRET=your_client_secret
 
 1. Go to [GitHub Settings > Developer Settings](https://github.com/settings/developers)
 2. Create OAuth App
-3. Set authorization callback URL: `http://localhost:4433/self-service/methods/oidc/callback/github`
+3. Set authorization callback URL: `https://your-domain.com/kratos/self-service/methods/oidc/callback/github`
 4. Add to `.env`:
 
 ```bash
@@ -234,7 +241,7 @@ GITHUB_CLIENT_SECRET=your_github_client_secret
 
 **Step 3: Configure SMTP (Production)**
 
-For production, configure SMTP for email verification and password recovery:
+For production, configure SMTP for email verification and password recovery (compose maps these to Kratos' `COURIER_SMTP_*`):
 
 ```bash
 # SendGrid example
@@ -249,18 +256,20 @@ SMTP_CONNECTION_URI=smtps://YOUR_SMTP_USERNAME:YOUR_SMTP_PASSWORD@email-smtp.us-
 **Step 4: Start Ory Services**
 
 ```bash
-# Start Kratos and Oathkeeper with auth profile
-docker-compose --profile auth up -d kratos oathkeeper
+# Kratos, its migration, the admin bootstrap and Oathkeeper are in the "auth" profile
+docker-compose --profile auth up -d kratos-migrate kratos kratos-init oathkeeper
 ```
+
+If `INITIAL_ADMIN_EMAIL` is set, `kratos-init` creates an admin identity (`metadata_public.role = admin`) once. With `INITIAL_ADMIN_PASSWORD` empty it prints a recovery link instead. It is idempotent and skips creation when an admin already exists.
 
 **Step 5: Verify Setup**
 
 ```bash
-# Check Kratos health
+# Check Kratos health (published on the host by docker-compose.yml)
 curl http://localhost:4433/health/ready
 
-# Check Oathkeeper health
-curl http://localhost:4455/health/ready
+# Oathkeeper's API port (4456) serves the health endpoint; 4455 is the proxy
+curl http://localhost:4456/health/ready
 ```
 
 ## Feed Token Authentication
@@ -269,104 +278,94 @@ Feed tokens enable **secure RSS/Atom/JSON feed subscriptions** without requiring
 
 ### How Feed Tokens Work
 
-1. User generates feed token in account settings
-2. Platform creates HMAC-signed feed URL with token
-3. Feed reader makes request with token + signature
-4. API validates HMAC signature and token status
+1. A logged-in user creates a feed token (web UI: Settings -> Feed Tokens)
+2. The platform signs the feed URL with the token's secret (HMAC)
+3. The feed reader requests the URL with `token` and `sig`
+4. The API validates the token (active, not revoked) and recomputes the signature over the query parameters
 5. Feed data is returned if valid
 
 **Feed URL Format:**
 
 ```
-http://localhost:8000/api/rss/search?q=ukraine&token=<token-id>&sig=<hmac-signature>
+https://your-domain.com/rss/search?q=ukraine&token=<token-id>&sig=<hmac-signature>
 ```
+
+Feeds live under `/rss/*` (not `/api/rss/*`). Caddy routes `/rss/*` directly to the API, bypassing Oathkeeper.
 
 ### Enable Feed Authentication
 
 ```bash
-# Add to .env
-FEED_AUTH_REQUIRED=true  # Require tokens for all feeds
+# .env (docker-compose.yml defaults to true; .env.example ships true)
+FEED_AUTH_REQUIRED=true  # Require token + signature for all feeds
 ```
+
+With `false`, feeds are public and tokens are optional. A maximum of 10 active tokens per user is enforced.
 
 ### Generate Feed Token
 
+Tokens are created by an authenticated user (session cookie, or a bearer token/API key accepted by your auth provider):
+
 ```bash
-# Via API (authenticated user)
-curl -X POST http://localhost:8000/api/feed-tokens \
+# 1. Create the token. The plaintext token is returned ONCE.
+curl -X POST https://your-domain.com/api/feed-tokens \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "name": "My RSS Reader",
-    "description": "Personal feed subscription",
-    "scopes": ["read:feeds"]
-  }'
+  -d '{"label": "My RSS Reader"}'
+
+# 2. Sign a feed URL with that token
+curl -X POST https://your-domain.com/api/feed-tokens/<token-id>/sign-url \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"endpoint": "/rss/search", "params": {"q": "ukraine"}}'
 ```
 
-**Response:**
-
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "name": "My RSS Reader",
-  "token_prefix": "ft_1234",
-  "created_at": "2025-01-01T00:00:00Z",
-  "last_used_at": null,
-  "feed_url_template": "http://localhost:8000/api/rss/search?token={token}&sig={signature}&q={query}"
-}
-```
+The response of step 2 contains the full signed `url`. Changing any query parameter invalidates the signature. Tokens carry no scopes.
 
 ### Revoke Feed Token
 
 ```bash
 # Revoke token
-curl -X DELETE http://localhost:8000/api/feed-tokens/<token-id> \
+curl -X DELETE https://your-domain.com/api/feed-tokens/<token-id> \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 ## Session Management
 
-### Redis-Based Sessions
+### Ory Kratos Sessions
 
-Sessions are stored in Redis for fast access and automatic expiration:
+Kratos stores identities and sessions in PostgreSQL (the `kratos-migrate` container creates its tables in the platform database); Redis is not used for sessions.
 
-```bash
-# Redis configuration in .env
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_PASSWORD=<strong-random-password>
-REDIS_DB=0
-```
+- **Ory Kratos**: browser session cookie `ory_kratos_session`; the lifespan is the Kratos default unless you set `session.lifespan` in `kratos.yml.template`
+- **JWT**: access token only, lifetime `JWT_EXPIRATION_MINUTES` (default 60)
 
-**Session Expiration:**
-
-- **Ory Kratos**: 24 hours (configurable in `kratos.yml`)
-- **JWT**: 60 minutes access token + 30 days refresh token
+Admins can list and revoke a user's Kratos sessions via `GET/DELETE /api/admin/users/{user_id}/sessions`.
 
 ### Session Security
 
 **Session Cookies (Ory Kratos):**
 
 - **HttpOnly** - Prevents JavaScript access (XSS protection)
-- **Secure** - HTTPS only (production)
-- **SameSite=Lax** - CSRF protection
-- **Signed** - HMAC signature prevents tampering
+- **Secure** - set when served over HTTPS
+- **SameSite=Lax** - CSRF protection (set explicitly in the template)
 
 **JWT Tokens:**
 
-- **Signature** - HMAC-SHA256 prevents tampering
-- **Expiration** - Short-lived access tokens (60 minutes)
-- **Refresh tokens** - Stored HttpOnly cookies (not localStorage)
+- **Signature** - HMAC (`JWT_ALGORITHM`, default HS256) prevents tampering
+- **Expiration** - short-lived access tokens (`JWT_EXPIRATION_MINUTES`)
+
+### API Keys
+
+For scripts and integrations, users can create API keys (`/api/api-keys`; tokens start with `ak_` and are sent as `Authorization: Bearer ak_...`). Scopes: `read`, `write`, `media`, `export`, `admin` (only admins may create `admin`-scope keys). Keys can expire (`expires_in_days`, 1-365) and be revoked with `DELETE /api/api-keys/{id}`. API key authentication has the highest priority in the auth middleware.
 
 ## Password Policies
 
 ### Ory Kratos Password Requirements
 
-Configured in `~/code/osintukraine/osint-intelligence-platform/infrastructure/kratos/kratos.yml`:
+Configured in `infrastructure/kratos/kratos.yml.template` (rendered to `/tmp/kratos.yml` at container start):
 
-- **Minimum length**: 8 characters
+- **Password policy**: Kratos defaults (minimum length 8, breach-list check); the template sets no custom policy
 - **Hashing algorithm**: bcrypt with cost 12
-- **Password history**: Not enforced (can be added)
-- **Expiration**: No automatic expiration
+- **Password history / expiration**: not enforced
 
 ### Password Recovery Flow
 
@@ -436,27 +435,23 @@ Identical to Google flow, but uses GitHub as identity provider.
 
 ```bash
 # Login to get token
-TOKEN=$(curl -X POST http://localhost:8000/api/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"user@example.com","password":"password"}' \
+  -d '{"username":"analyst1","password":"password"}' \
   | jq -r '.access_token')
 
 # Use token for authenticated requests
-curl http://localhost:8000/api/bookmarks \
+curl http://localhost:8000/api/bookmarks/ \
   -H "Authorization: Bearer $TOKEN"
-
-# Refresh token when expired
-REFRESH_TOKEN=$(curl -X POST http://localhost:8000/api/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refresh_token":"<your-refresh-token>"}' \
-  | jq -r '.access_token')
 ```
+
+When the token expires, log in again.
 
 ### Feed Token Authentication
 
 ```bash
 # Feed URL includes token + HMAC signature
-curl "http://localhost:8000/api/rss/search?q=ukraine&token=550e8400-e29b-41d4-a716-446655440000&sig=a1b2c3d4e5f6..."
+curl "https://your-domain.com/rss/search?q=ukraine&token=550e8400-e29b-41d4-a716-446655440000&sig=a1b2c3d4e5f6..."
 ```
 
 ## Security Best Practices
@@ -493,54 +488,41 @@ DOMAIN=yourdomain.com
 
 ### Rate Limiting
 
-Protect authentication endpoints from brute force:
+Brute-force protection is applied at Caddy (`infrastructure/caddy/Caddyfile.security`, per client IP):
 
-```bash
-# API rate limiting (in .env)
-API_RATE_LIMIT_PER_MINUTE=60
-API_RATE_LIMIT_BURST=100
-```
+| Zone | Limit | Applies to |
+|------|-------|------------|
+| `auth_attempts` | 10 per 5 minutes | `/kratos/*` (login, registration, recovery) |
+| `api_calls` | 60 per minute | `/api/*` |
+| `rss_feeds` | 30 per 2 minutes | `/rss/*` |
+| `admin_access` | 20 per 10 minutes | admin routes |
+
+CrowdSec adds behaviour-based bans on top (see [CrowdSec](crowdsec.md)). The API itself rate limits specific endpoints (map, media redirect) via `*_RATE_LIMIT` variables in `services/api/src/utils/rate_limit.py`.
 
 ### Audit Logging
 
-Enable authentication event logging:
+Admin actions are recorded in the `admin_audit_log` table; Kratos logs authentication flows and the API logs rejected requests:
 
 ```bash
-# All authentication events are logged
-docker-compose logs -f api | grep authentication
+docker-compose logs -f kratos | grep -i "login\|registration"
+docker-compose logs -f api | grep -i "auth"
 ```
 
-**Logged Events:**
-
-- Successful logins
-- Failed login attempts
-- Password changes
-- MFA enrollment
-- Session creation/destruction
-- Token generation/revocation
+Kratos logs at `info` with `leak_sensitive_values: false`. Oathkeeper ships with `log.level: debug` in `infrastructure/oathkeeper/oathkeeper.yml`; lower it to `info` for production.
 
 ## Troubleshooting
 
 ### JWT Issues
 
-**Token Invalid:**
+**API fails to start:** `JWT_SECRET_KEY not configured or too short` means the key is missing or under 32 characters.
+
+**Cannot log in as admin:** `JWT_ADMIN_PASSWORD` is not set.
+
+**Token invalid or expired:**
 
 ```bash
-# Verify JWT_SECRET_KEY matches in .env
-grep JWT_SECRET_KEY .env
-
-# Check token expiration
-curl http://localhost:8000/api/auth/verify \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-**Token Expired:**
-
-```bash
-# Use refresh token to get new access token
-curl -X POST http://localhost:8000/api/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refresh_token":"<refresh-token>"}'
+curl -i http://localhost:8000/auth/users/me -H "Authorization: Bearer $TOKEN"
+# 401 -> log in again
 ```
 
 ### Ory Kratos Issues
@@ -562,8 +544,8 @@ echo -n "$KRATOS_SECRET_CIPHER" | wc -c
 # Check SMTP configuration
 docker-compose logs kratos | grep smtp
 
-# Test with MailSlurper (development)
-# View emails at http://localhost:4436
+# With the default SMTP URI (smtp://mailslurper:1025) no mail server exists;
+# set SMTP_CONNECTION_URI to a real SMTP server
 ```
 
 **OAuth Provider Not Working:**
@@ -574,7 +556,7 @@ grep GOOGLE_CLIENT_ID .env
 grep GITHUB_CLIENT_ID .env
 
 # Check Kratos OAuth configuration
-docker-compose exec kratos cat /etc/config/kratos/kratos.yml | grep -A 10 oidc
+docker-compose exec kratos grep -A 10 oidc /tmp/kratos.yml
 ```
 
 ### Feed Token Issues
@@ -590,7 +572,7 @@ docker-compose exec kratos cat /etc/config/kratos/kratos.yml | grep -A 10 oidc
 
 ```bash
 # Check token status
-curl http://localhost:8000/api/feed-tokens \
+curl https://your-domain.com/api/feed-tokens \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -599,20 +581,14 @@ curl http://localhost:8000/api/feed-tokens \
 ### None → JWT
 
 ```bash
-# 1. Generate JWT secret
-JWT_SECRET=$(openssl rand -hex 32)
-
-# 2. Update .env
+# 1. Update .env
 AUTH_PROVIDER=jwt
 AUTH_REQUIRED=true
-JWT_SECRET_KEY=$JWT_SECRET
+JWT_SECRET_KEY=$(openssl rand -hex 32)
+JWT_ADMIN_PASSWORD=<password>
 
-# 3. Restart API
-docker-compose restart api
-
-# 4. Create admin user
-curl -X POST http://localhost:8000/api/auth/register \
-  -d '{"email":"admin@localhost","password":"<password>","role":"admin"}'
+# 2. Recreate the API so .env changes are applied
+docker-compose up -d api
 ```
 
 ### JWT → Ory
@@ -624,11 +600,13 @@ KRATOS_SECRET_CIPHER=$(openssl rand -base64 24)
 
 # 2. Update .env
 AUTH_PROVIDER=ory
+AUTH_REQUIRED=true
 KRATOS_SECRET_COOKIE=$KRATOS_SECRET_COOKIE
 KRATOS_SECRET_CIPHER=$KRATOS_SECRET_CIPHER
 
-# 3. Start Ory services
-docker-compose --profile auth up -d
+# 3. Also set DEPLOYMENT_MODE, KRATOS_BROWSER_URL, INITIAL_ADMIN_EMAIL, and rebuild the
+#    frontend (AUTH_PROVIDER is baked in as NEXT_PUBLIC_AUTH_PROVIDER at build time)
+docker-compose --profile auth up -d --build frontend
 
 # 4. Users must re-register (password migration not supported)
 ```
@@ -640,7 +618,7 @@ When building features that need to track user ownership (bookmarks, tokens, aud
 ### The Kratos Identity UUID Pattern
 
 !!! warning "Critical: Use kratos_identity_id, NOT users.id"
-    The platform has a **legacy `users` table** with integer IDs that should NOT be used for new features. Always use `kratos_identity_id` (UUID) directly.
+    The database still contains a **legacy `users` table** with integer IDs; it should NOT be used for new features. Always use `kratos_identity_id` (UUID) directly.
 
 **Correct Pattern (new tables):**
 

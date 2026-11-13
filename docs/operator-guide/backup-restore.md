@@ -121,7 +121,7 @@ Creates a complete backup of all platform state including database, sessions, co
 |-----------|------|----------|-------|
 | **PostgreSQL** | 3-50GB | ✅ Critical | Both custom and plain SQL formats |
 | **Telegram Sessions** | ~1MB | ✅ Critical | Auth credentials (KEEP SECURE) |
-| **Configuration** | ~10MB | ✅ Critical | .env, docker-compose.yml, infrastructure/ |
+| **Configuration** | ~10MB | ✅ Critical | .env, docker-compose*.yml, infrastructure/ |
 | **Redis** | ~100MB | ⚠️ Optional | Transient queue data |
 | **Ollama Models** | 5-10GB | ⚠️ Optional | Can be re-downloaded |
 | **Media Files** | 100GB-10TB | ✅ Critical | Use Hetzner snapshots instead |
@@ -155,7 +155,8 @@ Creates a complete backup of all platform state including database, sessions, co
     ./scripts/backup.sh --no-ollama
 
     # Use for frequent backups (every 6 hours)
-    # Ollama models can be re-downloaded with: docker compose exec ollama ollama pull qwen2.5:3b
+    # Ollama models can be re-downloaded with: docker compose exec ollama ollama pull <model>
+    # (embedding models in data/models are NOT in the backup: run ./scripts/fetch-models.sh after a restore)
     ```
 
 === "With Media Files"
@@ -429,6 +430,12 @@ Comprehensive verification before deploying to production. Checks configuration,
     # - Backup status checks
     ```
 
+=== "Auto-fix"
+    ```bash
+    # Attempt to fix issues automatically
+    ./scripts/preflight-check.sh --fix
+    ```
+
 #### Exit Codes
 
 | Code | Status | Meaning | Action |
@@ -587,16 +594,17 @@ jobs:
 **1. PostgreSQL Database** (3-50GB typical)
 
 ```sql
--- Tables requiring backup
+-- The whole database is dumped (pg_dump); the tables that matter most:
 messages              -- Core message archive (largest table)
 channels              -- Monitored Telegram channels
-entities              -- Extracted entities (people, places, units, equipment)
 message_entities      -- Entity mentions in messages
-osint_rules           -- Scoring and classification rules
-llm_prompts           -- AI classification prompts
-spam_patterns         -- Spam filter patterns
+curated_entities      -- Curated entity registry
+llm_prompts           -- Classifier prompt versions (admin-managed, not in files)
+platform_config       -- Runtime settings overridden in the admin UI
+model_configuration   -- Runtime model selection
+storage_boxes         -- Storage box registry (media routing)
 users                 -- Platform users
-media_files           -- Media metadata (references MinIO)
+media_files           -- Media metadata (references MinIO / storage boxes)
 ```
 
 **Why critical**: Irreplaceable historical intelligence data. Cannot be re-fetched from Telegram (messages may be deleted, channels may go private).
@@ -604,7 +612,7 @@ media_files           -- Media metadata (references MinIO)
 **2. MinIO Object Storage** (100GB-10TB typical)
 
 ```bash
-# Bucket: osint-media
+# Bucket: MINIO_BUCKET_NAME (compose default: osint-media)
 media/
 ├── {sha256[:2]}/{sha256[2:4]}/{sha256}.{ext}  # Content-addressed storage
 ├── Example: media/a1/b2/a1b2c3d4e5f6...789.jpg
@@ -616,8 +624,10 @@ media/
 
 ```bash
 telegram_sessions/
-├── listener.session
-├── listener.session-journal
+├── listener.session            # plus discovery, enrichment, analytics
+├── listener-russia.session     # named accounts: <role>-<account>
+├── russia.session              # seed session from telegram_auth.py --account
+└── *.session-journal
 ```
 
 **Why critical**: Loss requires manual re-authentication (2FA, phone verification). May require physical access to phone number. Service downtime during re-auth.
@@ -629,7 +639,7 @@ telegram_sessions/
 ```bash
 .env                           # Environment variables and secrets
 docker-compose.yml             # Service configuration
-config/osint_rules.yml         # Classification rules
+infrastructure/                # Caddy, Kratos, Prometheus, Grafana, Postgres config (in git)
 infrastructure/postgres/init.sql  # Database schema (in git)
 ```
 
@@ -641,10 +651,11 @@ infrastructure/postgres/init.sql  # Database schema (in git)
 
 ```bash
 # Redis streams
-telegram_messages   # In-flight messages being processed
+telegram:messages:realtime   # In-flight live messages
+telegram:messages:backfill   # Queued historical messages
 ```
 
-**Why optional**: Losing Redis queue means messages in-flight are lost, but listener will re-fetch from Telegram on restart. Acceptable data loss (<1 minute of messages).
+**Why optional**: Losing the Redis queue loses messages that were queued but not yet processed. Redis runs with `appendonly` persistence and a named volume, so a normal restart keeps them; after a total loss, gap backfill re-fetches from Telegram where possible.
 
 **6. Monitoring Data** (Prometheus, Grafana)
 
@@ -721,15 +732,15 @@ mc admin replicate add primary-minio https://backup-minio:9000 \
 
 ```bash
 # Create full database dump
-docker-compose exec -T postgres pg_dump -U postgres osint_platform \
+docker compose exec -T postgres pg_dump -U osint_user -d osint_platform \
   > backups/postgres/osint_platform_$(date +%Y%m%d_%H%M%S).sql
 
 # With compression (recommended, 5-10x smaller)
-docker-compose exec -T postgres pg_dump -U postgres osint_platform | \
+docker compose exec -T postgres pg_dump -U osint_user -d osint_platform | \
   gzip > backups/postgres/osint_platform_$(date +%Y%m%d_%H%M%S).sql.gz
 
 # Custom format (allows selective restore, parallel dump)
-docker-compose exec -T postgres pg_dump -U postgres -Fc osint_platform \
+docker compose exec -T postgres pg_dump -U osint_user -Fc osint_platform \
   > backups/postgres/osint_platform_$(date +%Y%m%d_%H%M%S).dump
 ```
 
@@ -746,7 +757,7 @@ gunzip -c backups/postgres/osint_platform_20251209.sql.gz | head -50
 
 ### Incremental Backup (WAL Archiving)
 
-**Enable WAL archiving** in `/infrastructure/postgres/postgresql.conf`:
+**Enable WAL archiving** in `infrastructure/postgres/postgresql.conf` (it is not enabled by default; mount a writable `/backups/wal` into the postgres container first):
 
 ```ini
 # Write-Ahead Logging
@@ -760,7 +771,7 @@ archive_timeout = 3600  # Force WAL switch every hour
 
 ```bash
 # Full base backup (run weekly)
-docker-compose exec postgres pg_basebackup -U postgres -D /backups/base \
+docker compose exec postgres pg_basebackup -U osint_user -D /backups/base \
   -Ft -z -P -X stream
 
 # Incremental WAL files are automatically archived to /backups/wal/
@@ -780,7 +791,7 @@ tar -xzf /backups/base/base.tar.gz -C /var/lib/postgresql/data
 
 ```bash
 # Backup schema without data (useful for tracking schema changes)
-docker-compose exec -T postgres pg_dump -U postgres -s osint_platform \
+docker compose exec -T postgres pg_dump -U osint_user -s osint_platform \
   > backups/schema/schema_$(date +%Y%m%d).sql
 
 # Commit to git for version tracking
@@ -792,11 +803,11 @@ git commit -m "Database schema snapshot $(date +%Y-%m-%d)"
 
 ```bash
 # Backup only messages table (largest table)
-docker-compose exec -T postgres pg_dump -U postgres -t messages osint_platform | \
+docker compose exec -T postgres pg_dump -U osint_user -t messages osint_platform | \
   gzip > backups/postgres/messages_$(date +%Y%m%d).sql.gz
 
 # Backup all except large tables (faster for testing restore)
-docker-compose exec -T postgres pg_dump -U postgres -T messages -T media_files osint_platform | \
+docker compose exec -T postgres pg_dump -U osint_user -T messages -T media_files osint_platform | \
   gzip > backups/postgres/metadata_$(date +%Y%m%d).sql.gz
 ```
 
@@ -816,11 +827,11 @@ docker-compose exec -T postgres pg_dump -U postgres -T messages -T media_files o
 
 ```bash
 # Install MinIO Client (if not already installed)
-docker run --rm -v $(pwd)/bin:/out minio/mc:latest cp /usr/bin/mc /out/mc
+docker run --rm --entrypoint cp -v $(pwd)/bin:/out pgsty/mc:RELEASE.2026-09-16T00-00-00Z /usr/bin/mc /out/mc   # or download mc for your platform
 chmod +x bin/mc
 
-# Configure MinIO alias
-./bin/mc alias set production http://localhost:9000 minioadmin minioadmin
+# Configure MinIO alias (use MINIO_ROOT_USER / MINIO_ROOT_PASSWORD from .env)
+./bin/mc alias set production http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
 
 # Full mirror sync (creates exact copy)
 ./bin/mc mirror production/osint-media /backups/minio/osint-media
@@ -843,8 +854,8 @@ curl https://rclone.org/install.sh | sudo bash
 rclone config create s3-backup s3 \
   provider=Minio \
   endpoint=http://localhost:9000 \
-  access_key_id=minioadmin \
-  secret_access_key=minioadmin
+  access_key_id="$MINIO_ROOT_USER" \
+  secret_access_key="$MINIO_ROOT_PASSWORD"
 
 # Sync to cloud storage (AWS S3, Google Cloud Storage, etc.)
 rclone sync s3-backup:osint-media /backups/minio/osint-media --progress
@@ -862,7 +873,7 @@ rclone sync s3-backup:osint-media wasabi:osint-backup/media --progress
 # Should match
 
 # Verify random sample of files (SHA-256 integrity check)
-docker-compose exec minio sh -c '
+docker compose exec minio sh -c '
   for file in /data/osint-media/media/a1/b2/*.jpg; do
     sha256sum $file
   done
@@ -903,15 +914,16 @@ find /backups/minio -name "*" -mtime +90 > deleted_files_$(date +%Y%m%d).txt
 ### Backup Telegram Sessions
 
 ```bash
-# Create backup of session files
-docker-compose exec listener tar -czf /tmp/sessions-backup.tar.gz /app/sessions/*.session*
-
-# Copy to host
-docker cp osint-listener:/tmp/sessions-backup.tar.gz backups/sessions/sessions_$(date +%Y%m%d_%H%M%S).tar.gz
+# telegram_sessions/ on the host is the bind-mounted volume (/app/sessions in containers)
+mkdir -p backups/sessions
+STAMP=$(date +%Y%m%d_%H%M%S)
+tar -czf backups/sessions/sessions_$STAMP.tar.gz telegram_sessions/
 
 # Verify backup
-tar -tzf backups/sessions/sessions_$(date +%Y%m%d_%H%M%S).tar.gz
-# Should list: sessions/listener.session, sessions/listener.session-journal
+tar -tzf backups/sessions/sessions_$STAMP.tar.gz
+# Should list: telegram_sessions/listener.session, ...
+
+# (backup.sh also includes telegram_sessions.tar.gz in every backup)
 ```
 
 ### Encrypt Session Backups (Recommended)
@@ -932,20 +944,20 @@ gpg --decrypt backups/sessions/sessions_20251209.tar.gz.gpg > sessions.tar.gz
 
 ```bash
 # Stop listener
-docker-compose stop listener
+docker compose stop listener
 
-# Extract sessions to telegram_sessions/ directory
-tar -xzf backups/sessions/sessions_20251209.tar.gz -C telegram_sessions/
+# Extract the archive made above (it contains the telegram_sessions/ folder)
+tar -xzf backups/sessions/sessions_20251209.tar.gz
 
 # Set correct permissions
 chmod 600 telegram_sessions/*.session*
 
 # Restart listener
-docker-compose start listener
+docker compose start listener
 
 # Verify authentication
-docker-compose logs -f listener | grep "Logged in as"
-# Should show: "Logged in as +1234567890"
+docker compose logs -f listener
+# Should show a successful Telegram connection and folder sync, not an auth error
 ```
 
 ---
@@ -958,7 +970,6 @@ docker-compose logs -f listener | grep "Logged in as"
 # Critical configuration files
 .env                              # Secrets and environment variables
 docker-compose.yml                # Service definitions
-config/osint_rules.yml            # OSINT scoring rules
 
 # Important configuration files
 infrastructure/postgres/postgresql.conf  # Database tuning
@@ -973,7 +984,6 @@ infrastructure/grafana/provisioning/      # Grafana dashboards
 tar -czf backups/config/config_$(date +%Y%m%d_%H%M%S).tar.gz \
   .env \
   docker-compose.yml \
-  config/ \
   infrastructure/postgres/postgresql.conf \
   infrastructure/prometheus/ \
   infrastructure/grafana/provisioning/
@@ -987,7 +997,7 @@ tar -tzf backups/config/config_20251209.tar.gz
 ```bash
 # Initialize git repository (if not already done)
 git init
-git add docker-compose.yml config/ infrastructure/
+git add docker-compose*.yml infrastructure/
 
 # Commit configuration changes
 git commit -m "Configuration snapshot $(date +%Y-%m-%d)"
@@ -1000,15 +1010,9 @@ git push origin master
 **Note**: Do NOT commit `.env` to git (contains secrets). Use `.env.example` instead:
 
 ```bash
-# Create .env template (safe to commit)
-cp .env .env.example
-# Edit .env.example: Replace actual values with placeholders
-# Example: POSTGRES_PASSWORD=<your-postgres-password>
-
-# Commit template, ignore actual .env
-echo ".env" >> .gitignore
-git add .env.example .gitignore
-git commit -m "Add .env template"
+# .env.example is already tracked in the repository; never overwrite it with
+# your real .env. Make sure the real file stays ignored:
+grep -qx ".env" .gitignore || echo ".env" >> .gitignore
 ```
 
 ---
@@ -1027,24 +1031,16 @@ git commit -m "Add .env template"
 
 ### If You Need Redis Backup (Advanced)
 
-**Enable Redis persistence** in `docker-compose.yml`:
-
-```yaml
-services:
-  redis:
-    command: redis-server --appendonly yes --save 60 1000
-    volumes:
-      - redis_data:/data
-```
+Redis already runs with persistence and a `redis_data` volume (see the `redis` service in `docker-compose.yml`; `REDIS_MAXMEMORY` sets the memory cap). No change is needed for snapshots.
 
 **Manual backup:**
 
 ```bash
 # Trigger RDB snapshot
-docker-compose exec redis redis-cli BGSAVE
+docker compose exec redis redis-cli BGSAVE
 
 # Wait for save to complete
-docker-compose exec redis redis-cli LASTSAVE
+docker compose exec redis redis-cli LASTSAVE
 
 # Copy RDB file
 docker cp osint-redis:/data/dump.rdb backups/redis/dump_$(date +%Y%m%d).rdb
@@ -1142,7 +1138,7 @@ docker compose exec -T postgres pg_restore \
 
 # Verify database restore
 docker compose exec postgres psql -U osint_user -d osint_platform -c "\dt"
-# Should list all tables: messages, channels, entities, etc.
+# Should list all tables: messages, channels, message_entities, etc.
 
 # 5. Restore MinIO media files (from Hetzner snapshot)
 # Follow Hetzner Console to restore snapshot, then:
@@ -1176,13 +1172,13 @@ gunzip -c backups/postgres/osint_platform_20251209.sql.gz | \
   grep -A 10000 "CREATE TABLE channels" > channels_restore.sql
 
 # 2. Drop and recreate table
-docker-compose exec postgres psql -U postgres -d osint_platform -c "DROP TABLE channels CASCADE;"
+docker compose exec postgres psql -U osint_user -d osint_platform -c "DROP TABLE channels CASCADE;"
 
 # 3. Restore table from backup
-docker-compose exec -T postgres psql -U postgres osint_platform < channels_restore.sql
+docker compose exec -T postgres psql -U osint_user osint_platform < channels_restore.sql
 
 # 4. Rebuild foreign key references
-docker-compose exec postgres psql -U postgres -d osint_platform -c "
+docker compose exec postgres psql -U osint_user -d osint_platform -c "
   ALTER TABLE messages ADD CONSTRAINT fk_messages_channel
     FOREIGN KEY (channel_id) REFERENCES channels(id);
 "
@@ -1194,23 +1190,25 @@ docker-compose exec postgres psql -U postgres -d osint_platform -c "
 
 ```bash
 # 1. Stop PostgreSQL
-docker-compose stop postgres
+docker compose stop postgres
 
 # 2. Restore base backup
 tar -xzf backups/base/base.tar.gz -C /var/lib/postgresql/data
 
-# 3. Create recovery.conf
+# 3. Create recovery settings
 cat > /var/lib/postgresql/data/recovery.conf <<EOF
 restore_command = 'cp /backups/wal/%f %p'
 recovery_target_time = '2025-12-09 14:30:00'  # Restore to this timestamp
 recovery_target_action = 'promote'
 EOF
+# NOTE: PostgreSQL 12+ (the stack runs 16) ignores recovery.conf. Put these three
+# settings in postgresql.auto.conf and create an empty recovery.signal file instead.
 
 # 4. Start PostgreSQL (will replay WAL to target time)
-docker-compose start postgres
+docker compose start postgres
 
 # Monitor recovery progress
-docker-compose logs -f postgres | grep "recovery"
+docker compose logs -f postgres | grep "recovery"
 ```
 
 ---
@@ -1681,14 +1679,14 @@ du -sh ./backups/*/
 
 ```bash
 # 1. Create test environment
-docker-compose -f docker-compose.test.yml up -d
+docker compose -f docker-compose.test.yml up -d
 
 # 2. Restore latest backup to test environment
 gunzip -c backups/postgres/osint_platform_latest.sql.gz | \
-  docker-compose -f docker-compose.test.yml exec -T postgres psql -U postgres test_platform
+  docker compose -f docker-compose.test.yml exec -T postgres psql -U osint_user test_platform
 
 # 3. Verify data integrity
-docker-compose -f docker-compose.test.yml exec postgres psql -U postgres test_platform -c "
+docker compose -f docker-compose.test.yml exec postgres psql -U osint_user test_platform -c "
   SELECT COUNT(*) FROM messages;
   SELECT COUNT(*) FROM channels;
   SELECT COUNT(*) FROM entities;
@@ -1699,7 +1697,7 @@ curl http://localhost:8001/api/health
 curl http://localhost:8001/api/messages?limit=10
 
 # 5. Cleanup test environment
-docker-compose -f docker-compose.test.yml down -v
+docker compose -f docker-compose.test.yml down -v
 ```
 
 **Document test results:**
@@ -1715,8 +1713,8 @@ Backup Size: $(du -h backups/postgres/osint_platform_latest.sql.gz | cut -f1)
 
 Database Restore: ✓ Success
 Table Row Counts:
-  - messages: $(docker-compose -f docker-compose.test.yml exec postgres psql -U postgres test_platform -t -c "SELECT COUNT(*) FROM messages")
-  - channels: $(docker-compose -f docker-compose.test.yml exec postgres psql -U postgres test_platform -t -c "SELECT COUNT(*) FROM channels")
+  - messages: $(docker compose -f docker-compose.test.yml exec postgres psql -U osint_user test_platform -t -c "SELECT COUNT(*) FROM messages")
+  - channels: $(docker compose -f docker-compose.test.yml exec postgres psql -U osint_user test_platform -t -c "SELECT COUNT(*) FROM channels")
 
 API Health Check: ✓ Success
 
@@ -1970,10 +1968,3 @@ EOF
 - **Telegram Disaster Recovery**: [operator-guide/telegram-disaster-recovery.md](telegram-disaster-recovery.md) - Telegram session recovery procedures
 - **Upgrades**: [operator-guide/upgrades.md](upgrades.md) - Platform upgrade procedures with backup integration
 - **Scaling**: [operator-guide/scaling.md](scaling.md) - Scaling considerations for backup/restore
-
----
-
-**Last Updated**: 2025-12-21
-**Version**: 2.0
-**Platform Version**: 1.0 (Production-ready)
-**Scripts Version**: backup.sh v1.0, restore.sh v1.0, preflight-check.sh v1.0

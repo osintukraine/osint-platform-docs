@@ -12,7 +12,7 @@ The OSINT Intelligence Platform is a comprehensive system for archiving, enrichi
 - **Smart Search** - Full-text and AI-powered semantic search across all content
 - **Entity Tracking** - Curated and automatically detected entities (people, equipment, organizations)
 - **Social Graph** - Visualize relationships, forwards, and influence patterns
-- **AI Classification** - Automatic topic detection and importance scoring
+- **AI Classification** - Automatic topic detection and importance levels
 
 ### Content Management
 - **Filtered Views** - Filter by channel, date, topic, importance, and media type
@@ -20,8 +20,8 @@ The OSINT Intelligence Platform is a comprehensive system for archiving, enrichi
 - **Multi-format Support** - RSS 2.0, Atom 1.0, and JSON Feed
 
 ### Monitoring & Alerts
-- **Real-time Updates** - Live notifications via ntfy.sh
-- **Custom Subscriptions** - Get alerts for specific topics or channels
+- **Push Notifications** - Platform and high-importance alerts through the built-in ntfy server
+- **Filtered RSS Feeds** - Follow any topic, channel or keyword in your feed reader
 - **Mobile Support** - Push notifications to your phone
 
 ## Who This Is For
@@ -42,13 +42,14 @@ The OSINT Intelligence Platform is a comprehensive system for archiving, enrichi
 ### Advanced Features
 
 4. **[Social Graph Analysis](social-graph.md)** - Analyze channel relationships
-5. **[Notifications](notifications.md)** - Configure real-time alerts
+5. **[Notifications](notifications.md)** - Set up push alerts
+6. **[Map Interface](map-interface.md)** - Explore geolocated messages and event clusters
 
 ## Common Workflows
 
 ### Find High-Priority Intelligence
 
-1. Go to the Browse Messages page
+1. Go to the Browse page (home)
 2. Set **Importance Level** to "High Priority"
 3. Filter by **Topic** (e.g., "Combat", "Equipment")
 4. Sort by **Date** to see newest first
@@ -57,7 +58,7 @@ The OSINT Intelligence Platform is a comprehensive system for archiving, enrichi
 ### Track a Specific Entity
 
 1. Use **Search** to find mentions (e.g., "T-90 tank")
-2. Click on entity badges in messages
+2. Click on entity badges in messages (or open the **Entities** tab of Search)
 3. View the **Entity Profile** page
 4. Explore **Relationships** tab for connections
 5. Check **Messages** tab for all mentions
@@ -73,11 +74,16 @@ The OSINT Intelligence Platform is a comprehensive system for archiving, enrichi
 
 ```
 Home (/)
-├── Browse Messages - Main feed with advanced filters
+├── Browse (/) - Main feed with advanced filters
+├── Channels (/channels) - Monitored channels
+├── News (/unified) - Telegram posts and RSS news on one timeline
+├── Events (/events) - Events detected from news reports
+├── Map (/map) - Geolocated messages and event clusters
 ├── Search (/search) - Unified search across all content
-├── Entities (/entities) - Browse tracked entities
-└── Settings
-    └── Feed Tokens - Manage RSS authentication
+│   └── Entities - Entity profiles at /entities/{source}/{id}
+├── About (/about)
+└── Account (sign-in required)
+    └── Feed Tokens (/settings/feed-tokens) - Manage RSS authentication
 ```
 
 ## Understanding Content Types
@@ -85,28 +91,27 @@ Home (/)
 ### Messages
 - Telegram channel posts archived in real-time
 - Includes text, media, translations, and metadata
-- AI-enriched with topics, entities, and importance scores
+- AI-enriched with topics, entities, and an importance level (high, medium, low)
 
 ### Events
-- Curated intelligence reports from ODIN
+- Detected from RSS news articles and linked to related Telegram posts
 - Structured event data with timestamps and locations
-- Linked to relevant entities
 
 ### RSS Articles
 - External news sources monitored for keywords
 - Filtered by relevance and source credibility
 
 ### Entities
-- **Curated** - Manually verified (ArmyGuide, Root.NK, ODIN)
+- **Curated** - Imported reference lists (for example ArmyGuide, Root.NK, ODIN)
 - **OpenSanctions** - Sanctions lists and politically exposed persons (PEPs)
-- **Auto-detected** - Extracted from messages via AI
+- **Auto-detected** - Extracted from message text
 
 ## Data Freshness
 
 - **Real-time** - New messages appear within seconds
-- **AI Enrichment** - Processed within 1-5 minutes
-- **Translations** - Generated on-demand (DeepL Pro)
-- **Entity Linking** - Background task, runs every 15 minutes
+- **Classification** - Topic, importance and spam decisions are made as the message arrives; if the AI classifier is busy or offline they are filled in later
+- **Translations** - Made automatically on arrival (DeepL); during provider limits they follow later
+- **Search index, similar-post search and entity linking** - Background tasks, usually minutes to hours behind
 
 ## Getting Help
 

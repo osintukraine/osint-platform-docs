@@ -112,6 +112,7 @@ nav:
       - Telegram Setup: operator-guide/telegram-setup.md
       - Telegram Disaster Recovery: operator-guide/telegram-disaster-recovery.md
       - LLM Gateway & Providers: operator-guide/external-llm.md
+      - Processing Modes: operator-guide/processing-modes.md
       - Backlog Re-classification: operator-guide/backlog-reclassification.md
       - Media Lanes & Embeds: operator-guide/media-lanes.md
       - Embedding Models: operator-guide/model-provisioning.md

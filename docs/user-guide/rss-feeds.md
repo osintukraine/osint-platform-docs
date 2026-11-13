@@ -13,6 +13,7 @@ The platform's "Subscribe to any search" feature transforms any filtered search 
 - **Authenticated Feeds** - Optional token-based authentication
 - **URL Signing** - Cryptographically signed feed URLs
 - **Universal Support** - Works with any feed reader
+- **Newest First** - Feed items are ordered most-recent-first
 
 ## Creating a Feed
 
@@ -95,12 +96,12 @@ Copy the generated URL and add to your reader:
 Feed tokens provide authenticated access to feeds:
 
 **When Authentication is Required:**
-- Platform admin has enabled `FEED_AUTH_REQUIRED=true`
+- Feed authentication is on (the default)
 - You must create a token to subscribe
-- Feeds won't work without valid token
+- Feeds won't work without a valid token and signature
 
 **When Authentication is Optional:**
-- Platform admin has enabled `FEED_AUTH_REQUIRED=false`
+- Your administrator has turned feed authentication off
 - Feeds work without tokens (public access)
 - Tokens still provide tracking and revocation
 
@@ -119,11 +120,11 @@ Access token management at **Settings → Feed Tokens** (`/settings/feed-tokens`
 #### Token Display
 
 The page shows:
-- **Prefix** - First 8 characters (e.g., `ft_abc123...`)
+- **Prefix** - Short identifier (e.g., `ft_a1b2c3`)
 - **Label** - Your descriptive name
 - **Created** - Timestamp
 - **Last Used** - Last request timestamp
-- **Use Count** - Total requests made
+- **Requests** - Total requests made
 - **Status** - Active or Revoked
 
 #### Revoking Tokens
@@ -147,16 +148,14 @@ https://api.example.com/rss/search
   ?format=rss
   &q=tank
   &importance_level=high
-  &token=ft_abc123...
-  &signature=sha256_hmac_of_params
-  &expires=timestamp
+  &token=<token id>
+  &sig=<signature of the parameters>
 ```
 
 **Benefits:**
 - URL tampering detection
-- Parameter validation
-- Expiration support (future feature)
-- Audit trail via token use count
+- Parameter validation: changing a filter in the URL invalidates it, so regenerate the URL after editing filters
+- Audit trail via the token's request count
 
 ## Feed URL Structure
 
@@ -168,7 +167,7 @@ GET /rss/search
 
 ### Common Parameters
 
-All filters from Browse Messages are supported:
+Most filters from Browse Messages are supported:
 
 ```
 format=rss|atom|json          # Feed format
@@ -182,12 +181,16 @@ media_type=photo|video|...    # Media filter
 has_media=true|false          # Any media
 min_views=1000                # Engagement threshold
 min_forwards=50               # Virality threshold
+sentiment=positive|negative|neutral
 days=7                        # Last N days
 date_from=2024-01-01          # Start date
 date_to=2024-12-31            # End date
-sort_by=telegram_date|importance_level|...
-sort_order=desc|asc
+limit=50                      # Items in feed (1-100, default 50)
 ```
+
+Items are always newest first (by Telegram post time).
+
+Two shortcut feeds are also available: `/rss/channel/{username}` (one channel; optional `importance_level`, `days`, `limit`) and `/rss/topic/{topic}` (one topic, high importance by default).
 
 ### Example URLs
 
@@ -198,8 +201,6 @@ sort_order=desc|asc
   &importance_level=high
   &topic=combat
   &days=7
-  &sort_by=telegram_date
-  &sort_order=desc
 ```
 
 **Ukrainian channels with media:**
@@ -403,7 +404,7 @@ Intelligence/
 1. Open feed URL in browser
 2. Should see XML/JSON, not error page
 3. Check for "401 Unauthorized" errors
-4. Confirm signature is present (if auth required)
+4. Confirm `sig` and `token` are present (if auth required)
 ```
 
 **Test feed reader:**

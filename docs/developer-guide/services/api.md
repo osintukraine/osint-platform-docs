@@ -7,18 +7,18 @@
 The API service is the **primary data access layer** for the OSINT Intelligence Platform. It provides a comprehensive REST API for searching, analyzing, and retrieving enriched Telegram intelligence data, along with dynamic RSS feed generation and real-time monitoring endpoints.
 
 **Purpose**: Unified REST API for all data access and querying
-**Technologies**: FastAPI 0.109.0, SQLAlchemy 2.0, Pydantic, Uvicorn
+**Technologies**: FastAPI 0.127, SQLAlchemy 2.0 (async), Pydantic, Uvicorn 0.40
 **Auto-generated docs**: `/docs` (Swagger UI), `/redoc` (ReDoc)
 
 ### Key Capabilities
 
-- **20+ Router Modules**: Comprehensive endpoint coverage for all platform features
+- **40+ Router Modules** (`routers/` plus `routers/admin/`): Comprehensive endpoint coverage for all platform features
 - **Dynamic RSS Feeds**: "Subscribe to any search" in RSS 2.0, Atom 1.0, and JSON Feed 1.1 formats
 - **Semantic Search**: pgvector-powered similarity search with 384-dimensional embeddings
 - **Social Graph Queries**: Forward chains, reply threads, engagement analytics
-- **Multi-Format Authentication**: JWT, Ory Kratos/Oathkeeper, or development mode
+- **Unified Authentication**: API keys (`ak_*`), Ory Kratos sessions, Oathkeeper headers, JWT, or anonymous (one middleware)
 - **Prometheus Metrics**: Request counts, latency histograms at `/metrics`
-- **Export Worker**: Background CSV/JSON data export to MinIO
+- **Export Worker**: Background CSV/JSON data export to MinIO (in-process, polls the DB)
 
 ## Architecture
 
@@ -32,6 +32,9 @@ services/api/
 │   ├── feed_generator.py          # Multi-format RSS/Atom/JSON generator
 │   ├── export_worker.py           # Background export worker
 │   ├── schemas.py                 # Pydantic response models
+│   ├── services/                  # Feed tokens/subscriptions, API keys, shadow fleet
+│   ├── kratos/                    # Kratos admin client
+│   ├── utils/                     # Cache, geocoding, pagination, prometheus helpers
 │   ├── routers/                   # API endpoint modules
 │   │   ├── __init__.py            # Router registry
 │   │   ├── messages.py            # Message CRUD and search
@@ -43,7 +46,11 @@ services/api/
 │   │   ├── social_graph.py        # Social network analysis
 │   │   ├── rss.py                 # Dynamic feed generation
 │   │   ├── analytics.py           # Aggregations and metrics
-│   │   ├── timeline.py            # Temporal analysis
+│   │   ├── timeline.py            # Per-message temporal context
+│   │   ├── map.py, vessels.py     # Map GeoJSON and vessel tracking
+│   │   ├── api_keys.py            # API key management
+│   │   ├── channel_submissions.py # Public channel suggestions
+│   │   ├── events_admin.py        # Event admin operations
 │   │   ├── events.py              # Event clustering
 │   │   ├── network.py             # Knowledge graph visualization
 │   │   ├── flowsint_export.py     # Flowsint-compatible export
@@ -58,7 +65,7 @@ services/api/
 │   │   ├── system.py              # Health checks
 │   │   ├── auth.py                # Authentication endpoints
 │   │   ├── feed_tokens.py         # RSS feed tokens
-│   │   ├── metrics.py             # Real-time metrics
+│   │   ├── metrics/               # /api/metrics/* (pipeline, services, llm, overview)
 │   │   ├── about.py               # Platform statistics
 │   │   ├── channel_network.py     # Channel content networks
 │   │   ├── news_timeline.py       # RSS+Telegram correlation
@@ -70,7 +77,11 @@ services/api/
 │   │       ├── channels.py        # Channel admin
 │   │       ├── entities.py        # Entity curation
 │   │       ├── prompts.py         # LLM prompt management
-│   │       ├── system.py          # Worker logs, audit
+│   │       ├── system.py          # Workers, audit, cache, enrichment tasks
+│   │       ├── fact_check.py      # Fact-check review (see fact-check.md)
+│   │       ├── users.py           # Kratos user management
+│   │       ├── message_actions.py # Moderation actions
+│   │       ├── role_check.py      # Oathkeeper role check
 │   │       ├── feeds.py           # RSS feed config
 │   │       ├── export.py          # Data export queue
 │   │       ├── config.py          # System configuration
@@ -82,12 +93,13 @@ services/api/
 │   │   ├── none.py                # Development auth (no-op)
 │   │   ├── jwt.py                 # JWT token auth
 │   │   ├── cloudron.py            # Cloudron OAuth
+│   │   ├── ory.py                 # Ory provider
+│   │   ├── api_key.py             # API key auth
 │   │   └── feed_auth.py           # RSS feed token auth
-│   ├── middleware/                # HTTP middleware
-│   │   ├── auth.py                # Global authentication
-│   │   └── ory_auth.py            # Ory Kratos integration
-│   └── config/
-│       └── settings.py            # Configuration management
+│   └── middleware/                # HTTP middleware
+│       ├── auth_unified.py        # Active auth middleware (registered in main.py)
+│       └── auth.py, ory_auth.py   # Earlier middleware kept in the tree
+# Settings live in shared/python/config/settings.py (no per-service config module)
 ├── requirements.txt               # Python dependencies
 ├── Dockerfile                     # Container image
 └── README.md                      # Service documentation
@@ -100,7 +112,7 @@ graph LR
     A[Client Request] --> B[CORS Middleware]
     B --> C[Request Tracing]
     C --> D[Metrics Middleware]
-    D --> E[Error Notification]
+    D --> E[GZip / Error Notification]
     E --> F[Auth Middleware]
     F --> G{Authenticated?}
     G -->|Yes| H[Router Handler]
@@ -151,9 +163,14 @@ Message retrieval and full-text search with 15+ filters.
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/messages` | GET | Search messages with filters (query, channel, date, importance, entities, spam status) |
-| `/api/messages/{id}` | GET | Get single message with full enrichment data |
-| `/api/messages/{id}/adjacent` | GET | Get prev/next message IDs for navigation |
-| `/api/messages/{id}/album` | GET | Get all media files in message's album (for lightbox) |
+| `/api/messages/{message_id}` | GET | Get single message with full enrichment data |
+| `/api/messages/{message_id}/adjacent` | GET | Get prev/next message IDs for navigation |
+| `/api/messages/{message_id}/album` | GET | Get all media files in message's album (for lightbox) |
+| `/api/messages/{message_id}/similar` | GET | Similar messages (`similarity.py`) |
+| `/api/messages/{message_id}/timeline` | GET | Temporal context (`timeline.py`) |
+| `/api/messages/{message_id}/validation` | GET | RSS corroboration (`validation.py`) |
+| `/api/messages/{message_id}/network` | GET | Message network graph (`network.py`) |
+| `/api/messages/{message_id}/network/export` | GET | Flowsint JSON export (`flowsint_export.py`) |
 
 **Search Parameters**:
 - `q`: Full-text search query (PostgreSQL tsvector)
@@ -177,9 +194,14 @@ Channel management and statistics.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/channels` | GET | List all channels with folder filtering |
-| `/api/channels/{id}` | GET | Channel details and statistics |
-| `/api/channels/{id}/messages` | GET | Messages from specific channel |
+| `/api/channels/` | GET | List all channels with folder filtering |
+| `/api/channels/by-username/{username}` | GET | Channel by Telegram username |
+| `/api/channels/{channel_id}` | GET | Channel details |
+| `/api/channels/{channel_id}/stats` | GET | Channel statistics |
+| `/api/channels/{channel_id}/backfill` | POST | Trigger historical backfill (admin) |
+| `/api/channels/{channel_id}/network` | GET | Channel content network graph (`channel_network.py`) |
+
+Messages of one channel come from `GET /api/messages?channel_id=...`.
 
 **Features**:
 - Folder-based filtering (`folder_pattern` query param)
@@ -194,11 +216,10 @@ Entity profiles from curated sources (ArmyGuide, Root.NK, ODIN) and OpenSanction
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/entities/{source}/{id}` | GET | Entity profile with linked content counts |
-| `/api/entities/{source}/{id}/messages` | GET | Messages mentioning this entity |
-| `/api/entities/{source}/{id}/events` | GET | Events involving this entity |
-| `/api/entities/{source}/{id}/relationships` | GET | Entity relationship graph (Wikidata SPARQL) |
-| `/api/entities/{source}/{id}/enrich` | POST | Trigger on-demand Wikidata enrichment |
+| `/api/entities/search` | GET | Search entities |
+| `/api/entities/{source}/{entity_id}` | GET | Entity profile with linked content counts |
+| `/api/entities/{source}/{entity_id}/messages` | GET | Messages mentioning this entity |
+| `/api/entities/{source}/{entity_id}/relationships` | GET | Entity relationship graph (Wikidata SPARQL) |
 
 **Sources**: `curated` (internal), `opensanctions` (Yente API)
 
@@ -218,13 +239,14 @@ Unified search across all data sources (messages, events, RSS articles, entities
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/search` | GET | Cross-source search with grouped results |
+| `/api/search/` | GET | Cross-source search with grouped results |
 
 **Parameters**:
 - `q`: Search query
 - `mode`: `text` or `semantic`
 - `types`: Comma-separated types to search (messages, events, rss, entities)
 - `limit_per_type`: Results per type (default: 5, max: 20)
+- `location`, `lat`/`lng`/`radius_km`, `bounds`, `cluster_by`: geographic filters and clustering
 
 **Response**: Grouped results with type-specific metadata and timing
 
@@ -238,20 +260,22 @@ AI-powered semantic search using vector embeddings.
 |----------|--------|-------------|
 | `/api/semantic/search` | GET | Find messages by meaning (not keywords) |
 | `/api/semantic/similar/{message_id}` | GET | Find similar messages to a given message |
+| `/api/semantic/tags` | GET | Popular tags |
+| `/api/semantic/tags/search` | GET | Messages by tag (`tags`, `match_all`) |
 
 **How It Works**:
-1. Query text → Ollama embedding model (all-MiniLM-L6-v2)
+1. Query text → embedding model from the `model_configuration` table, served by Ollama (the one place the API still calls Ollama, even when classification runs on the LLM gateway)
 2. Generate 384-dimensional vector
 3. pgvector cosine similarity search against `messages.content_embedding`
 4. Return top N results sorted by similarity score
 
 **Parameters**:
 - `q`: Search query (semantic search)
-- `similarity_threshold`: Minimum similarity score (0.0-1.0, default: 0.7)
+- `threshold`: Minimum similarity score (0.0-1.0; default 0.6 for `/search`, 0.7 for `/similar`)
 - `limit`: Max results (default: 20, max: 100)
 - `channel_id`, `days`: Optional filters
 
-#### Similarity Router (`/api/similarity`)
+#### Similarity Router (`/api/messages/{id}/similar`)
 
 **File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/similarity.py`
 
@@ -259,7 +283,7 @@ pgvector-based message similarity queries.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/similarity/messages/{id}` | GET | Find messages similar to given message |
+| `/api/messages/{message_id}/similar` | GET | Find messages similar to given message |
 
 ### Social Graph & Analytics
 
@@ -271,9 +295,12 @@ Telegram social interaction analysis.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/social-graph/messages/{id}` | GET | Get forward chains, replies, reactions for message |
-| `/api/social-graph/channels/{id}` | GET | Channel influence network |
-| `/api/social-graph/influencers` | GET | Top influencer channels |
+| `/api/social-graph/messages/{message_id}` | GET | Forward chains, replies, reactions for message |
+| `/api/social-graph/messages/{message_id}/engagement-timeline` | GET | Views/reactions over time |
+| `/api/social-graph/messages/{message_id}/comments` | GET | Comment thread |
+| `/api/social-graph/channels/{channel_id}/influence` | GET | Channel influence |
+| `/api/social-graph/influence-network` | GET | Influence network across channels |
+| `/api/social-graph/virality/top-forwarded` | GET | Most forwarded messages |
 
 **Features**:
 - Forward propagation tracking (who forwarded this message)
@@ -303,22 +330,24 @@ Platform-wide aggregations and metrics.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/analytics/overview` | GET | Platform statistics (message counts, channels, entities) |
-| `/api/analytics/channels/{id}` | GET | Channel-specific analytics |
-| `/api/analytics/topics` | GET | Topic distribution histogram |
-| `/api/analytics/sentiment` | GET | Sentiment analysis over time |
+| `/api/analytics/timeline` | GET | Message volume over time |
+| `/api/analytics/distributions` | GET | Topic, importance and other distributions |
+| `/api/analytics/heatmap` | GET | Activity heatmap |
+| `/api/analytics/engagement` | GET | Engagement analytics |
+| `/api/analytics/channels` | GET | Channel analytics |
+| `/api/analytics/entities` | GET | Entity analytics |
+| `/api/analytics/media` | GET | Media analytics |
 
-#### Timeline Router (`/api/timeline`)
+#### Timeline Routers
 
 **File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/timeline.py`
 
-Temporal analysis and time-series aggregations.
+Per-message temporal context (`timeline.py`: `GET /api/messages/{message_id}/timeline`) and the news timeline correlating RSS and Telegram (`news_timeline.py`):
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/timeline/hourly` | GET | Hourly message distribution (pattern detection) |
-| `/api/timeline/daily` | GET | Daily message counts |
-| `/api/timeline/monthly` | GET | Monthly trends |
+| `/api/timeline` | GET | News timeline (RSS + Telegram correlations) |
+| `/api/timeline/stats` | GET | News timeline statistics |
 
 #### Events Router (`/api/events`)
 
@@ -328,8 +357,15 @@ Event clustering and chronological timelines.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/events` | GET | List clustered events |
-| `/api/events/{id}` | GET | Event details with related messages |
+| `/api/events/` | GET | List clustered events |
+| `/api/events/stats` | GET | Event statistics |
+| `/api/events/message/{message_id}` | GET | Events containing a message |
+| `/api/events/{event_id}` | GET | Event details with related messages |
+| `/api/events/{event_id}/timeline` | GET | Event timeline |
+| `/api/events/{event_id}/major` | PATCH | Flag as major event |
+| `/api/events/{event_id}/archive` | PATCH | Archive event |
+
+Admin operations (soft delete, source removal, audit) live in `events_admin.py` under `/api/admin/events/`.
 
 **Event Clustering**: Groups messages by entity overlap and semantic similarity to create real-world event timelines.
 
@@ -346,6 +382,7 @@ Dynamic feed generation in multiple formats.
 | `/rss/search` | GET | Generate feed from any search query |
 | `/rss/channel/{username}` | GET | Per-channel RSS feed |
 | `/rss/topic/{topic}` | GET | Topic-based feed |
+| `/rss/formats` | GET | Supported formats |
 
 **Format Parameter**: `?format=rss` (RSS 2.0), `?format=atom` (Atom 1.0), `?format=json` (JSON Feed 1.1)
 
@@ -364,7 +401,7 @@ Dynamic feed generation in multiple formats.
 
 ### Data Visualization
 
-#### Network Router (`/api/network`)
+#### Network Router
 
 **File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/network.py`
 
@@ -372,10 +409,12 @@ Knowledge graph visualization.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/network/platform` | GET | Platform-wide entity relationship graph |
-| `/api/network/entities/{id}` | GET | Entity-centric network graph |
+| `/api/messages/{message_id}/network` | GET | Message-centric network graph |
+| `/api/channels/{channel_id}/network` | GET | Channel content network |
 
-#### Flowsint Export Router (`/api/flowsint`)
+For where each graph's data comes from (PostgreSQL and pgvector, rendered with Sigma.js), see [Architecture](../architecture.md#6-graph-data-on-postgresql-pgvector).
+
+#### Flowsint Export Router
 
 **File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/flowsint_export.py`
 
@@ -383,11 +422,11 @@ Export network graph data in Flowsint-compatible format for advanced OSINT inves
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/flowsint/export` | GET | Export graph data in Flowsint JSON format |
+| `/api/messages/{message_id}/network/export` | GET | Export graph data in Flowsint JSON format |
 
 ### Validation & Correlation
 
-#### Validation Router (`/api/validation`)
+#### Validation Router
 
 **File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/validation.py`
 
@@ -395,8 +434,7 @@ Cross-reference Telegram claims with external RSS news sources.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/validation/messages/{id}` | GET | Find corroborating RSS articles for message |
-| `/api/validation/articles/{id}` | GET | Semantic matching against RSS sources |
+| `/api/messages/{message_id}/validation` | GET | Find corroborating RSS articles for message |
 
 **How It Works**: Semantic similarity matching between Telegram messages and RSS article embeddings.
 
@@ -408,7 +446,8 @@ Unified intelligence stream combining Telegram messages and RSS articles.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/stream` | GET | Combined Telegram+RSS feed with correlation indicators |
+| `/api/stream/unified` | GET | Combined Telegram+RSS feed with correlation indicators |
+| `/api/stream/correlations/{message_id}` | GET | Correlations for one message |
 
 ### AI & Model Management
 
@@ -420,12 +459,14 @@ Multi-model LLM architecture management.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/models` | GET | List available LLM models |
-| `/api/models/{task}` | GET | Get configured model for task (classification, embedding) |
-| `/api/models/{id}/health` | GET | Check model health in Ollama |
-| `/api/models/config` | POST | Update model configuration (admin) |
+| `/api/models/registry` | GET | Model registry (`/registry/verified`, `/registry/{model_id}`) |
+| `/api/models/tasks/{task}` | GET | Models for a task (`/fastest`, `/best-quality` variants) |
+| `/api/models/configuration` | GET | Active configuration per task (`/configuration/{task}`) |
+| `/api/models/configuration/{task}` | PUT | Update model configuration (admin); `DELETE .../{model_id}` removes one |
+| `/api/models/health/{model_id}` | GET | Check model health |
+| `/api/models/stats` | GET | Model usage statistics |
 
-**Supported Models**: Qwen2.5:3b, Llama 3.2:3b, Granite3-dense:8b, Phi3.5:3.8b, Gemma2:9b, Mistral:7b
+This registry mainly drives the embedding model used for search queries. Production classification goes through the LLM gateway (`LLM_PROVIDER`), configured in the processor, not here; see [LLM Gateway and Providers](../../operator-guide/external-llm.md).
 
 **Runtime Switching**: Change active model without service restart via database configuration.
 
@@ -439,9 +480,9 @@ User message bookmarks (requires authentication).
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/bookmarks` | GET | List user's bookmarks |
-| `/api/bookmarks` | POST | Add bookmark |
-| `/api/bookmarks/{id}` | DELETE | Remove bookmark |
+| `/api/bookmarks/` | GET | List user's bookmarks |
+| `/api/bookmarks/{message_id}` | POST | Add bookmark |
+| `/api/bookmarks/{message_id}` | DELETE | Remove bookmark |
 
 #### User Router (`/api/user`)
 
@@ -451,8 +492,10 @@ User profile and preferences (requires authentication).
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/user/profile` | GET | Get user profile |
+| `/api/user/me` | GET | Get user profile |
 | `/api/user/preferences` | GET/PUT | User preferences |
+
+API keys (`ak_*`, see `api_keys.py`): `POST/GET /api/api-keys`, `GET /api/api-keys/usage/summary`, `GET/DELETE /api/api-keys/{key_id}`.
 
 #### Feed Tokens Router (`/api/feed-tokens`)
 
@@ -464,7 +507,9 @@ RSS feed token generation for authenticated RSS feeds.
 |----------|--------|-------------|
 | `/api/feed-tokens` | GET | List user's feed tokens |
 | `/api/feed-tokens` | POST | Generate new token |
-| `/api/feed-tokens/{id}` | DELETE | Revoke token |
+| `/api/feed-tokens/{token_id}` | DELETE | Revoke token |
+| `/api/feed-tokens/{token_id}/sign-url` | POST | Sign a feed URL |
+| `/api/feed-tokens/{token_id}/subscriptions` | GET | Subscriptions (PATCH/DELETE/clone/regenerate-url on `/subscriptions/{subscription_id}`) |
 
 **Usage**: Append `?token=YOUR_TOKEN` to RSS feed URLs for private feeds.
 
@@ -486,8 +531,12 @@ Spam review queue and false positive management.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/admin/spam/queue` | GET | Spam review queue |
-| `/api/admin/spam/{id}/mark-false-positive` | POST | Mark as false positive and reprocess |
+| `/api/admin/spam/` | GET | Spam review queue (`/stats` for counts) |
+| `/api/admin/spam/{message_id}/review` | PUT | Review a message (`/bulk-review` for many) |
+| `/api/admin/spam/{message_id}/reprocess` | POST | Reprocess through the pipeline |
+| `/api/admin/spam/{message_id}` | DELETE | Delete (`/bulk-delete`, `/purge/confirmed`) |
+
+Public-side spam actions: `POST /api/spam/messages/{message_id}/mark-not-spam` and `/confirm-spam`.
 
 #### Admin Media (`/api/admin/media`)
 
@@ -495,8 +544,11 @@ Media gallery and management.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/admin/media/gallery` | GET | Photo/video gallery with filters |
+| `/api/admin/media/` | GET | Photo/video gallery with filters |
 | `/api/admin/media/stats` | GET | Storage statistics |
+| `/api/admin/media/topics` | GET | Topics for gallery filters |
+
+The public gallery is `GET /api/media/gallery` and `/api/media/stats`; `/api/media/internal/*` is the Caddy media-redirect path (bypasses auth).
 
 #### Admin Channels (`/api/admin/channels`)
 
@@ -504,8 +556,8 @@ Channel management and configuration.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/admin/channels` | GET | All channels with metadata |
-| `/api/admin/channels/{id}` | PUT | Update channel config |
+| `/api/admin/channels/` | GET | All channels with metadata (`/stats`, `/folders`) |
+| `/api/admin/channels/{channel_id}` | GET/PUT | Channel detail / update channel config |
 
 #### Admin Entities (`/api/admin/entities`)
 
@@ -513,9 +565,8 @@ Entity curation and management.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/admin/entities` | GET | List curated entities |
-| `/api/admin/entities` | POST | Add new entity |
-| `/api/admin/entities/{id}` | PUT/DELETE | Update/delete entity |
+| `/api/admin/entities/` | GET | List curated entities (`/stats`, `/types`, `/sources`) |
+| `/api/admin/entities/{entity_id}` | GET | Entity detail |
 
 #### Admin Prompts (`/api/admin/prompts`)
 
@@ -523,9 +574,10 @@ LLM prompt management (for AI classification).
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/admin/prompts` | GET | List prompt versions |
-| `/api/admin/prompts` | POST | Create new prompt version |
-| `/api/admin/prompts/{id}/activate` | POST | Activate prompt version |
+| `/api/admin/prompts/` | GET | List prompt versions (`/stats`, `/tasks`) |
+| `/api/admin/prompts/task/{task}/history` | GET | Version history for a task |
+| `/api/admin/prompts/` | POST | Create new prompt version |
+| `/api/admin/prompts/{prompt_id}` | GET/PUT | Read / update (activation via PUT) |
 
 **Note**: See `docs/architecture/LLM_PROMPTS.md` for prompt evolution history.
 
@@ -536,8 +588,11 @@ System management, worker logs, audit trails.
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/admin/system/workers` | GET | Worker status and logs |
-| `/api/admin/system/audit` | GET | Audit trail |
-| `/api/admin/system/logs` | GET | Application logs |
+| `/api/admin/system/audit` | GET | Decision audit (`/audit/stats`, `POST /audit/{decision_id}/verify`) |
+| `/api/admin/system/cache/stats` | GET | Cache stats (`POST /cache/clear`) |
+| `/api/admin/system/enrichment/tasks` | GET | Enrichment task status |
+
+Also under `/api/admin/`: `fact-check/*` (see [Fact-Check](fact-check.md)), `users/*`, `config/*`, `feeds/*`, `export/*`, `stats/*`, `kanban/*`, `comments/*`, message moderation actions and `POST /api/admin/check-role` (Oathkeeper). The authoritative list is `/docs` on a running instance, or [API Endpoints](../../reference/api-endpoints.md).
 
 ### System Endpoints
 
@@ -549,15 +604,17 @@ Health checks and service status.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Health check (Docker/Kubernetes) |
-| `/api/system/status` | GET | Detailed service status |
-| `/api/system/version` | GET | API version info |
+| `/health` | GET | Health check (Docker healthcheck) |
+| `/api/health` | GET | Health plus hardware config (`/api/health/hardware`) |
+| `/api/system/health` | GET | Detailed service health (`/health/llm` for the LLM gateway) |
+| `/api/system/pipeline` | GET | Pipeline state |
+| `/api/system/audit` | GET | Decision audit (`/audit/stats`, `POST /audit/{decision_id}/verify`) |
 
 #### Metrics Router (`/metrics`)
 
-**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/routers/metrics.py`
+**File**: `services/api/src/main.py` (Prometheus counters) and `routers/metrics/` (`/api/metrics/*`: pipeline, services, llm, overview)
 
-Real-time Prometheus metrics.
+Prometheus metrics.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -575,11 +632,12 @@ Public platform statistics for "About" page.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/about` | GET | Platform stats (messages, channels, entities) |
+| `/api/about/stats` | GET | Platform stats (messages, channels, entities) |
+| `/api/about/activity` | GET | Recent activity |
 
 ## Authentication
 
-The API supports three authentication modes via **provider factory pattern**:
+Authentication is handled by one middleware (`middleware/auth_unified.py`) that tries, in order: API key (`Bearer ak_*` or `?api_key=`), Oathkeeper headers from a trusted proxy, Kratos session cookie, JWT bearer token, then anonymous. `AUTH_PROVIDER` selects the provider used by the factory:
 
 ### Authentication Providers
 
@@ -604,7 +662,7 @@ JWT token-based authentication.
 **Login Flow**:
 ```bash
 # 1. Login to get token
-curl -X POST "http://localhost:8000/api/auth/login" \
+curl -X POST "http://localhost:8000/auth/login" \
   -H "Content-Type: application/json" \
   -d '{"username": "admin", "password": "your_password"}'
 
@@ -614,9 +672,10 @@ curl "http://localhost:8000/api/messages" \
 ```
 
 **Environment Variables**:
-- `JWT_SECRET`: Secret key for signing tokens (required)
+- `JWT_SECRET_KEY`: Secret key for signing tokens (required, min 32 chars)
 - `JWT_ALGORITHM`: Algorithm (default: HS256)
-- `JWT_EXPIRATION_HOURS`: Token expiry (default: 24)
+- `JWT_EXPIRATION_MINUTES`: Token expiry (default: 60)
+- `JWT_ADMIN_PASSWORD`: Default admin password
 
 #### 3. Cloudron OAuth
 
@@ -628,7 +687,7 @@ Integration with Cloudron OAuth proxy.
 
 #### 4. Ory Kratos/Oathkeeper (Production)
 
-**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/middleware/ory_auth.py`
+**File**: `services/api/src/middleware/auth_unified.py` (Kratos whoami via `KRATOS_PUBLIC_URL`, default `http://kratos:4433`)
 
 Enterprise SSO via Ory Kratos identity provider and Oathkeeper reverse proxy.
 
@@ -638,17 +697,18 @@ Enterprise SSO via Ory Kratos identity provider and Oathkeeper reverse proxy.
 
 ### Authentication Middleware
 
-**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/middleware/auth.py`
+**File**: `services/api/src/middleware/auth_unified.py` (the older `auth.py` carries the bypass lists summarized below)
 
 Global middleware that enforces authentication rules:
 
 **Hybrid Read/Write Model**:
 - **GET requests**: Anonymous access allowed (public read)
-- **POST/PUT/DELETE/PATCH**: Authentication required
+- **POST/PUT/DELETE/PATCH**: Authentication required (when `AUTH_REQUIRED=true`; admin routes also check the admin role)
 
 **Bypass Routes**:
-- `/health`, `/docs`, `/redoc`, `/openapi.json`: No auth required
-- `/rss/*`: Public RSS feeds (optional feed token auth)
+- `/health`, `/docs`, `/redoc`, `/openapi.json`, `/api/admin/check-role`: No auth required
+- `/rss/*`: Public RSS feeds (feed tokens when `FEED_AUTH_REQUIRED=true`, the compose default)
+- `/api/media/internal/`, `/api/about/`, `/api/health`, `/api/timeline`: public
 - OPTIONS requests: CORS preflight, no auth
 
 ### Feed Token Authentication
@@ -682,7 +742,7 @@ Optional token-based authentication for RSS feeds.
 **Flow**:
 ```mermaid
 graph LR
-    A[User Query] --> B[Ollama Embedding Model]
+    A[User Query] --> B[Embedding Model via Ollama]
     B --> C[384-dim Vector]
     C --> D[pgvector Cosine Similarity]
     D --> E[Top N Results]
@@ -691,9 +751,9 @@ graph LR
     style D fill:#bbf,stroke:#333
 ```
 
-**Embedding Model**: all-MiniLM-L6-v2 (configured via `model_configuration` table)
+**Embedding Model**: configured via the `model_configuration` table (384-dimensional vectors; the enrichment embedding task must use the same model)
 
-**Similarity Threshold**: 0.7 (default), adjustable via `similarity_threshold` parameter
+**Similarity Threshold**: 0.6 (`/search`) or 0.7 (`/similar`) by default, adjustable via `threshold`
 
 **Use Case**: Find messages by meaning, not keywords. Example: "civilian casualties" matches "non-combatant losses".
 
@@ -777,19 +837,11 @@ https://api.example.com/rss/search?q=artillery&importance_level=high&format=rss
 1. Models configured in `model_configuration` table
 2. Task assignments: classification, embedding, translation
 3. API reads configuration on each request
-4. Ollama serves model inference
+4. Ollama serves the embedding model
 
-**Supported Tasks**:
-- `CLASSIFICATION`: Message importance/topic classification
-- `EMBEDDING`: Semantic search embeddings
-- `TRANSLATION`: Content translation (future)
+**Supported Tasks**: see `ModelTask` in `shared/python/models/llm_model.py` (`/api/models/tasks/{task}`). The embedding task is the one the API depends on at request time.
 
-**Models**:
-- qwen2.5:3b (default classifier)
-- all-MiniLM-L6-v2 (default embeddings)
-- llama3.2:3b, granite3-dense:8b, phi3.5:3.8b, gemma2:9b, mistral:7b
-
-**Health Checks**: `/api/models/{id}/health` verifies model availability in Ollama
+**Health Checks**: `/api/models/health/{model_id}` verifies model availability. LLM gateway health is at `/api/system/health/llm`.
 
 ### Export Worker
 
@@ -798,16 +850,16 @@ https://api.example.com/rss/search?q=artillery&importance_level=high&format=rss
 **File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/export_worker.py`
 
 **Flow**:
-1. User creates export via `/api/admin/export` (POST)
-2. Export job queued with status `pending`
-3. Worker processes job in background
+1. User starts an export via `POST /api/admin/export/start`
+2. Job row is created with status `pending`
+3. The in-process worker polls the DB every 10 seconds and claims it
 4. Generates CSV/JSON file
-5. Uploads to MinIO (`exports` bucket)
+5. Uploads to MinIO (bucket `MINIO_BUCKET_NAME`, key prefix `exports/<user>/`)
 6. Updates job status to `completed` with download URL
 
-**Redis Queue**: `export_queue` (Redis Streams)
+**Queue**: database-polled (table `export_jobs`, no Redis queue)
 
-**Storage**: MinIO bucket `exports`, 7-day retention
+**Download**: `GET /api/admin/export/{job_id}/download`
 
 ## Configuration
 
@@ -822,25 +874,24 @@ https://api.example.com/rss/search?q=artillery&importance_level=high&format=rss
 | `POSTGRES_PASSWORD` | Database password | *required* |
 | `REDIS_URL` | Redis connection URL | `redis://redis:6379/0` |
 | `API_PORT` | API server port | `8000` |
-| `API_WORKERS` | Uvicorn workers | `4` |
-| `API_CORS_ORIGINS` | Allowed CORS origins (comma-separated) | `http://localhost:3000` |
+| `API_CORS_ORIGINS` | Allowed CORS origins (comma-separated) | compose: `http://localhost,http://localhost:3000` |
+| `FEED_AUTH_REQUIRED` | Require feed tokens on `/rss/*` | compose: `true` |
+| `KRATOS_PUBLIC_URL` | Kratos public URL for session checks | `http://kratos:4433` |
 | `AUTH_PROVIDER` | Auth provider (none/jwt/cloudron/ory) | `none` |
 | `AUTH_REQUIRED` | Require authentication | `false` |
-| `JWT_SECRET_KEY` | JWT signing secret | *required if jwt* |
+| `JWT_SECRET_KEY` | JWT signing secret | *required* |
 | `JWT_ALGORITHM` | JWT algorithm | `HS256` |
-| `JWT_EXPIRATION_HOURS` | Token expiry | `24` |
+| `JWT_EXPIRATION_MINUTES` | Token expiry | `60` |
 | `MINIO_ENDPOINT` | MinIO endpoint | `minio:9000` |
 | `MINIO_ACCESS_KEY` | MinIO access key | `minioadmin` |
 | `MINIO_SECRET_KEY` | MinIO secret key | `minioadmin` |
 | `MINIO_BUCKET_NAME` | Media bucket name | `osint-media` |
 | `MINIO_PUBLIC_URL` | Public MinIO URL | `http://localhost:9000` |
 | `OLLAMA_HOST` | Ollama API endpoint | `http://ollama:11434` |
-| `ORY_KRATOS_PUBLIC_URL` | Ory Kratos URL (if ory auth) | - |
-| `ORY_OATHKEEPER_URL` | Ory Oathkeeper URL (if ory auth) | - |
 
 ### Settings Module
 
-**File**: `~/code/osintukraine/osint-intelligence-platform/services/api/src/config/settings.py`
+**File**: `shared/python/config/settings.py` (shared by all services; the API has no module of its own)
 
 Centralized configuration management with Pydantic `BaseSettings`.
 
@@ -856,14 +907,12 @@ Centralized configuration management with Pydantic `BaseSettings`.
 
 **Database Indexes** (from `infrastructure/postgres/init.sql`):
 - `messages.content_search_vector` (GIN index for full-text search)
-- `messages.content_embedding` (ivfflat index for pgvector)
+- `messages.content_embedding` (HNSW index `idx_messages_content_embedding`, cosine ops)
 - `messages.channel_id`, `messages.telegram_date` (B-tree indexes)
 - `messages.importance_level`, `messages.osint_topic` (partial indexes)
 
 **Connection Pooling**:
-- SQLAlchemy async engine with pool size 10-20 per worker
-- Connection recycling every 3600 seconds
-- Overflow connections: 10
+- SQLAlchemy async engine (pool settings in `services/api/src/database.py` and `shared/python/database/session.py`)
 
 **Caching Strategy**:
 - RSS feeds: Redis cache, 5-15 min TTL
@@ -872,7 +921,7 @@ Centralized configuration management with Pydantic `BaseSettings`.
 
 ### Throughput Metrics
 
-**Expected Performance** (4 Uvicorn workers):
+**Indicative performance** (compose runs a single Uvicorn process; scale replicas or add `--workers`):
 - Simple queries: 200-500 req/sec
 - Full-text search: 100-200 req/sec
 - Semantic search: 20-50 req/sec (Ollama bottleneck)
@@ -897,12 +946,11 @@ api_request_duration_seconds{method="GET", endpoint="/api/messages"} {quantile="
 api_request_duration_seconds{method="GET", endpoint="/api/messages"} {quantile="0.95"} 0.2
 ```
 
-**Grafana Dashboards**: Available in `infrastructure/monitoring/grafana/dashboards/`
+**Grafana Dashboards**: `infrastructure/grafana/dashboards/` (`platform-overview.json`, `osint-pipeline.json`, `sli-slo.json`)
 
 **Health Checks**:
 ```bash
 curl http://localhost:8000/health
-# Returns: {"status": "healthy", "service": "api", "version": "0.1.0"}
 ```
 
 ## Running
@@ -941,7 +989,7 @@ export REDIS_URL=redis://localhost:6379/0
 uvicorn src.main:app --reload --port 8000
 
 # Or with multiple workers (production)
-uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 4
+uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 4   # the Dockerfile CMD runs a single process
 ```
 
 ### Docker Build
@@ -1012,11 +1060,10 @@ WHERE tablename = 'messages';
 
 **Solutions**:
 ```bash
-# 1. Set CORS_ORIGINS in .env
-CORS_ORIGINS=http://localhost:3000,https://yourdomain.com
+# 1. Set API_CORS_ORIGINS in .env
+API_CORS_ORIGINS=http://localhost:3000,https://yourdomain.com
 
-# 2. Or allow all origins (dev only)
-CORS_ORIGINS=*
+# 2. Wildcard (*) is rejected with a security warning: list explicit origins
 
 # 3. Check middleware order in main.py
 # CORS middleware must execute BEFORE auth middleware
@@ -1043,9 +1090,9 @@ docker-compose exec postgres psql -U osint_user -d osint_platform -c \
 
 **Solutions**:
 1. Ensure enrichment service has generated embeddings
-2. Verify Ollama is running and model is pulled
+2. Verify Ollama is running and the embedding model is pulled (search embeddings are the API's one Ollama dependency)
 3. Check model configuration in database
-4. Lower `similarity_threshold` parameter (default: 0.7)
+4. Lower the `threshold` parameter (default 0.6)
 
 ### "RSS feed shows 'Feed not found'"
 
@@ -1079,17 +1126,17 @@ docker-compose logs api | grep rss
 docker-compose exec api env | grep AUTH
 
 # 2. Test JWT token generation
-curl -X POST "http://localhost:8000/api/auth/login" \
+curl -X POST "http://localhost:8000/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "admin"}'
+  -d '{"username": "admin", "password": "<JWT_ADMIN_PASSWORD>"}'
 
-# 3. Check JWT_SECRET is set
-docker-compose exec api env | grep JWT_SECRET
+# 3. Check JWT_SECRET_KEY is set
+docker-compose exec api env | grep JWT_SECRET_KEY
 ```
 
 **Solutions**:
 1. Verify `AUTH_PROVIDER` matches your setup (none/jwt/ory)
-2. Ensure `JWT_SECRET` is set if using JWT auth
+2. Ensure `JWT_SECRET_KEY` is set if using JWT auth
 3. Check user exists in database for JWT auth
 4. Verify token format: `Authorization: Bearer <token>`
 
@@ -1102,20 +1149,13 @@ docker-compose exec api env | grep JWT_SECRET
 # 1. Check export worker logs
 docker-compose logs api | grep export_worker
 
-# 2. Check Redis queue
-docker-compose exec redis redis-cli XLEN export_queue
-
-# 3. Check MinIO bucket exists
-docker-compose exec api python -c "
-from minio import Minio
-client = Minio('minio:9000', access_key='minioadmin', secret_key='minioadmin', secure=False)
-print(client.bucket_exists('exports'))
-"
+# 2. Check recent jobs (the worker polls the DB every 10 s)
+docker-compose exec postgres psql -U osint_user -d osint_platform -c "SELECT id, status FROM export_jobs ORDER BY created_at DESC LIMIT 5;"
 ```
 
 **Solutions**:
 1. Restart API service to restart export worker
-2. Ensure MinIO is running and `exports` bucket exists
+2. Ensure MinIO is running and the media bucket exists
 3. Check Redis connectivity
 4. Review export job error messages in database
 

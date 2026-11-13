@@ -200,7 +200,7 @@ docker compose up -d --scale processor-worker=4
 docker compose exec postgres psql -U osint_user -d osint_platform
 
 # Check Redis queue depth
-docker compose exec redis redis-cli XLEN telegram_messages
+docker compose exec redis redis-cli XLEN telegram:messages:realtime
 
 # Update and restart all services
 git pull origin master

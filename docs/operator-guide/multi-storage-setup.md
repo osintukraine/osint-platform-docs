@@ -70,10 +70,10 @@ Each storage box has:
 # 2. Regenerate Caddy routes and Docker Compose
 ./scripts/storage-admin.sh regen
 
-# 3. Setup SSHFS mount (see below)
-sudo ./scripts/setup-hetzner-storage.sh --box-id russia-1
+# 3. Create the SSHFS mount for the new box (Step 5 below; setup-hetzner-storage.sh only sets up
+#    the first box, /mnt/hetznerstorage)
 
-# 4. Restart affected services
+# 4. Start the new MinIO container(s) and reload Caddy
 docker-compose -f docker-compose.yml -f docker-compose.storage.yml up -d
 docker-compose exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```
@@ -88,6 +88,8 @@ The `storage-admin.sh` script is your primary tool for multi-box management:
 | `./scripts/storage-admin.sh add <id> <host> <user> <mount> <capacity> [region]` | Add new box |
 | `./scripts/storage-admin.sh regen` | Regenerate Caddy routes + Docker Compose |
 | `./scripts/storage-admin.sh health` | Check all box health status |
+
+`storage-admin.sh` reads `.env` and requires `DATABASE_URL` to be set there (it passes it to the generator scripts, which run on the host). `list`, `add` and `health` use `docker-compose exec postgres`.
 
 ### Example: List Storage Boxes
 
@@ -174,8 +176,7 @@ This generates:
 - `docker-compose.storage.yml` - MinIO container definitions
 
 !!! warning "Critical: Verify Docker Mount"
-    The generated `storage-routes.snippet` file **must** be mounted into the Caddy container.
-    Check your `docker-compose.yml` has this volume under the `caddy` service:
+    The generated `storage-routes.snippet` file **must** be mounted into the Caddy container. The shipped `docker-compose.yml` already does this for the `caddy` service (profile `auth`); if you maintain your own compose file, check the volume:
 
     ```yaml
     volumes:
@@ -245,7 +246,7 @@ docker-compose exec caddy caddy reload --config /etc/caddy/Caddyfile
 curl -I http://localhost/minio-russia-2/osint-media/test
 
 # Check processor can select new box
-docker-compose logs processor | grep "Selected storage box"
+docker-compose logs processor-worker | grep "Selected storage box"   # logged at DEBUG level
 ```
 
 ## Box Selection Algorithm
@@ -291,7 +292,9 @@ With 5% tolerance, boxes at 50%, 52%, and 54% usage are treated equally, distrib
 | `minio_endpoint` | VARCHAR(255) | Docker service name (e.g., `minio-russia-1`) |
 | `minio_port` | INTEGER | MinIO port (default 9000) |
 | `capacity_gb` | INTEGER | Total capacity in GB |
+| `capacity_bytes` | BIGINT | Capacity in bytes |
 | `used_bytes` | BIGINT | Actual usage in bytes |
+| `reserved_bytes` | BIGINT | Space reserved for in-flight uploads |
 | `high_water_mark` | INTEGER | Stop writes at this % (default 90) |
 | `is_readonly` | BOOLEAN | Accept no new writes |
 | `is_active` | BOOLEAN | Accepting traffic |
@@ -306,7 +309,7 @@ When a box reaches `high_water_mark` percentage:
 - Box stops receiving new uploads
 - Existing files remain accessible
 
-To clear (after freeing space):
+The health task clears `is_full` by itself once usage drops 5 points below the mark. To clear it manually after freeing space:
 ```sql
 UPDATE storage_boxes
 SET is_full = false
@@ -337,7 +340,7 @@ UPDATE storage_boxes SET priority = 100 WHERE id LIKE '%hdd%';
 
 ### Health Check Task
 
-The enrichment service runs a storage health check every 5 minutes:
+The enrichment service runs a storage health check every 5 minutes (`STORAGE_HEALTH_INTERVAL`, seconds, default 300):
 
 ```bash
 # View health check logs
@@ -345,7 +348,7 @@ docker-compose logs enrichment | grep storage_health
 
 # Check in database
 SELECT id, last_health_check,
-       ROUND(usage_percent::numeric, 1) as usage_pct,
+       ROUND(used_bytes::numeric / (capacity_gb * 1024.0^3) * 100, 1) AS usage_pct,
        is_full
 FROM storage_boxes
 WHERE is_active = true;
@@ -372,15 +375,9 @@ Add to Prometheus alert rules:
     summary: "Storage box mount unhealthy"
     description: "{{ $value }} storage boxes have unhealthy mounts"
 
-- alert: StorageBoxFull
-  expr: |
-    (storage_box_used_bytes / storage_box_capacity_bytes) > 0.90
-  for: 5m
-  labels:
-    severity: critical
-  annotations:
-    summary: "Storage box above 90% capacity"
 ```
+
+There is no per-box usage metric; watch `is_full` and the usage query above (or the `/admin` storage page, if enabled) for capacity.
 
 ## Troubleshooting
 
