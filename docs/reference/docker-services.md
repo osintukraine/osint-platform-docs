@@ -4,7 +4,7 @@ Complete reference for all Docker services in the OSINT Intelligence Platform.
 
 **Source**: [`docker-compose.yml`](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docker-compose.yml) in the platform repo
 
-**Last Updated**: 2026-10-27
+**Last Updated**: 2026-11-14
 
 ---
 
@@ -33,7 +33,7 @@ The platform's containers are organized into functional categories:
 | **Image** | `osint-platform-postgres:latest` (built from `infrastructure/docker/postgres-pgvector-postgis.Dockerfile`: PostgreSQL 16 with pgvector and PostGIS) |
 | **Container Name** | `osint-postgres` |
 | **Purpose** | Primary database with vector extension for semantic search |
-| **Ports** | `${POSTGRES_PORT:-5432}:5432` |
+| **Ports** | `127.0.0.1:${POSTGRES_PORT:-5432}:5432` |
 | **Profile** | (none - essential) |
 | **Dependencies** | None |
 | **Command** | `postgres -c config_file=/etc/postgresql/postgresql.conf` plus `shared_buffers`, `work_mem`, `effective_cache_size` from `POSTGRES_SHARED_BUFFERS` (1GB), `POSTGRES_WORK_MEM` (128MB), `POSTGRES_EFFECTIVE_CACHE` (4GB) |
@@ -48,7 +48,7 @@ The platform's containers are organized into functional categories:
 | **Image** | `redis:7.4.11-alpine` |
 | **Container Name** | `osint-redis` |
 | **Purpose** | Message queue (Redis Streams) and caching layer |
-| **Ports** | `${REDIS_PORT:-6379}:6379` |
+| **Ports** | `127.0.0.1:${REDIS_PORT:-6379}:6379` |
 | **Profile** | (none - essential) |
 | **Dependencies** | None |
 | **Volumes** | `redis_data:/data` |
@@ -62,7 +62,7 @@ The platform's containers are organized into functional categories:
 | **Image** | `pgsty/silo:RELEASE.2026-09-16T00-00-00Z` (S3-compatible MinIO fork) |
 | **Container Name** | `osint-minio` |
 | **Purpose** | S3-compatible object storage for media archival (content-addressed SHA-256) |
-| **Ports** | `${MINIO_PORT:-9000}:9000` (API)<br>`${MINIO_CONSOLE_PORT:-9001}:9001` (Console) |
+| **Ports** | `127.0.0.1:${MINIO_PORT:-9000}:9000` (API)<br>`127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001` (Console) |
 | **Profile** | (none - essential) |
 | **Dependencies** | None |
 | **Volumes** | `${HETZNER_MOUNT_PATH:-./data/minio}:/data` (bind mount; the Hetzner path when set) |
@@ -92,7 +92,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Image** | `ollama/ollama:latest` |
 | **Container Name** | `osint-ollama` |
 | **Purpose** | Local LLM (when `LLM_PROVIDER=ollama`) and search-query embeddings (`all-minilm`), which are needed even with the gateway |
-| **Ports** | `11434` (`OLLAMA_PORT`) |
+| **Ports** | `127.0.0.1:${OLLAMA_PORT:-11434}:11434` |
 | **Profile** | (none) |
 | **Volumes** | `./data/ollama:/root/.ollama` |
 
@@ -111,7 +111,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 |-------|-------|
 | **Container Names** | `osint-ollama-batch`, `osint-ollama-batch-init` |
 | **Purpose** | CPU-era second Ollama for batch enrichment (AI tagging, RSS validation) |
-| **Ports** | `11435` (`OLLAMA_BATCH_PORT`) |
+| **Ports** | `127.0.0.1:${OLLAMA_BATCH_PORT:-11435}:11434` |
 | **Profiles** | `enrichment-standard`, `enrichment-full`, `enrichment` |
 | **Notes** | Not used in production: with the gateway, batch work runs through the `llm-gateway` services |
 
@@ -146,7 +146,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Build** | `services/listener/Dockerfile` |
 | **Container Name** | `osint-listener` |
 | **Purpose** | Monitors Telegram channels and pushes messages to Redis Streams |
-| **Ports** | `${LISTENER_METRICS_PORT:-8001}:8001` (Prometheus metrics)<br>`8002:8002` (health endpoint) |
+| **Ports** | `127.0.0.1:${LISTENER_METRICS_PORT:-8001}:8001` (Prometheus metrics)<br>`127.0.0.1:8002:8002` (health endpoint) |
 | **Profile** | (none - essential) |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
 | **Healthcheck** | `curl http://localhost:8002/health` every 60s (600s start period) |
@@ -162,7 +162,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Build** | `services/listener/Dockerfile` |
 | **Container Name** | `osint-listener-russia` |
 | **Purpose** | Multi-account mode - the Russia account; handles only channels whose `source_account` is `russia`. Opens sessions `listener-russia` and `discovery-russia` |
-| **Ports** | `8011:8001` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:8011:8001` (Prometheus metrics) |
 | **Profile** | `multi-account` |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
 | **Environment** | `TELEGRAM_API_ID_RUSSIA`, `TELEGRAM_API_HASH_RUSSIA`, `TELEGRAM_PHONE_RUSSIA`<br>`SOURCE_ACCOUNT`: russia<br>`TELEGRAM_SESSION_NAME`: listener-russia |
@@ -174,7 +174,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Build** | `services/listener/Dockerfile` |
 | **Container Name** | `osint-listener-ukraine` |
 | **Purpose** | Multi-account mode - the Ukraine account; handles only channels whose `source_account` is `ukraine`. Opens sessions `listener-ukraine` and `discovery-ukraine` |
-| **Ports** | `8012:8001` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:8012:8001` (Prometheus metrics) |
 | **Profile** | `multi-account` |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
 | **Environment** | `TELEGRAM_API_ID_UKRAINE`, `TELEGRAM_API_HASH_UKRAINE`, `TELEGRAM_PHONE_UKRAINE`<br>`SOURCE_ACCOUNT`: ukraine<br>`TELEGRAM_SESSION_NAME`: listener-ukraine |
@@ -186,7 +186,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Build** | `services/shadow-sync/Dockerfile` |
 | **Container Name** | `osint-shadow-sync` |
 | **Purpose** | Disaster recovery: keeps shadow Telegram accounts joined to the same channels as the primary accounts and can fail over (`FAILOVER_AUTO_SWITCH`) |
-| **Ports** | `8013:8001` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:8013:8001` (Prometheus metrics) |
 | **Profile** | `dr` (not part of multi-account mode) |
 | **Dependencies** | `postgres` (healthy) |
 | **Environment** | `DR_ENABLED`, `SHADOW_SYNC_INTERVAL`, `SHADOW_JOIN_RATE_LIMIT`, `HEALTH_CHECK_INTERVAL`, `{RUSSIA,UKRAINE}_{PRIMARY,SHADOW}_{API_ID,API_HASH,PHONE}` |
@@ -249,7 +249,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Build** | `services/api/Dockerfile` |
 | **Container Name** | `osint-api` |
 | **Purpose** | REST API with FastAPI - serves data, semantic search, admin console |
-| **Ports** | `${API_PORT:-8000}:8000` (API)<br>`${API_METRICS_PORT:-8003}:8003` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:${API_PORT:-8000}:8000` (API)<br>`127.0.0.1:${API_METRICS_PORT:-8003}:8003` (Prometheus metrics) |
 | **Profile** | (none - essential) |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy), `ollama` (healthy) |
 | **Volumes** | None — code is baked into the image (no source mounts) |
@@ -263,7 +263,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Build** | `services/frontend-nextjs/Dockerfile` (`NEXT_PUBLIC_*` values are build arguments) |
 | **Container Name** | `osint-frontend` |
 | **Purpose** | Next.js frontend with Bun runtime |
-| **Ports** | `3000:3000` |
+| **Ports** | `127.0.0.1:3000:3000` |
 | **Profile** | (none - essential) |
 | **Dependencies** | `api` (healthy), `minio` (healthy) |
 | **Environment** | `API_URL`: http://api:8000 (server-side)<br>`MINIO_URL`: http://minio:9000/osint-media<br>`NODE_ENV`: production<br>Client-side URLs (`NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_MINIO_URL`, `NEXT_PUBLIC_BASE_URL`) are baked in at build time |
@@ -311,7 +311,7 @@ Production uses an external **LLM gateway** (`LLM_PROVIDER=openai`), which is no
 | **Image** | `nocodb/nocodb:latest` |
 | **Container Name** | `osint-nocodb` |
 | **Purpose** | Airtable-like database UI for database management |
-| **Ports** | `${NOCODB_PORT:-8080}:8080` |
+| **Ports** | `127.0.0.1:${NOCODB_PORT:-8080}:8080` |
 | **Profile** | `tools` |
 | **Dependencies** | `postgres` (healthy) |
 | **Volumes** | `nocodb_data:/usr/app/data` |
@@ -331,7 +331,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-ai-tagging` |
 | **Purpose** | LLM-based tag generation (themes, tactics, sentiment) |
-| **Ports** | `9196:9196` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9196:9196` (Prometheus metrics) |
 | **Profiles** | `enrichment-standard`, `enrichment-full`, `llm-gateway` |
 | **Dependencies** | `postgres` (healthy); `ollama-batch` only if running |
 | **Environment** | `AI_TAGGING_MODEL`: qwen2.5:1.5b (Ollama option)<br>`LLM_GATEWAY_MODEL`: `LLM_GATEWAY_BATCH_MODEL` (default osint-batch)<br>`BATCH_SIZE`: `AI_TAGGING_BATCH_SIZE` (12)<br>`TIME_BUDGET_SECONDS`: 120 |
@@ -343,7 +343,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-event-detection` |
 | **Purpose** | Creates events from RSS and matches Telegram messages |
-| **Ports** | `9099:9099` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9099:9099` (Prometheus metrics) |
 | **Profiles** | `enrichment-standard`, `enrichment-full`, `llm-gateway` |
 | **Dependencies** | `postgres` (healthy); `ollama-batch` only if running |
 | **Environment** | `EVENT_DETECTION_MODEL`: qwen2.5:3b (Ollama option)<br>`LLM_GATEWAY_MODEL`: `LLM_GATEWAY_BATCH_MODEL`<br>`BATCH_SIZE`: 10<br>`TIME_BUDGET_SECONDS`: 300 |
@@ -355,7 +355,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-router` |
 | **Purpose** | Routes messages to Redis queues (Phase 3 architecture) |
-| **Ports** | `9198:9198` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9198:9198` (Prometheus metrics) |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
 | **Environment** | `ROUTER_POLL_INTERVAL`: 30<br>`ROUTER_BATCH_SIZE`: 100 |
 
@@ -366,7 +366,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-rss-validation` |
 | **Purpose** | LLM validation of RSS correlations (confirms, contradicts, context, alternative) on the batch lane |
-| **Ports** | `9197` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9197:9197` (Prometheus metrics) |
 | **Profiles** | `enrichment-standard`, `enrichment-full`, `llm-gateway` |
 | **Environment** | `RSS_VALIDATION_MODEL` (compose default granite3-dense:2b, set the gateway alias in `.env`), `LLM_GATEWAY_BATCH_API_KEY`, `RSS_VALIDATION_TIME_BUDGET_SECONDS` (60), `RSS_VALIDATION_BATCH_SIZE` (6), `RSS_VALIDATION_CYCLE_INTERVAL_SECONDS` (30) |
 | **Notes** | Only recent posts inside the correlation window are queued; the similarity floor is the admin setting `validation_min_similarity` |
@@ -378,7 +378,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-fact-check` |
 | **Purpose** | Audits a sample of recent LLM-classified messages on the audit lane and auto-reclassifies on high confidence. See [Fact-Check](../developer-guide/services/fact-check.md) |
-| **Ports** | `9203` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9203:9203` (Prometheus metrics) |
 | **Profiles** | `enrichment-standard`, `enrichment-full`, `llm-gateway` |
 | **Environment** | `FACT_CHECK_MODEL` (compose default qwen2.5:3b, set the gateway alias in `.env`), `LLM_GATEWAY_AUDIT_API_KEY`, `FACT_CHECK_NUM_PREDICT` (500), `FACT_CHECK_LOOKBACK_DAYS` (7), `FACT_CHECK_SAMPLE_SIZE` (50), `FACT_CHECK_AUTO_ACTION_THRESHOLD` (0.85), `FACT_CHECK_HUMAN_REVIEW_THRESHOLD` (0.60), `FACT_CHECK_TIME_BUDGET_SECONDS` (600), `FACT_CHECK_CYCLE_INTERVAL_SECONDS` (300) |
 
@@ -389,7 +389,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-fast-pool` |
 | **Purpose** | CPU-bound tasks: embedding generation, translation, entity matching |
-| **Ports** | `9199:9199` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9199:9199` (Prometheus metrics) |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
 | **Environment** | `EMBEDDING_MODEL`: all-MiniLM-L6-v2<br>`BATCH_SIZE`: 50<br>`TIME_BUDGET_SECONDS`: 60<br>`DEEPL_API_KEY` |
 
@@ -400,7 +400,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-telegram` |
 | **Purpose** | Telegram API tasks: engagement polling, social graph, comment fetching |
-| **Ports** | `9200:9200` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9200:9200` (Prometheus metrics) |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
 | **Volumes** | `./telegram_sessions:/app/sessions` |
 | **Replicas** | `${SINGLE_ACCOUNT_REPLICAS:-${ENRICHMENT_WORKER_REPLICAS:-1}}`: 0 in multi mode |
@@ -424,7 +424,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-decision` |
 | **Purpose** | Decision verification and reprocessing tasks |
-| **Ports** | `9201:9201` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9201:9201` (Prometheus metrics) |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
 | **Environment** | `BATCH_SIZE`: 50<br>`TIME_BUDGET_SECONDS`: 60 |
 
@@ -435,7 +435,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-maintenance` |
 | **Purpose** | Hourly maintenance: channel cleanup, quarantine processing, discovery evaluation |
-| **Ports** | `9202:9202` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9202:9202` (Prometheus metrics) |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
 | **Environment** | `BATCH_SIZE`: 100<br>`TIME_BUDGET_SECONDS`: 120<br>`CYCLE_INTERVAL_SECONDS`: 300 |
 
@@ -446,7 +446,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-geolocation-llm` |
 | **Purpose** | LLM-based location extraction from message content |
-| **Ports** | `9210:9210` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9210:9210` (Prometheus metrics) |
 | **Profiles** | `enrichment-standard`, `enrichment-full`, `llm-gateway` |
 | **Dependencies** | `postgres` (healthy); `ollama-batch` only if running |
 | **Environment** | `GEOLOCATION_MODEL`: qwen2.5:1.5b (Ollama option)<br>`LLM_GATEWAY_MODEL`: `LLM_GATEWAY_BATCH_MODEL`<br>`BATCH_SIZE`: `GEOLOCATION_LLM_BATCH_SIZE` (12)<br>`TIME_BUDGET_SECONDS`: 600 |
@@ -458,7 +458,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-cluster-detection` |
 | **Purpose** | Event Detection V3: velocity-based cluster detection + auxiliary tasks (archiver, tier updater) |
-| **Ports** | `9211:9211` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9211:9211` (Prometheus metrics) |
 | **Profiles** | `enrichment-lite`, `enrichment-standard`, `enrichment-full` |
 | **Dependencies** | `postgres` (healthy), `redis` (healthy) |
 | **Environment** | `CLUSTER_VELOCITY_THRESHOLD`: 2.0<br>`CLUSTER_TIME_WINDOW_HOURS`: 720<br>`CLUSTER_SIMILARITY_THRESHOLD`: 0.80<br>`MIN_MESSAGES_FOR_CLUSTER`: 3<br>`BATCH_SIZE`: 50<br>`TIME_BUDGET_SECONDS`: 120 |
@@ -471,7 +471,7 @@ Enrichment workers are selected by the `enrichment-lite`, `enrichment-standard` 
 | **Build** | `services/enrichment/Dockerfile` |
 | **Container Name** | `osint-enrichment-cluster-validation` |
 | **Purpose** | LLM-based cluster validation using claim analysis (factual/rumor/propaganda) |
-| **Ports** | `9212:9212` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9212:9212` (Prometheus metrics) |
 | **Profiles** | `enrichment-standard`, `enrichment-full`, `llm-gateway` |
 | **Dependencies** | `postgres` (healthy); `ollama-batch` only if running |
 | **Environment** | `VALIDATION_MODEL`: qwen2.5:3b (Ollama option)<br>`LLM_GATEWAY_MODEL`: `LLM_GATEWAY_BATCH_MODEL`<br>`CLUSTER_RUMOR_TTL_HOURS`: 24<br>`BATCH_SIZE`: `CLUSTER_VALIDATION_BATCH_SIZE` (10)<br>`TIME_BUDGET_SECONDS`: 120<br>`LLM_TIMEOUT`: 180 |
@@ -545,7 +545,7 @@ All monitoring services use the `monitoring` profile.
 | **Image** | `prom/prometheus:v2.48.0` |
 | **Container Name** | `osint-prometheus` |
 | **Purpose** | Metrics collection and alerting |
-| **Ports** | `${PROMETHEUS_PORT:-9090}:9090` |
+| **Ports** | `127.0.0.1:${PROMETHEUS_PORT:-9090}:9090` |
 | **Profile** | `monitoring` |
 | **Volumes** | `./infrastructure/prometheus:/etc/prometheus/config:ro`<br>`prometheus_data:/prometheus` |
 | **Command** | 30-day retention, lifecycle API enabled |
@@ -558,7 +558,7 @@ All monitoring services use the `monitoring` profile.
 | **Image** | `grafana/grafana:11.4.0` |
 | **Container Name** | `osint-grafana` |
 | **Purpose** | Visualization and dashboards |
-| **Ports** | `${GRAFANA_PORT:-3000}:3000` (compose default 3000, which collides with the frontend; `.env.example` sets `GRAFANA_PORT=3001`) |
+| **Ports** | `127.0.0.1:${GRAFANA_PORT:-3001}:3000` (host port 3001 by default, so it does not collide with the frontend on 3000) |
 | **Profile** | `monitoring` |
 | **Dependencies** | `prometheus` (healthy) |
 | **Volumes** | `grafana_data:/var/lib/grafana`<br>`./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro`<br>`./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro` |
@@ -572,7 +572,7 @@ All monitoring services use the `monitoring` profile.
 | **Image** | `prom/alertmanager:v0.26.0` |
 | **Container Name** | `osint-alertmanager` |
 | **Purpose** | Alert routing to ntfy via notifier service |
-| **Ports** | `${ALERTMANAGER_PORT:-9093}:9093` |
+| **Ports** | `127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093` |
 | **Profile** | `monitoring` |
 | **Dependencies** | `prometheus` (healthy), `notifier` (healthy) |
 | **Volumes** | `./infrastructure/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro`<br>`alertmanager_data:/alertmanager` |
@@ -585,7 +585,7 @@ All monitoring services use the `monitoring` profile.
 | **Build** | `services/notifier/Dockerfile` |
 | **Container Name** | `osint-notifier` |
 | **Purpose** | Routes Redis events to ntfy topics with batching |
-| **Ports** | `9094:9094` (Prometheus metrics) |
+| **Ports** | `127.0.0.1:9094:9094` (Prometheus metrics) |
 | **Profiles** | `monitoring`, `notifications` |
 | **Dependencies** | `redis`, `ntfy`, `postgres` (all healthy) |
 | **Volumes** | None — code is baked into the image (no source mounts) |
@@ -612,7 +612,7 @@ All monitoring services use the `monitoring` profile.
 | **Image** | `gcr.io/cadvisor/cadvisor:v0.51.0` |
 | **Container Name** | `osint-cadvisor` |
 | **Purpose** | Container resource metrics (CPU, memory, network) |
-| **Ports** | `8081:8080` |
+| **Ports** | `127.0.0.1:8081:8080` |
 | **Profile** | `monitoring` |
 | **Volumes** | `/:/rootfs:ro`<br>`/var/run:/var/run:ro`<br>`/sys:/sys:ro`<br>`/var/lib/docker/:/var/lib/docker:ro` |
 | **Privileged** | Yes (required for container inspection) |
@@ -625,7 +625,7 @@ All monitoring services use the `monitoring` profile.
 | **Image** | `grafana/loki:3.3.2` |
 | **Container Name** | `osint-loki` |
 | **Purpose** | Log storage and querying (used from Grafana) |
-| **Ports** | `3100` (`LOKI_PORT`) |
+| **Ports** | `127.0.0.1:${LOKI_PORT:-3100}:3100` |
 | **Profile** | `monitoring` |
 
 ### promtail
@@ -644,7 +644,7 @@ All monitoring services use the `monitoring` profile.
 | **Image** | `prom/node-exporter:v1.7.0` |
 | **Container Name** | `osint-node-exporter` |
 | **Purpose** | Host system metrics (CPU, memory, disk, network) |
-| **Ports** | `9100:9100` |
+| **Ports** | `127.0.0.1:9100:9100` |
 | **Profile** | `monitoring` |
 | **Volumes** | `/proc:/host/proc:ro`<br>`/sys:/host/sys:ro`<br>`/:/rootfs:ro` |
 | **Command** | Excludes Docker virtual interfaces |
@@ -661,7 +661,7 @@ All monitoring services use the `monitoring` profile.
 | **Image** | `prometheuscommunity/postgres-exporter:v0.15.0` |
 | **Container Name** | `osint-postgres-exporter` |
 | **Purpose** | PostgreSQL metrics for Prometheus |
-| **Ports** | `9187:9187` |
+| **Ports** | `127.0.0.1:9187:9187` |
 | **Profile** | `monitoring` |
 | **Dependencies** | `postgres` (healthy) |
 | **Volumes** | `./infrastructure/postgres-exporter/queries.yaml:/etc/postgres_exporter/queries.yaml:ro` |
@@ -675,7 +675,7 @@ All monitoring services use the `monitoring` profile.
 | **Image** | `oliver006/redis_exporter:v1.55.0` |
 | **Container Name** | `osint-redis-exporter` |
 | **Purpose** | Redis queue metrics for Prometheus |
-| **Ports** | `9121:9121` |
+| **Ports** | `127.0.0.1:9121:9121` |
 | **Profile** | `monitoring` |
 | **Dependencies** | `redis` |
 | **Environment** | `REDIS_ADDR`: redis:6379 |
@@ -726,7 +726,7 @@ All authentication services use the `auth` profile.
 | **Image** | `oryd/kratos:v1.1.0` |
 | **Container Name** | `osint-kratos` |
 | **Purpose** | Identity management (registration, login, OAuth) |
-| **Ports** | `4433:4433` (Public API)<br>`4434:4434` (Admin API) |
+| **Ports** | `127.0.0.1:4433:4433` (Public API)<br>`127.0.0.1:4434:4434` (Admin API) |
 | **Profile** | `auth` |
 | **Dependencies** | `postgres` (healthy), `kratos-migrate` (completed) |
 | **Volumes** | `./infrastructure/kratos:/etc/config/kratos:ro` |
@@ -740,7 +740,7 @@ All authentication services use the `auth` profile.
 | **Image** | `oryd/oathkeeper:v0.40.6` |
 | **Container Name** | `osint-oathkeeper` |
 | **Purpose** | Access proxy and request authorization |
-| **Ports** | `4455:4455` (Proxy)<br>`4456:4456` (API) |
+| **Ports** | `127.0.0.1:4455:4455` (Proxy)<br>`127.0.0.1:4456:4456` (API) |
 | **Profile** | `auth` |
 | **Dependencies** | `kratos` (healthy) |
 | **Volumes** | `./infrastructure/oathkeeper:/etc/config/oathkeeper:ro` |
@@ -753,7 +753,7 @@ All authentication services use the `auth` profile.
 | **Image** | `asyafiqe/caddy-crowdsec-bouncer:2.7.6` (Caddy with the CrowdSec bouncer) |
 | **Container Name** | `osint-caddy` |
 | **Purpose** | Reverse proxy with automatic HTTPS |
-| **Ports** | `80:80` (HTTP)<br>`443:443` (HTTPS)<br>`2019:2019` (Admin API) |
+| **Ports** | `80:80` (HTTP, public)<br>`443:443` (HTTPS, public)<br>`127.0.0.1:2019:2019` (Admin API) |
 | **Profile** | `auth` |
 | **Dependencies** | `frontend`, `api`, `oathkeeper`, `kratos` |
 | **Volumes** | `./infrastructure/caddy/Caddyfile.production:/etc/caddy/Caddyfile:ro`, `storage-routes.snippet`, `caddy_data`, `caddy_config`, `caddy_logs`, media buffer (read-only) |
@@ -769,7 +769,7 @@ All authentication services use the `auth` profile.
 | **Build** | `${DOCS_REPO_PATH:-../osint-platform-docs}/Dockerfile` (this documentation repo) |
 | **Container Name** | `osint-mkdocs` |
 | **Purpose** | Documentation site with Material theme |
-| **Ports** | `8001:8000` |
+| **Ports** | `127.0.0.1:${MKDOCS_PORT:-8001}:8000` |
 | **Profile** | `tools` |
 | **Volumes** | `${DOCS_REPO_PATH}/docs` and `mkdocs.yml`, read-only |
 | **Command** | `mkdocs serve --dev-addr=0.0.0.0:8000 --no-livereload` |
