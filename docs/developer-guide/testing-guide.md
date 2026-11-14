@@ -387,7 +387,7 @@ pytest --cov=services --cov-report=html
 
 | Area | Test files | Notes |
 |------|------------|-------|
-| **api** | ~30 | Admin routes require admin, runtime config, pagination, search SQL, health; DB-backed tests need `TEST_DATABASE_URL` |
+| **api** | ~30 | Admin routes require admin, runtime config, pagination, search SQL, health; DB-backed tests run against the real schema via `TEST_SCHEMA_DATABASE_URL` (the `schema-api` CI job); only `test_admin_config_audit_db` uses plain `TEST_DATABASE_URL` |
 | **processor** | ~28 | Classifier parsing and guards, gateway client, media lane, backlog/council, routing, entities |
 | **enrichment** | ~30 | Geolocation, fact-check and RSS-validation gateway paths, queues, clusters, council vote |
 | **listener** | 7 | Multi-account session names, channel sync, backfill queues |
@@ -395,15 +395,7 @@ pytest --cov=services --cov-report=html
 | **rss-ingestor** | 2 | Correlation, polling |
 | **opensanctions** | 2 | Client, embeddings |
 | **shared** | 5 | Runtime config, hardware detection, model schema tests |
-| **frontend** | 2 | Vitest: `metrics-client`, `ErrorBoundary` |
-
----------|------------|-------|
-| **api** | 3 files | Messages, channels, RSS |
-| **processor** | 7 files | LLM classifier, spam, routing, entities |
-| **notifier** | 4 files | Batching, formatting, publishing |
-| **rss-ingestor** | 2 files | Correlation, polling |
-| **opensanctions** | 2 files | Client, embeddings |
-| **enrichment** | 0 files | No tests yet |
+| **frontend** | 3 | Vitest: `metrics-client`, `metadata`, `ErrorBoundary` |
 
 ---
 
