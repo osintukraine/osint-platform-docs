@@ -50,6 +50,7 @@ Topic names are flat identifiers. The main ones:
 | `osint_system_containers` | Container started, stopped or unhealthy | Unhealthy immediate |
 | `osint_system_resources` | High CPU, memory or disk | Batched |
 | `osint_api_errors` | API 4xx and 5xx errors | 5xx immediate |
+| `osint_api_requests` | API request activity | Batched |
 | `osint_api_rss` | RSS feeds generated or subscribed | Batched |
 | `osint_prometheus_alerts` | Alerts from the monitoring stack | By severity |
 
