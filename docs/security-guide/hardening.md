@@ -17,7 +17,7 @@ Use this checklist before deploying to production:
 - [ ] **HTTPS enabled** - Configure TLS with valid certificates
 - [ ] **Strong passwords** - All database and service passwords are random 256-bit secrets
 - [ ] **Secrets not in git** - Verify `.env` is gitignored and never committed
-- [ ] **Published ports closed** - `docker-compose.yml` publishes PostgreSQL, Redis, MinIO, Kratos admin (4434) and Caddy admin (2019) on all interfaces; Docker bypasses UFW (see Port Exposure)
+- [ ] **Published ports loopback-only** - every host port in `docker-compose.yml` is bound to `127.0.0.1` except Caddy `80`/`443`; confirm with `ss -tlnp` (see Port Exposure)
 - [ ] **CrowdSec deployed** - Intrusion prevention enabled (production)
 - [ ] **Docker security** - Only the frontend image drops root today; review the others
 - [ ] **Backup encryption** - `scripts/backup.sh` output is unencrypted; encrypt before off-site copy
@@ -117,6 +117,7 @@ sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT
 
 # Docker-published ports are filtered in the DOCKER-USER chain, not INPUT:
 sudo iptables -I DOCKER-USER -i eth0 -p tcp -m multiport --dports 5432,6379,9000,9001,4433,4434,4455,4456,2019,3000,8000 -j DROP
+# (defense-in-depth: the compose file already binds these to 127.0.0.1)
 # (replace eth0 with your public interface; allow 80/443 only to Caddy)
 
 # Save rules
@@ -132,46 +133,31 @@ sudo netfilter-persistent save
 
 ### Port Exposure
 
-With only `docker-compose.yml`, these services publish ports on **all host interfaces**:
+Every host port published by `docker-compose.yml` is bound to `127.0.0.1`. The only exceptions are Caddy's `80:80` and `443:443`, which are public by design. Service-to-service traffic uses the Docker `backend` network, and `deploy.sh` and `admin-config.sh` use `localhost`.
 
-| Ports | Service | Risk |
-|-------|---------|------|
-| 5432 | PostgreSQL | database access |
-| 6379 | Redis | **no password configured** by the shipped service |
-| 9000/9001 | MinIO API/console | object store |
-| 4433/4434 | Kratos public/**admin** | admin API controls identities |
-| 4455/4456 | Oathkeeper proxy/API | |
-| 2019 | Caddy admin API (`auth` profile base file) | reconfigure proxy |
-| 3000, 8000/8003 | Frontend, API/metrics | bypass Caddy and CrowdSec |
-| 11434/11435 | Ollama | unauthenticated LLM |
-| 9xxx, 8001-8013 | service metrics | information disclosure |
-| 8080 | NocoDB (`tools` profile) | |
+| Ports | Service | Binding |
+|-------|---------|---------|
+| 80, 443 | Caddy | **all interfaces** (public) |
+| 5432 | PostgreSQL | `127.0.0.1` |
+| 6379 | Redis (no password enforced by the shipped service) | `127.0.0.1` |
+| 9000/9001 | MinIO API/console | `127.0.0.1` |
+| 4433/4434 | Kratos public/admin | `127.0.0.1` |
+| 4455/4456 | Oathkeeper proxy/API | `127.0.0.1` |
+| 2019 | Caddy admin API | `127.0.0.1` |
+| 3000, 8000/8003 | Frontend, API/metrics | `127.0.0.1` |
+| 11434/11435 | Ollama | `127.0.0.1` |
+| 9xxx, 8001-8013 | Service metrics | `127.0.0.1` |
+| 8080 | NocoDB (`tools` profile) | `127.0.0.1` |
 
-Only `ntfy` is bound to `127.0.0.1` by default. For production, reduce this surface with a `docker-compose.override.yml` (Compose 2.24+ supports `!reset`/`!override`):
+!!! info "Why loopback matters"
+    Docker publishes ports through its own iptables chains, so UFW does not filter them. On hosts running Tailscale, the `ts-input` chain also accepts tailnet traffic before UFW, so a port published on `0.0.0.0` was reachable from the whole tailnet. That exposed the API (which trusts `X-User-*` headers from private addresses), Redis, the Caddy admin API, Kratos admin, Postgres and more. Commit `88363616` rebound all 42 such ports to `127.0.0.1`.
 
-```yaml
-services:
-  postgres:
-    ports: !override
-      - "127.0.0.1:5432:5432"
-  redis:
-    ports: !override
-      - "127.0.0.1:6379:6379"
-  minio:
-    ports: !override
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
-  kratos:
-    ports: !override
-      - "127.0.0.1:4433:4433"
-      - "127.0.0.1:4434:4434"
-  caddy:
-    ports: !override
-      - "80:80"
-      - "443:443"
-```
+A guard test (`services/listener/tests/test_compose_ports_loopback.py`) fails if any port other than Caddy `80`/`443` is published beyond loopback. Keep it passing when you add services.
 
-Repeat for every other service whose port you do not need from outside, then confirm with `ss -tlnp` on the host and an external scan.
+!!! note "No override needed"
+    A `docker-compose.override.yml` that re-binds these ports with `ports: !override` is now redundant, because the base file already binds loopback. Only use an override if you deliberately need a different binding, and re-run `ss -tlnp` afterwards.
+
+The UFW / `DOCKER-USER` DROP rules above are still worth keeping as defense-in-depth: they protect you if someone later adds a port without the `127.0.0.1:` prefix.
 
 **Access internal services:** use SSH tunnels or a VPN:
 
@@ -508,7 +494,7 @@ Internet → Caddy (443) → /media/* → MinIO (internal:9000)
                     Pre-signed validation
 ```
 
-**Compose:** the base file publishes MinIO on `9000/9001` (all interfaces). Rebind to `127.0.0.1` or remove the mapping with an override (see Port Exposure); Caddy and the services reach it as `minio:9000` on the `backend` network. Media is served to browsers by Caddy (local buffer / storage routes with an API redirect fallback); see [Caddy](../operator-guide/caddy.md).
+**Compose:** the base file publishes MinIO on `127.0.0.1:9000` and `127.0.0.1:9001` only (see Port Exposure); remove the mapping with an override if you do not need host access; Caddy and the services reach it as `minio:9000` on the `backend` network. Media is served to browsers by Caddy (local buffer / storage routes with an API redirect fallback); see [Caddy](../operator-guide/caddy.md).
 
 ### Bucket Access Control
 

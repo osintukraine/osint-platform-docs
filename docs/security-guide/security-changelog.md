@@ -2,6 +2,34 @@
 
 This document tracks significant security improvements and vulnerability fixes in the OSINT Intelligence Platform.
 
+## 2026-10 to 2026-11: Loopback Ports and CrowdSec Tuning
+
+### All Host Ports Rebound to 127.0.0.1
+
+**Commit**: `88363616 security: publish every host port on 127.0.0.1 except Caddy 80/443`
+
+On Tailscale hosts, the `ts-input` chain accepts tailnet traffic before UFW, so all 42 ports published on `0.0.0.0` were reachable from the tailnet. That included the API (which trusts `X-User-*` headers from private addresses, giving admin without an account), Redis (no password), the Caddy admin API, Kratos admin, Postgres, Prometheus and MinIO.
+
+**Fix**: every published port in `docker-compose.yml` is now `127.0.0.1:<host>:<container>`. Only Caddy `80:80` and `443:443` remain public. Internal traffic uses the Docker network, and `deploy.sh` and `admin-config.sh` use `localhost`. Use SSH tunnels to reach Grafana and similar tools.
+
+**Guard test**: `services/listener/tests/test_compose_ports_loopback.py` fails if any port other than Caddy 80/443 is published beyond loopback.
+
+See [Hardening: Port Exposure](hardening.md#port-exposure).
+
+### CrowdSec Owner Whitelist Is Host-Only
+
+**Commit**: `4c03a241 fix: CrowdSec owner whitelist is host-only, the repo keeps a template`
+
+The owner whitelist named a real IP in the repo. The real file is now `infrastructure/crowdsec/whitelists/owner-ips.local.yaml` (ignored by version control, host-only). The repo ships `owner-ips.local.yaml.example` with the documentation placeholder `192.0.2.1`; `scripts/deploy.sh` seeds the local file from the example when it is missing. The whitelist also exempts `crowdsecurity/http-admin-interface-probing`. See [CrowdSec: Whitelisting](crowdsec.md).
+
+### CrowdSec `osint/minio-abuse` Counts Only 401/403
+
+**Commit**: `19f01ca9 fix: CrowdSec minio-abuse counts only 401/403`
+
+A 404 on a media path is the platform's own missing file, not an access attempt, and counting it banned feed readers and site visitors. The scenario now triggers on 401/403 only.
+
+---
+
 ## 2025-12-27: Comprehensive Security Hardening
 
 This release includes a major security audit and hardening effort, addressing multiple vulnerability classes and improving the overall security posture.

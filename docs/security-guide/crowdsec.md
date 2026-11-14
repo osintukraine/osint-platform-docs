@@ -138,18 +138,18 @@ Ten platform-specific scenarios live in `infrastructure/crowdsec/scenarios/`. Th
 
 | Scenario | Ban | Trigger (leaky bucket) |
 |----------|-----|------------------------|
-| `osint/api-abuse` | 6 h | 30+ distinct `/api/` paths answering 401/403/429 (probing; busy public read paths are excluded) |
-| `osint/auth-bruteforce` | 24 h | 3 failed (400/401/403/422) requests to `/auth/` within 60 s |
-| `osint/admin-abuse` | 48 h | 5+ 401/403 responses on NocoDB, Grafana, ntfy, docs or Kratos-admin paths within 60 s |
-| `osint/search-abuse` | 12 h | 60+ distinct `/api/search` or `/api/semantic` paths (bucket leaks one event per 5 s) |
-| `osint/data-extraction` | 72 h | 400+ distinct successful (200) `/api/` paths (bucket leaks one event per second) |
-| `osint/rss-abuse` | 4 h (default) | 20+ 401/403 responses on `/rss/` (bad or missing feed tokens) |
-| `osint/suspicious-ua` | 1 h | 15+ requests with a bot/curl/wget/python-style user agent in 60 s; known crawlers and link-preview bots (Googlebot, Telegram, Facebook, ...) are excluded |
-| `osint/kratos-enum` | 4 h (default) | 10+ distinct registration/recovery/verification requests under `/kratos/self-service/` |
-| `osint/minio-abuse` | 4 h (default) | 10+ 401/403/404 responses on `/minio/` or `/osint-media/` |
-| `osint/monitoring-abuse` | 4 h (default) | 5+ 401/403 responses on Prometheus, Alertmanager or `/metrics` |
+| `osint/api-abuse` | 6 h | 401/403/429 responses on `/api/` paths (bucket capacity 100, leak 1 per 5 s; busy public read paths are excluded) |
+| `osint/auth-bruteforce` | 24 h | failed (400/401/403/422) requests to `/auth/` (capacity 5, leak 1 per 60 s) |
+| `osint/admin-abuse` | 48 h | 401/403 responses on NocoDB, Grafana, ntfy, docs or Kratos-admin paths (capacity 15, leak 1 per 60 s) |
+| `osint/search-abuse` | 12 h | `/api/search` or `/api/semantic` requests (capacity 120, leak 1 per 5 s) |
+| `osint/data-extraction` | 72 h | successful (200) `/api/` requests (capacity 600, leak 1 per second) |
+| `osint/rss-abuse` | 4 h (default) | 401/403 responses on `/rss/` (bad or missing feed tokens; capacity 50, leak 1 per 10 s) |
+| `osint/suspicious-ua` | 1 h | requests with a bot/curl/wget/python-style user agent (capacity 20, leak 1 per 60 s); known crawlers and link-preview bots (Googlebot, Telegram, Facebook, ...) are excluded |
+| `osint/kratos-enum` | 4 h (default) | registration/recovery/verification requests under `/kratos/self-service/` (capacity 20, leak 1 per 30 s) |
+| `osint/minio-abuse` | 4 h (default) | 401/403 responses on `/minio/` or `/osint-media/` (capacity 30, leak 1 per 5 s). 404 is deliberately not counted: a missing media file is the platform's own, not an access attempt |
+| `osint/monitoring-abuse` | 4 h (default) | 401/403 responses on Prometheus, Alertmanager or `/metrics` (capacity 20, leak 1 per 10 s) |
 
-Additionally, `profiles.yaml` bans anything matching `CVE` or `exploit` for 168 h. Treat the numbers above as defaults that are tuned over time: the YAML files are the source of truth.
+Additionally, `profiles.yaml` bans anything matching `CVE` or `exploit` for 168 h. Treat the numbers above as defaults that are tuned over time: the YAML files are the source of truth (a bucket overflows when it exceeds its capacity).
 
 ## Security Scenarios
 
@@ -164,6 +164,7 @@ CrowdSec includes built-in web application firewall scenarios:
 - `crowdsecurity/http-sensitive-files` - Sensitive file access attempts
 - `crowdsecurity/http-crawl-non_statics` - Aggressive crawling detection
 - `crowdsecurity/http-generic-bf` - Generic brute force protection
+- `crowdsecurity/http-admin-interface-probing` - Admin interface probing (the owner whitelist exempts this scenario too)
 
 **Network Attacks:**
 
@@ -343,17 +344,18 @@ docker-compose exec crowdsec cscli decisions delete --ip 192.168.1.100
 
 **Permanent (post-overflow whitelist):**
 
-The platform ships `infrastructure/crowdsec/whitelists/owner-ips.yaml`, mounted into `/etc/crowdsec/postoverflows/s01-whitelist/`. It exempts one IP from the site-usage scenarios only (`search-abuse`, `data-extraction`, `api-abuse`, `admin-abuse`); authentication and attack scenarios still apply. Replace the example IP with your own (use a stable address; a reassigned dynamic IP passes its exemption to the next holder), then restart CrowdSec:
+The repo ships only a template, `infrastructure/crowdsec/whitelists/owner-ips.local.yaml.example`. The real file, `owner-ips.local.yaml`, is **ignored by version control and host-only** (an owner's IP must never reach the repo, a PR or notes). Compose mounts it into `/etc/crowdsec/postoverflows/s01-whitelist/`, and `scripts/deploy.sh` seeds it from the example when it is missing, so a fresh host never gets an empty directory in its place. It exempts one IP from the site-usage scenarios only (`search-abuse`, `data-extraction`, `api-abuse`, `admin-abuse`, `crowdsecurity/http-admin-interface-probing`); authentication and attack scenarios still apply. Copy the example to `owner-ips.local.yaml`, replace the placeholder `192.0.2.1` (a documentation address) with your own IP (use a stable address; a reassigned dynamic IP passes its exemption to the next holder), then restart CrowdSec:
 
 ```yaml
 name: osint/owner-whitelist
 description: "Owner IP: exempt from the site-usage scenarios only"
 whitelist:
-  reason: "Owner IP - site usage never banned"
+  reason: "Owner IP - site usage (browsing, search, admin pages) never banned"
   expression:
     - >-
-      evt.Overflow.Alert.Source.IP in ['203.0.113.10'] &&
-      evt.Overflow.Alert.Scenario in ['osint/search-abuse', 'osint/data-extraction', 'osint/api-abuse', 'osint/admin-abuse']
+      evt.Overflow.Alert.Source.IP in ['192.0.2.1'] &&
+      evt.Overflow.Alert.Scenario in ['osint/search-abuse', 'osint/data-extraction', 'osint/api-abuse',
+      'osint/admin-abuse', 'crowdsecurity/http-admin-interface-probing']
 ```
 
 ```bash
@@ -415,7 +417,7 @@ docker-compose exec crowdsec cscli decisions delete --ip <test-ip>
 # Unban false positive
 docker-compose exec crowdsec cscli decisions delete --ip YOUR_IP
 
-# Add to infrastructure/crowdsec/whitelists/owner-ips.yaml (see Whitelisting), then
+# Add to infrastructure/crowdsec/whitelists/owner-ips.local.yaml (see Whitelisting), then
 docker-compose restart crowdsec
 ```
 
