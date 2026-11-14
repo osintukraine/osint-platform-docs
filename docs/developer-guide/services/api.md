@@ -74,7 +74,8 @@ services/api/
 │   │       ├── spam.py            # Spam review queue
 │   │       ├── media.py           # Media management
 │   │       ├── kanban.py          # Urgency board
-│   │       ├── channels.py        # Channel admin
+│   │       ├── channels.py        # Channel admin (incl. manual promotion: move)
+│   │       ├── side_reviews.py    # Side review: proposed channel sides + evidence
 │   │       ├── entities.py        # Entity curation
 │   │       ├── prompts.py         # LLM prompt management
 │   │       ├── system.py          # Workers, audit, cache, enrichment tasks
@@ -548,7 +549,7 @@ Media gallery and management.
 | `/api/admin/media/stats` | GET | Storage statistics |
 | `/api/admin/media/topics` | GET | Topics for gallery filters |
 
-The public gallery is `GET /api/media/gallery` and `/api/media/stats`; `/api/media/internal/*` is the Caddy media-redirect path (bypasses auth).
+The public gallery is `GET /api/media/gallery` and `/api/media/stats`; `/api/media/internal/*` is the Caddy media-redirect path (bypasses auth). A video poster path (`*.poster.jpg`) that is neither in the buffer nor on the box (video archived before posters, or removed by retention) is redirected (307) to the site's `/og-image.png` share image instead of returning 404.
 
 #### Admin Channels (`/api/admin/channels`)
 
@@ -556,8 +557,22 @@ Channel management and configuration.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/admin/channels/` | GET | All channels with metadata (`/stats`, `/folders`) |
+| `/api/admin/channels/` | GET | All channels with metadata (`/stats`, `/folders`); filters include `discovery_status` and `source_account` |
 | `/api/admin/channels/{channel_id}` | GET/PUT | Channel detail / update channel config |
+| `/api/admin/channels/{channel_id}/move` | POST | Manual promotion or removal: body `{"to_folder": "Archive-UA"\|"Archive-RU"\|"Monitor-UA"\|"Monitor-RU"\|"Monitor-?"\|null}`. Queues a `channel_move` task on the Telegram worker (`null` takes a `Discover-*`/`Rec-*` channel out of discovery); the next folder sync updates folder, rule and side. Returns 409 for inactive or legacy-account channels |
+
+!!! note "Promotion is manual"
+    The discovery evaluator only recommends (`discovery_status` `recommended` / `recommended_reject`). An operator acts on the recommendation, either in the Telegram app or with this endpoint.
+
+#### Admin Side Reviews (`/api/admin/side-reviews`)
+
+The owner's review of proposed channel sides (`ukraine`, `russia`, `opposition`, `unknown`, `unrelated`), shown with evidence and quoted posts. Accepting a side sets `channels.affiliation` (source `review`); a curated folder's side is never replaced.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/admin/side-reviews` | GET | Proposals; filters `status` (default `pending`), `side`, `prompt_version`, `confidence`, `disagree`, `page`, `page_size` (max 100) |
+| `/api/admin/side-reviews/{review_id}/decision` | POST | One verdict: `{"decision": "accepted"\|"rejected", "note"?}` |
+| `/api/admin/side-reviews/bulk-decision` | POST | Verdict on all pending proposals of one `side`, `confidence` and prompt version |
 
 #### Admin Entities (`/api/admin/entities`)
 

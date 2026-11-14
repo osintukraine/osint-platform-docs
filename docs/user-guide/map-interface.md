@@ -20,7 +20,7 @@ Toggle layers in the sidebar under **Map Layers**. The sidebar also has a region
 
 ### Message Markers
 
-Individual geocoded Telegram posts with a location mention. The marker shows a flag for the source channel (Ukrainian, Russian or unknown affiliation), with a halo that gets larger the less precise the location is.
+Individual geocoded Telegram posts with a location mention. The marker shows a flag for the source channel (Ukrainian, Russian or unknown affiliation; channels on the Russian/Belarusian opposition side show the neutral unknown flag), with a halo that gets larger the less precise the location is.
 
 **Hover or click a marker to see**:
 - Message content preview
@@ -42,10 +42,10 @@ Groups of posts about the same event, detected when several channels report simi
 
 | Color | Tier | Description |
 |-------|------|-------------|
-| Red | Rumor | 1 channel reporting |
-| Yellow | Unconfirmed | 2-3 channels, same affiliation |
-| Green | Confirmed | 3+ channels, cross-affiliation |
-| Blue | Verified | 2+ independent RSS news sources report it (automatic), or an analyst verified it |
+| Red | Rumor | Fewer than 3 channels, all on one side |
+| Yellow | Unconfirmed | 3+ channels, or channels from both sides (Russia and Ukraine) |
+| Green | Confirmed | Unconfirmed, plus 1 independent RSS news outlet reporting the event |
+| Blue | Verified | 2+ independent RSS news outlets (automatic), or an analyst verified it |
 
 **Click a cluster** to see its tier, summary, message and channel counts and detection time, then expand it to fan out the individual messages.
 

@@ -173,7 +173,9 @@ Most filters from Browse Messages are supported:
 format=rss|atom|json          # Feed format
 q=search+terms                # Full-text search
 channel_username=channelname  # Specific channel
-channel_folder=%UA|%RU        # Country filter
+side=ukraine|russia|opposition|unknown  # Channel side (what Subscribe sets)
+channel_id=123                # Specific channel by database ID
+channel_folder=Archive-UA     # Legacy folder-name pattern filter (not the side filter)
 importance_level=high|medium|low
 topic=combat|equipment|...    # AI topic
 language=uk|ru|en|...         # Detected language
@@ -187,6 +189,8 @@ date_from=2024-01-01          # Start date
 date_to=2024-12-31            # End date
 limit=50                      # Items in feed (1-100, default 50)
 ```
+
+The `side` parameter must be one of `ukraine`, `russia`, `opposition` or `unknown` (anything else is rejected). It follows each channel's owner-decided side, and the **Subscribe** button in search sets it when you filter by side. `channel_folder` only matches the Telegram folder name and is kept for older feed URLs.
 
 Items are always newest first (by Telegram post time).
 
@@ -207,7 +211,7 @@ Two shortcut feeds are also available: `/rss/channel/{username}` (one channel; o
 ```
 /rss/search
   ?format=atom
-  &channel_folder=%UA
+  &side=ukraine
   &has_media=true
   &min_views=1000
 ```

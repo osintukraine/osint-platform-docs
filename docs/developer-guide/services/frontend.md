@@ -180,6 +180,7 @@ PostCard component adapts to three viewing modes:
 | `/admin/spam` | **Spam Review Queue** | Admin |
 | `/admin/prompts` | **LLM Prompt Editor** | Admin |
 | `/admin/entities` | **Entity Curation** | Admin |
+| `/admin/side-review` | **Side Review**: accept or reject proposed channel sides (ukraine, russia, opposition, unknown, unrelated) with evidence; single and bulk decisions via `/api/admin/side-reviews` | Admin |
 | `/admin/config` | **System Configuration** | Admin |
 | `/admin/export` | **Data Export** | Admin |
 | `/admin/audit` | **Audit Logs** | Admin |
@@ -188,6 +189,14 @@ PostCard component adapts to three viewing modes:
 > **Note:** `middleware.ts` redirects `/admin`, `/settings` and `/bookmarks` to `/auth/login` when there is no `ory_kratos_session` cookie. It only checks that the cookie exists; admin role enforcement happens in the API. Further routes (`/map`, `/profile`, `/admin/fact-check`, `/admin/kanban`, `/admin/media`, `/admin/system`, `/admin/users`, `/admin/feeds`) exist beyond the table. With `AUTH_PROVIDER=none` the UI runs without login.
 
 ## Key Components
+
+### Channel side: `lib/side.ts` and `AffiliationBadge`
+
+`lib/side.ts` (`sideOf`, `folderSide`) decides which country flag a channel gets: the owner-decided `channels.affiliation` (`ukraine`/`russia`) first, else the side of a curated `Archive-*`/`Monitor-*` folder. `Discover-*`/`Rec-*` suffixes are only a discovery guess and give no flag; `opposition` and `unknown` get no country flag. This mirrors the listener's `ChannelDiscovery.affiliation_for_folder`. `components/AffiliationBadge.tsx` renders the channel affiliation badge (flag colours, compact or detailed).
+
+### Link previews (`og:image`)
+
+`app/messages/[id]/page.tsx` builds the OpenGraph/Twitter metadata for a post: an image of the post if it has one, else the poster frame of its video (`{sha256}.poster.jpg`, see [Media Sync](media-sync.md)), else the site's default share image (`/og-image.png`).
 
 ### PostCard
 

@@ -83,7 +83,7 @@ graph LR
 
 | Aspect | Details |
 |--------|---------|
-| **Function** | 38 task modules across 11 worker services plus a router |
+| **Function** | 42 task modules across 11 worker services plus a router |
 | **Tech** | Coordinator + Router pattern, Redis Streams, LLM gateway / Ollama |
 | **Speed** | Background - can be slow (hours OK) |
 | **LLM Tasks** | Dedicated workers per task; fact-check and RSS validation use the gateway |
@@ -200,6 +200,9 @@ Batch translation of historical messages.
 Copies media from the local buffer to the Hetzner mount (or MinIO in legacy mode) and marks it synced.
 
 [:octicons-arrow-right-24: Full Documentation](media-sync.md)
+
+!!! note "Shadow Sync"
+    `services/shadow-sync` (disaster-recovery account sync and failover, `DR_ENABLED`) has no developer page yet; see the [Telegram disaster recovery](../../operator-guide/telegram-disaster-recovery.md) operator guide.
 
 ---
 

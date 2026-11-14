@@ -314,14 +314,17 @@ Restores a complete platform backup created by `backup.sh`.
 The script follows a careful sequence to ensure safe restoration:
 
 1. **Display Manifest** - Shows backup contents and metadata
-2. **Stop Services** - Stops application services (keeps database running)
-3. **Restore Configuration** - Copies .env and config files
+2. **Stop Services** - Stops only `listener`, `listener-russia`, `listener-ukraine`, `processor-worker`, `api`, `frontend` and `enrichment-router`; every other service (and the database) keeps running
+3. **Restore Configuration** - Restores `.env` only (the old one is saved as `.env.pre-restore`). `infrastructure/`, compose files and Redis data are not restored; copy `infrastructure/` from the backup by hand if you need it
 4. **Restore Database** - Drops and recreates database, then restores
 5. **Restore Sessions** - Extracts Telegram session files to volume
 6. **Restore Ollama** - Unpacks model files (if present)
 7. **Restore Media** - Optional rsync of media files
 8. **Start Services** - Brings all services back online
 9. **Verify Health** - Shows service status and next steps
+
+!!! note "Restoring an older dump"
+    A dump older than the current code lacks newer migrations. Run `./scripts/migrate.sh` after the restore to bring the schema up to date.
 
 #### Post-Restore Verification
 

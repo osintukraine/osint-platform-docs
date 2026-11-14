@@ -344,7 +344,7 @@ Get Telegram event clusters within a bounding box as GeoJSON.
 | Tier | Criteria | Color |
 |------|----------|-------|
 | rumor | New cluster | Red |
-| unconfirmed | 3+ channels, or channels of different affiliations (`cross_affiliation_met`) | Yellow |
+| unconfirmed | 3+ channels, or both a `russia` and a `ukraine` channel (`cross_affiliation_met`; `opposition` and `unknown` channels do not count toward it) | Yellow |
 | confirmed | Corroborated by 1+ independent RSS outlet | Orange |
 | verified | Corroborated by 2+ independent RSS outlets (automatic) or human verification | Green |
 
@@ -992,7 +992,7 @@ All Map API endpoints return GeoJSON FeatureCollections compatible with MapLibre
   "telegram_date": "2025-12-18T15:30:00Z",
   "channel_name": "...",
   "channel_username": "...",
-  "channel_affiliation": "russia" | "ukraine" | "neutral" | "unknown",
+  "channel_affiliation": "ukraine" | "russia" | "opposition" | "unknown",   // "neutral" only on legacy rows
   "location_name": "Bakhmut",
   "location_hierarchy": "UA-14",
   "confidence": 0.95,
@@ -1121,11 +1121,15 @@ WHERE ST_Contains(
 
 **Values for `/clusters`** (`telegram_event_clusters.tier`):
 - `rumor` - New cluster
-- `unconfirmed` - 3+ channels or cross-affiliation
+- `unconfirmed` - 3+ channels, or both a russia and a ukraine channel (opposition is not counted)
 - `confirmed` - 1+ independent RSS outlet corroborates
 - `verified` - 2+ independent RSS outlets (automatic) or human verification
 
-**Values for `/events`** (`events.tier_status`): `breaking`, `developing`, `confirmed`, `verified`.
+**Values for `/events`** (`events.tier_status`):
+- `breaking` - just created (under 2 h)
+- `developing` - 2+ sources, or 2-6 h old
+- `confirmed` - 3+ RSS outlets, or 6 h+ old
+- `verified` - 5+ independent RSS outlets
 
 **Example:**
 

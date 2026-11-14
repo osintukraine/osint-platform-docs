@@ -73,8 +73,8 @@ graph TB
 |------|---------|-------|
 | `main.py` | Service entry point, initialization, signal handling | 512 |
 | `telegram_listener.py` | Core message monitoring, event handlers | 948 |
-| `channel_discovery.py` | Folder-based channel discovery and sync | 817 |
-| `backfill_service.py` | Historical message fetching | 692 |
+| `channel_discovery.py` | Folder-based channel discovery and sync | 869 |
+| `backfill_service.py` | Historical message fetching | 696 |
 | `redis_queue.py` | Redis Streams client for message queue | 305 |
 | `social_graph_utils.py` | Extract forwards, replies, author metadata | 305 |
 | `media_utils.py` | Media type detection utility | 57 |
@@ -272,7 +272,7 @@ See [Telegram Setup Guide](../../operator-guide/telegram-setup.md) for full mult
 |---------------|------|----------|
 | `Archive*` | `archive_all` | Store all non-spam messages |
 | `Monitor*` | `selective_archive` | Only stores posts at or above the `monitoring_min_importance` admin setting (default `medium`) |
-| `Discover*` | `discovery` | Auto-joined channels (~7-day probation after 30+ messages), same importance floor |
+| `Discover*` | `discovery` | Discovered channels on probation (~7 days after 30+ messages), same importance floor. The evaluator only *recommends* promotion or removal; an operator promotes manually (move the channel in Telegram, or `POST /api/admin/channels/{id}/move`) |
 
 **Examples** (remember 12-char limit):
 
@@ -307,6 +307,12 @@ class ChannelDiscovery:
 
         return discovered_channels
 ```
+
+**Side (affiliation) from folders**: folder sync also sets `channels.affiliation` and `channels.affiliation_source` (`ChannelDiscovery.apply_side`):
+
+- Only the curated `Archive*` and `Monitor*` folders give a side, from the suffix: `-RU`/`-Russia` → `russia`, `-UA`/`-Ukraine` → `ukraine` (`FOLDER_SIDES`), with `affiliation_source='folder'`.
+- `Discover*` and `Rec*` folders give **no side**: their suffix is the discovery job's keyword/LLM guess, never an attribution.
+- A side the owner decided (`affiliation_source` of `review` or `admin`) survives a discovery folder; `admin` is never overwritten by folder sync.
 
 **Background Sync**:
 

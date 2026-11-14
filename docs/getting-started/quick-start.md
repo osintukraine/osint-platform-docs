@@ -188,7 +188,7 @@ INFO: Added new channel: Channel Name (@channel_username)
 !!! tip "Folder Naming Rules"
     - `Archive-*` → LLM archives most content (lenient mode)
     - `Monitor-*` → LLM archives only more important content; low importance is never archived (strict mode)
-    - `Discover-*` → Very strict; new channels are evaluated for about a week after 30+ messages, then promoted or dropped
+    - `Discover-*` → Very strict; new channels are evaluated for about a week after 30+ messages, then **recommended** for keeping or dropping — the operator promotes or removes them manually
 
     **Important**: Telegram limits folder names to **12 characters**. Use `-UA` or `-RU` suffixes, not full country names.
 

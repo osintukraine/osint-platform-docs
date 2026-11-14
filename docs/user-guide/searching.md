@@ -37,15 +37,17 @@ Regular search:  "tank" → finds only "tank"
 Semantic search: "tank" → finds "T-90", "armored vehicle", "BMP", "BTR"
 ```
 
-### Country Filter
+### Filter by Side
 
-Prominent quick filter for channel groups:
+Prominent quick filter for channel groups. It is driven by each channel's **side** (`channels.affiliation`), which the platform owner decides. It does not depend on Telegram folders.
 
-- **All Channels** - No filtering (default)
-- **Ukrainian Channels** - Only channels in `Archive-UA` and `Monitor-UA` folders
-- **Russian Channels** - Only channels in `Archive-RU` and `Monitor-RU` folders
+- **All Sources** - No filtering (default)
+- **Ukraine** - Channels on the Ukrainian side
+- **Russia** - Channels on the Russian side
+- **Opposition** - Russian and Belarusian opposition channels
+- **Unknown** - Channels with no side decided yet
 
-Selecting a country filter automatically clears individual channel selection.
+Selecting a side automatically clears individual channel selection.
 
 ### Filter Panel
 
@@ -54,14 +56,14 @@ Click "Show Filters" to expand the full filter panel. Active filters are shown w
 #### Channel Filters
 
 **Individual Channel**
-- Dropdown organized by country (Ukrainian, Russian, Other)
+- Dropdown grouped by side: Ukrainian, Russian, Opposition, No side decided, Other
 - Shows channel name, username, and folder
 - Verified channels marked with ✓
-- Selecting a channel clears country filter
+- Selecting a channel resets the side filter
 
 **Channel Folder**
-- Internal grouping (Archive-*, Monitor-*, Discover-*)
-- Primarily used by country filter
+- Internal Telegram folder grouping (Archive-*, Monitor-*, Discover-*)
+- A folder-name filter only; it is not how the side filter works
 
 #### Content Filters
 

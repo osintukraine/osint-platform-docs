@@ -79,7 +79,7 @@ This separation is **fundamental** to the platform architecture:
 The canonical list of services, profiles and ports is [Docker Services](../reference/docker-services.md); it is not repeated here. The roles that matter for the design:
 
 - **listener** monitors Telegram and publishes to Redis Streams; it owns the Telegram session.
-- **processor-worker** is the real-time path: embedding spam filter, LLM classification, translation, persistence. **media-worker** downloads media in the background when the media lane is on, and **media-sync** moves archived files to long-term storage.
+- **processor-worker** is the real-time path: embedding spam filter, LLM classification, translation, persistence. **media-worker** (one per account: `media-worker-russia`, `media-worker-ukraine`) downloads media in the background when the media lane is on, and **media-sync** moves archived files to long-term storage.
 - **backlog-worker** (profile `llm-gateway`) re-classifies pending and spam-flagged messages on the gateway batch lane.
 - **enrichment-*** workers run background tasks (embeddings, routing, geolocation, clustering, validation); **enrichment-fact-check** audits LLM classifications.
 - **api** and **frontend** serve the data; **rss-ingestor**, **opensanctions** and **entity-ingestion** feed correlation and the entity graph.
@@ -375,10 +375,10 @@ osint-intelligence-platform/
 │
 ├── infrastructure/             # Infrastructure configuration
 │   ├── postgres/
-│   │   ├── init.sql            # Database schema (~7,200 lines)
+│   │   ├── init.sql            # Database schema (~7,800 lines)
 │   │   └── migrations/         # Numbered SQL migrations (000_template.sql, 001_... )
 │   ├── docker/
-│   │   └── Dockerfile.pytorch-cpu  # Shared base image
+│   │   └── base-pytorch-cpu.Dockerfile  # Shared base image
 │   ├── models/                 # models.txt: pinned embedding models
 │   ├── prometheus/ grafana/ loki/ alertmanager/
 │   ├── kratos/ oathkeeper/ crowdsec/   # Auth stack
@@ -394,7 +394,6 @@ osint-intelligence-platform/
 │
 ├── docs/                       # Documentation
 ├── data/                       # Persistent data
-├── config/                     # Application configuration
 ├── telegram_sessions/          # Telegram session files
 ├── docker-compose.yml          # Primary compose file
 ├── .env                        # Environment variables

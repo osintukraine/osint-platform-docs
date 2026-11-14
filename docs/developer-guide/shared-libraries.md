@@ -60,12 +60,11 @@ shared/python/
 ├── notifications/           # NotificationClient
 ├── storage/                 # BoxSelector, MinioClientPool
 ├── telegram/                # client_factory.py, session_names.py
-├── translation/             # deepl_client.py (the one translator), deepl_limits.py, translator.py
+├── translation/             # service.py, translator.py, deepl_client.py (the one translator), deepl_limits.py
 ├── hardware/                # Hardware detection and tiers
 ├── hashing/                 # message_hasher.py, perceptual.py
 ├── utils/                   # circuit_breaker.py, graceful_shutdown.py
-├── media_archiver.py        # The one MediaArchiver: storage-box selection + perceptual hash at archive time (#482)
-└── translation.py           # Translation service
+└── media_archiver.py        # The one MediaArchiver: storage-box selection + perceptual hash at archive time (#482)
 ```
 
 ---
@@ -408,7 +407,7 @@ The processor's chat-style calls use `OpenAICompatClient` (`ai/openai_compat.py`
 Content-addressed storage with SHA-256 deduplication:
 
 ```python
-# shared/python/media_archiver.py (the processor has its own copy: services/processor/src/media_archiver.py)
+# shared/python/media_archiver.py (the one copy; the processor imports it too)
 
 from media_archiver import MediaArchiver
 

@@ -2,9 +2,9 @@
 
 Complete reference documentation for all database tables in the OSINT Intelligence Platform.
 
-**Source**: `infrastructure/postgres/init.sql` (fresh installs) plus `infrastructure/postgres/migrations/NNN_*.sql` (production updates, currently up to 058)
+**Source**: `infrastructure/postgres/init.sql` (fresh installs) plus `infrastructure/postgres/migrations/NNN_*.sql` (production updates, currently up to 078)
 **Database**: PostgreSQL 16+ with pgvector, PostGIS, pg_trgm, btree_gin extensions
-**Last Updated**: 2026-10-27
+**Last Updated**: 2026-11-14
 
 ---
 
@@ -41,9 +41,11 @@ Telegram channels being monitored by the platform.
 - `folder` (VARCHAR): Telegram folder name (e.g., "Archive-UA", "Monitor-RU")
 - `rule` (VARCHAR): Processing rule (`archive_all`, `selective_archive`, `discovery`)
 - `source_type` (VARCHAR): Channel categorization (state_media, military_unit, journalist, osint_aggregator, etc.)
-- `affiliation` (VARCHAR): russia, ukraine, neutral, unknown
+- `affiliation` (VARCHAR): ukraine, russia, opposition (anti-Kremlin Russian/Belarusian channels), unknown (older rows may still hold `neutral`). This is the owner's decision, not a keyword guess
+- `affiliation_source` (VARCHAR(10)): whose decision the side is, `CHECK IN ('folder','review','admin')`: `folder` (curated `Archive-*`/`Monitor-*` Telegram folder), `review` (accepted side proposal), `admin` (set in the admin UI, never overwritten by folder sync). Migration 073
 - `source_account` (VARCHAR): Which Telegram session monitors this (for multi-account)
-- `discovery_status` (VARCHAR): For auto-discovered channels (discovered, evaluating, promoted, rejected)
+- `discovery_status` (VARCHAR): For auto-discovered channels: `discovered`, `evaluating`, `recommended`, `recommended_reject`, `promoted`, `removed`, `rejected` (legacy). The evaluator only recommends; promotion is a manual operator step (move the channel into a curated folder in Telegram, or `POST /api/admin/channels/{id}/move`). Migration 075
+- `backfill_from_date`, `backfill_to_date` (TIMESTAMPTZ): requested backfill window (`backfill_to_date` NULL means until now; migration 061)
 - `quality_metrics` (JSONB): Spam/quality tracking for discovered channels
 - `active` (BOOLEAN): Whether currently monitoring
 
@@ -53,10 +55,42 @@ Telegram channels being monitored by the platform.
 - `idx_channels_rule` - Processing rule filtering
 - `idx_channels_discovery_status` - Discovery workflow
 - `idx_channels_source_type` - Source categorization
+- `idx_channels_affiliation` - Side filtering (partial, affiliation NOT NULL)
+
+**Storage**: the table is created `WITH (fillfactor = 50)` (about 3k rows updated millions of times; free space on each page keeps updates in place) and the `idx_channels_last_message_at` index was dropped, both in migration 077. To reclaim bloat on an existing database use `scripts/compact-channels.sh`.
 
 **Foreign Keys**: None (root table)
 
 **Related Tables**: `messages`, `channel_interactions`, `folder_rules`
+
+---
+
+### `channel_side_reviews`
+
+Proposed channel sides with evidence, awaiting owner review (migrations 072 and 073). Nothing here sets `channels.affiliation` by itself; an accepted proposal does, with `affiliation_source = 'review'`.
+
+**Key Columns**:
+- `id` (SERIAL PRIMARY KEY), `channel_id` (INTEGER FK → channels, ON DELETE CASCADE)
+- `proposed_side` (VARCHAR(10)): `ukraine`, `russia`, `opposition`, `unknown`, `unrelated` (`neutral` is kept only for v1 rows)
+- `confidence` (VARCHAR(10)): `high`, `medium`, `low`
+- `summary` (TEXT), `evidence` (JSONB, `[{post, quote, points_to}]`), `sample_message_ids` (BIGINT[]: the posts the model read)
+- `side_at_review`, `folder_at_review`: the channel's side and folder when proposed
+- `ecosystem` (VARCHAR(30)), `network` (JSONB)
+- `model`, `prompt_version`
+- `status` (VARCHAR(12)): `pending`, `accepted`, `rejected`, `superseded`
+- `decided_at`, `decided_by`, `created_at`
+
+**Important Indexes**: `idx_channel_side_reviews_queue` (status, proposed_side, confidence); unique partial `idx_channel_side_reviews_one_pending` (one pending review per channel).
+
+**Used by**: the Side Review admin page and `/api/admin/side-reviews`.
+
+---
+
+### `channel_side_signals`
+
+Evidence gathered per channel for side proposals by the `side_signal_fetch` enrichment task (migrations 074 and 076).
+
+**Key Columns**: `channel_id` (INTEGER PRIMARY KEY, FK → channels, ON DELETE CASCADE), `posts` (JSONB, `[{id, date, text}]`, newest first), `similar_channels` (JSONB, nullable, Telegram's order), `error` (VARCHAR(100), why it could not be read), `fetched_at`, `similar_fetched_at`.
 
 ---
 
@@ -93,7 +127,7 @@ All Telegram messages after spam filtering.
 - `admin_hidden`, `admin_importance_override`, `admin_topic_override`, `admin_notes` (+ `*_at`/`*_by`): moderator actions from the admin sidebar (migration 027)
 - `duplicate_of_message_id`, `duplicate_confidence`, `duplicate_reason`: perceptual-hash duplicate detection (migration 028; see `duplicate_clusters`)
 - `deleted_at`, `deleted_by`, `deletion_reason`: soft delete
-- `is_hidden`, `hidden_reason`, `hidden_at`, `hidden_by`: hide state used by fact-check and the spam re-check (`off_topic`); present in production databases, missing from `init.sql` on fresh installs at the time of writing
+- `is_hidden`, `hidden_reason`, `hidden_at`, `hidden_by`: hide state used by fact-check and the spam re-check (`off_topic`); defined in `init.sql` (partial index `idx_messages_hidden`)
 
 **Important Indexes**:
 - `idx_messages_topic_pending` (partial, `WHERE osint_topic = 'pending'`) - backlog worker (migration 038)
@@ -128,6 +162,7 @@ LLM verdicts for backlog messages.
 - `is_ukraine_relevant` (BOOLEAN)
 - `should_archive` (BOOLEAN)
 - `topic` (VARCHAR), `importance` (VARCHAR), `confidence` (REAL)
+- `previous_topic` (VARCHAR), `previous_importance` (VARCHAR): values before the `reprocess` backlog job overwrote `messages` (migration 055)
 - `analysis` (TEXT), `reasoning` (TEXT): The model's audit text
 - `classified_at` (TIMESTAMPTZ)
 
@@ -182,6 +217,11 @@ Content-addressed media storage (SHA-256 deduplication).
 - `telegram_url` (TEXT): Original Telegram URL (expires)
 - `reference_count` (INTEGER): How many messages reference this file
 - `first_seen` (TIMESTAMP): When first archived
+- `phash_image`, `phash_video` (BIGINT): 64-bit perceptual hashes (partial indexes `idx_media_files_phash_image`/`_video`)
+- `phash_algorithm` (VARCHAR(20), default `dhash`), `phash_generated_at` (TIMESTAMPTZ)
+- `deleted_at` (TIMESTAMPTZ): removed from the storage box by media retention; the row is kept for dedup and history (migration 060)
+- `retention_state` (VARCHAR(20)): `check_pending`, `live`, `gone`, `unchecked` (NULL = not a candidate yet; partial index `idx_media_files_retention_state`)
+- `retention_checked_at` (TIMESTAMPTZ): when the Telegram existence check ran
 
 **Important Indexes**:
 - `idx_media_files_sha256` - Fast deduplication lookups
@@ -191,7 +231,23 @@ Content-addressed media storage (SHA-256 deduplication).
 **Foreign Keys**:
 - `storage_box_id` → `storage_boxes(id)` ON DELETE SET NULL
 
-**Related Tables**: `message_media`, `storage_boxes`
+**Related Tables**: `message_media`, `storage_boxes`, `media_retention_runs`, `message_media_expired`
+
+---
+
+### `media_retention_runs`
+
+One row per media retention pass (migration 060).
+
+**Key Columns**: `id` (BIGSERIAL), `started_at`, `finished_at`, `mode` (`dry_run` or `delete`), `max_age_days`, `min_age_days`, `budget_gb`, `platform_bytes`, `removable_files`, `removable_bytes`, `deleted_files`, `deleted_bytes` (0 in dry run), `sent_to_check` (files queued for the Telegram check), `kept` (JSONB, reason to files/bytes), `by_month`, `by_kind` (JSONB), `report_path` (CSV of removable files), `error`.
+
+---
+
+### `message_media_expired`
+
+Links messages to media that retention removed (migration 060).
+
+**Key Columns**: `message_id` (BIGINT), `media_id` (INTEGER), `expired_at` (TIMESTAMPTZ). Primary key `(message_id, media_id)`; index `idx_message_media_expired_media` on `media_id`.
 
 ---
 
@@ -263,7 +319,7 @@ Junction table linking messages to media files (many-to-many).
 - `idx_message_media_media_id` - Find all messages using a media file
 
 **Foreign Keys**:
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 - `media_id` → `media_files(id)` ON DELETE CASCADE
 
 ---
@@ -398,7 +454,7 @@ AI-generated tags for messages (many-to-many).
 - `uq_message_tag` (UNIQUE on message_id, tag, tag_type)
 
 **Foreign Keys**:
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 
 **Related Tables**: `tag_stats`
 
@@ -485,7 +541,7 @@ Junction table linking Telegram messages to events.
 
 **Foreign Keys**:
 - `event_id` → `events(id)` ON DELETE CASCADE
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 
 ---
 
@@ -620,10 +676,10 @@ Velocity-based event detection from message clusters.
 - `last_activity_at` (TIMESTAMPTZ)
 
 **Tier Progression (Automatic)**:
-- `rumor`: 1 channel (red marker on map)
-- `unconfirmed`: 2-3 channels, same affiliation (yellow marker)
-- `confirmed`: 3+ channels OR cross-affiliation met (orange marker)
-- `verified`: Human verification (green marker)
+- `rumor`: default tier (red marker on map)
+- `unconfirmed`: 3+ channels OR cross-affiliation met (yellow marker)
+- `confirmed`: unconfirmed plus at least 1 RSS source (orange marker)
+- `verified`: 2+ RSS sources (green marker)
 
 **Important Indexes**:
 - `idx_clusters_tier` - Filter by tier for map display
@@ -708,7 +764,7 @@ Junction table linking messages to curated entities.
 - UNIQUE (message_id, entity_id)
 
 **Foreign Keys**:
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 - `entity_id` → `curated_entities(id)` ON DELETE CASCADE
 
 ---
@@ -768,7 +824,7 @@ Junction table linking messages to OpenSanctions entities.
 - UNIQUE (message_id, entity_id)
 
 **Foreign Keys**:
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 - `entity_id` → `opensanctions_entities(id)` ON DELETE CASCADE
 
 ---
@@ -923,7 +979,7 @@ Links Telegram messages to RSS articles (fact-checking layer).
 - UNIQUE (message_id, news_id)
 
 **Foreign Keys**:
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 - `news_id` → `external_news(id)` ON DELETE CASCADE
 
 ---
@@ -948,7 +1004,7 @@ Cached LLM validation summaries.
 - `idx_message_validations_expires`
 
 **Foreign Keys**:
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 
 ---
 
@@ -1003,7 +1059,7 @@ Emoji reactions to messages (sentiment proxy).
 - UNIQUE (message_id, emoji, user_id)
 
 **Foreign Keys**:
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 - `user_id` → `telegram_users(id)` ON DELETE CASCADE
 
 ---
@@ -1062,7 +1118,7 @@ Time-series engagement snapshots (virality tracking).
 - UNIQUE (message_id, snapshot_at)
 
 **Foreign Keys**:
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 
 ---
 
@@ -1089,7 +1145,7 @@ High-engagement posts for enhanced comment polling.
 - `idx_viral_posts_message`
 
 **Foreign Keys**:
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 
 ---
 
@@ -1266,7 +1322,7 @@ LLM prompts (NocoDB runtime-editable).
 - UNIQUE (task, version)
 
 **Current Active Prompts**:
-- message_classification v12 (structured JSON output with a leading `analysis` field; migration 037, rollback by flipping `is_active`, see [LLM Gateway](../operator-guide/external-llm.md#prompt-versions))
+- message_classification v13 (structured JSON output with a leading `analysis` field; migration 044, earlier v12 from 037; rollback by flipping `is_active`, see [LLM Gateway](../operator-guide/external-llm.md#prompt-versions))
 - event_extract, event_match, event_summarize
 
 ---
@@ -1426,7 +1482,7 @@ Full audit trail for all LLM/processing decisions.
 - `idx_decision_log_message_type` (message_id, decision_type, created_at DESC)
 
 **Foreign Keys**:
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 - `channel_id` → `channels(id)` ON DELETE SET NULL
 - `previous_decision_id` → `decision_log(id)` (self-referential)
 
@@ -1475,7 +1531,7 @@ User-saved messages.
 - `idx_user_bookmarks_message`
 
 **Foreign Keys**:
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 
 ---
 
@@ -1498,7 +1554,7 @@ User comments on messages (analyst notes).
 - `idx_user_comments_user`
 
 **Foreign Keys**:
-- `message_id` → `messages(id)` ON DELETE CASCADE
+- `message_id` → `messages(id)` ON DELETE SET NULL (migration 078: the row survives message deletion and keeps `channel_id` + `telegram_message_id`)
 
 ---
 
@@ -1655,7 +1711,7 @@ Find similar events for novelty detection (deduplication).
 
 ---
 
-### `get_user_role(kratos_identity_id)`
+### `get_user_role(user_kratos_id)`
 
 Returns user role: anonymous, authenticated, admin, moderator
 
@@ -1675,6 +1731,10 @@ Returns user role: anonymous, authenticated, admin, moderator
 
 - `trigger_update_event_v2_messages` - Update event denormalized counts when messages linked
 - `trigger_update_event_v2_sources` - Update event counts when RSS sources linked
+
+### Dropped triggers
+
+`trigger_mark_media_review` and its function `mark_media_for_review()` were neutralised by migration 068 and dropped by migration 069. They no longer exist on fresh installs.
 
 ### Social graph triggers
 
@@ -1805,7 +1865,7 @@ WHERE clauses optimize storage and query performance:
 
 This documentation reflects the schema as of:
 
-- **Message Classification**: v12 (structured output; see `llm_prompts`)
+- **Message Classification**: v13 (structured output; see `llm_prompts`)
 - **Events**: v2 (tiered validation with RSS sources)
 - **Entities**: Unified curated + OpenSanctions
 - **Social Graph**: Full implementation with materialized views

@@ -217,8 +217,10 @@ AUTH_PROVIDER=none  # No authentication required
 The platform uses a shared PyTorch base image for AI services to save disk space and build time.
 
 ```bash
-# Build the shared PyTorch CPU base image (takes 5-10 minutes)
-./scripts/build-pytorch-services.sh
+# Build only the shared PyTorch CPU base image (takes 5-10 minutes)
+./scripts/build-pytorch-services.sh base
+# (with no argument the script builds the base image AND every service that uses it;
+#  `services` builds only the services, the base image must already exist)
 
 # Verify the image was created
 docker images | grep pytorch-cpu
@@ -348,6 +350,9 @@ docker compose --profile monitoring --profile enrichment-standard --profile open
 # Or set COMPOSE_PROFILES in .env once (see Configuration)
 ```
 
+!!! warning "Backfill needs the `backfill` profile"
+    With `BACKFILL_ENABLED=true` or `GAP_DETECTION_ENABLED=true`, add `backfill` to `COMPOSE_PROFILES`. Backfilled and gap-fill messages go to a separate stream that only the `backfill` services read; without the profile they sit unread and are never stored.
+
 ### Step 9: Check the LLM Provider
 
 With `LLM_PROVIDER=ollama`, the `ollama-init` container pulls the models configured in the database:
@@ -412,7 +417,7 @@ docker compose exec postgres psql -U osint_user -d osint_platform
 - Should show Swagger UI with API endpoints
 - Try GET /health endpoint - should return {"status": "healthy"}
 
-**Grafana** (if monitoring profile enabled): [http://localhost:3001](http://localhost:3001) (`GRAFANA_PORT`; `.env.example` sets 3001, the compose default is 3000)
+**Grafana** (if monitoring profile enabled): [http://localhost:3001](http://localhost:3001) (`GRAFANA_PORT`, default 3001 in both `.env.example` and the compose file)
 - Login: `GRAFANA_ADMIN_USER` (default `admin`) with `GRAFANA_ADMIN_PASSWORD`
 - Dashboards should be pre-configured
 

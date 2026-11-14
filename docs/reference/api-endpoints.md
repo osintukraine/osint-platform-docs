@@ -4,7 +4,7 @@ Comprehensive documentation of all REST API endpoints in the OSINT Intelligence 
 
 **Base URL**: `http://localhost:8000/api` (development) | `https://your-domain.com/api` (production)
 
-**Authentication**: Depends on `AUTH_PROVIDER` (`none`, `jwt` or `ory`). Admin routes require an admin user; user routes (bookmarks, API keys, feed tokens, preferences) require login. See [Authentication](#authentication). The RSS/Atom feeds under `/rss/*` are served at the site root, not under `/api`. Interactive docs (Swagger/ReDoc) are at `/docs` and `/redoc`, filtered by role.
+**Authentication**: Depends on `AUTH_PROVIDER` (`none`, `jwt`, `cloudron` or `ory`). Admin routes require an admin user; user routes (bookmarks, API keys, feed tokens, preferences) require login. See [Authentication](#authentication). The RSS/Atom feeds under `/rss/*` are served at the site root, not under `/api`. Interactive docs (Swagger/ReDoc) are at `/docs` and `/redoc`, filtered by role.
 
 ---
 
@@ -49,9 +49,12 @@ Get authentication configuration info.
 {
   "provider": "jwt",
   "required": true,
-  "login_endpoint": "/api/auth/login"
+  "login_endpoint": "/api/auth/login",
+  "docs": "Use POST /api/auth/login with username/password to get token"
 }
 ```
+
+`provider` is one of `none`, `jwt`, `cloudron` or `ory`; `login_endpoint` and `docs` are provider-specific.
 
 ### POST /auth/login
 
@@ -74,9 +77,11 @@ Login with username and password (JWT provider only).
 {
   "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
   "token_type": "bearer",
-  "expires_in": 43200
+  "expires_in": 3600
 }
 ```
+
+`expires_in` is `JWT_EXPIRATION_MINUTES` x 60 (default 60 minutes, so 3600 seconds).
 
 ### GET /auth/users/me
 
@@ -140,12 +145,15 @@ Search messages with filters and pagination.
 | `q` | string | Full-text search query | `q=Bakhmut` |
 | `channel_id` | integer | Filter by channel ID | `channel_id=123` |
 | `channel_username` | string | Filter by channel username | `channel_username=ukraine_news` |
-| `channel_folder` | string | Filter by folder pattern | `channel_folder=%UA` (Ukrainian sources) |
+| `channel_folder` | string | Filter by folder pattern | `channel_folder=Archive-%` |
+| `side` | string | Channel side (the owner-decided affiliation): `ukraine`, `russia`, `opposition`, `unknown` | `side=russia` |
 | `topic` | string | Filter by OSINT topic | `topic=combat` |
 | `has_media` | boolean | Filter messages with media | `has_media=true` |
 | `media_type` | string | Filter by media type | `media_type=photo` |
-| `is_spam` | boolean | Include spam messages | `is_spam=false` |
-| `spam_type` | string | Filter by spam type | `spam_type=financial` |
+| `is_spam` | boolean | `true` includes spam with the rest (default: spam is excluded) | `is_spam=true` |
+| `spam_only` | boolean | Only spam messages (default false) | `spam_only=true` |
+| `spam_type` | string | Filter by spam type (`financial`, `promotional`, `off_topic`) | `spam_type=financial` |
+| `spam_review_status` | string | `pending`, `reviewed`, `false_positive`, `true_positive`, `reprocessed` | `spam_review_status=pending` |
 | `importance_level` | string | Filter by importance | `importance_level=high` |
 | `sentiment` | string | Filter by sentiment | `sentiment=urgent` |
 | `language` | string | Filter by language | `language=uk` |
@@ -154,12 +162,15 @@ Search messages with filters and pagination.
 | `min_views` | integer | Minimum view count | `min_views=1000` |
 | `min_forwards` | integer | Minimum forward count | `min_forwards=100` |
 | `date_from` | datetime | Start date | `date_from=2024-01-01T00:00:00Z` |
-| `date_to` | datetime | End date | `date_to=2024-12-31T23:59:59Z` |
-| `days` | integer | Last N days | `days=7` |
-| `page` | integer | Page number (1-indexed) | `page=2` |
-| `page_size` | integer | Items per page (1-100) | `page_size=50` |
-| `sort_by` | string | Sort field | `sort_by=created_at` |
-| `sort_order` | string | Sort order | `sort_order=desc` |
+| `date_to` | datetime | End date (inclusive; a date alone means the whole day) | `date_to=2024-12-31T23:59:59Z` |
+| `days` | integer | Last N days (1-365) | `days=7` |
+| `page` | integer | Page number (1-indexed, default 1). Offset pages stop at 10,000 rows; use `cursor` to go deeper | `page=2` |
+| `page_size` | integer | Items per page (1-100, default 50) | `page_size=50` |
+| `cursor` | string | Keyset cursor from a previous response's `next_cursor`; works at any depth and ignores `page` | `cursor=...` |
+| `sort_by` | string | `telegram_date` (default), `created_at`, `views`, `forwards`, `message_id`, `importance_level`, `content_urgency_level`, `osint_topic`, `media_type`, `language_detected` | `sort_by=created_at` |
+| `sort_order` | string | `asc` or `desc` (default `desc`) | `sort_order=desc` |
+
+The response carries `next_cursor` (pass it back as `cursor` for the next page) and `total_is_estimate` (true when `total` is a capped or estimated count).
 
 **Example Request**:
 ```bash
@@ -263,7 +274,16 @@ List channels with filters.
 - `rule` (string): Filter by processing rule (archive_all, selective_archive, test, staging)
 - `folder` (string): Filter by Telegram folder name
 - `verified_only` (boolean, default: false): Only verified channels
-- `limit` (integer, 1-500, default: 100): Maximum channels to return
+- `source_account` (string): Filter by source account (`legacy` selects the 2022-2025 imported archive; use it with `active_only=false`)
+- `limit` (integer, 1-5000, default: 100): Maximum channels to return
+
+### GET /channels/by-username/{username}
+
+Get channel details by Telegram username.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/channels/by-username/{username}` | Optional | Get channel details |
 
 ### GET /channels/{channel_id}
 
@@ -304,7 +324,7 @@ Trigger manual historical backfill for a channel.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/channels/{channel_id}/backfill` | Required | Trigger backfill |
+| POST | `/channels/{channel_id}/backfill` | Required (admin) | Trigger backfill |
 
 **Request Body**:
 ```json
@@ -426,6 +446,13 @@ Unified search across all platform data sources.
 - `channel_folder` (string, optional): Filter by folder
 - `days` (integer, optional): Last N days
 - `entity_type` (string, optional): Filter entities by type
+- `location` (string, optional): Location name, geocoded server-side
+- `lat`, `lng` (float, optional): Centre point for a radius search
+- `radius_km` (float, 1-500, default: 50): Search radius in kilometers
+- `bounds` (string, optional): Bounding box as `south,west,north,east`
+- `cluster_by` (string, optional): Cluster results (`location`)
+- `cluster_radius_km` (float, 1-200, default: 25): Clustering radius in kilometers
+- `min_cluster_size` (integer, 1-50, default: 2): Minimum messages per cluster
 
 **Response**:
 ```json
@@ -1026,9 +1053,10 @@ Get entity and content network graph for a specific channel.
 | GET | `/channels/{channel_id}/network` | See below | Get channel content network |
 
 **Query Parameters**:
-- `min_similarity` (float, 0.0-1.0, default: 0.7): Minimum similarity score for connections
-- `max_entities` (integer, 1-100, default: 50): Maximum entities to include
-- `days` (integer, 1-365, default: 30): Time window for analysis
+- `similarity_threshold` (float, 0.5-1.0, default: 0.7): Minimum similarity for edges
+- `max_messages` (integer, 10-500, default: 100): Maximum messages to include
+- `time_window` (string, default: `30d`): `7d`, `30d`, `90d` or `all`
+- `include_clusters` (boolean, default: true): Include topic clusters
 
 **Response includes**:
 - Nodes: channel, entities, topics, key messages
@@ -1041,68 +1069,71 @@ Get entity and content network graph for a specific channel.
 
 ### GET /timeline
 
-Get unified timeline of RSS articles + Telegram messages with correlations.
+Get RSS articles for the news timeline, each with its correlated Telegram messages.
 
 | Method | Path | Query Parameters | Description |
 |--------|------|------------------|-------------|
 | GET | `/timeline` | See below | Get news timeline |
 
 **Query Parameters**:
-- `page` (integer, default: 1): Page number
-- `page_size` (integer, 1-100, default: 20): Items per page
-- `source_type` (string, optional): Filter by source (rss, telegram, both)
-- `category` (string, optional): Filter by news category
-- `trust_level` (integer, 1-5, optional): Filter by trust level
-- `days` (integer, 1-365, default: 7): Time window
-- `search` (string, optional): Text search
+- `hours` (integer, 1-168, default: 24): Time range in hours
+- `include_correlations` (boolean, default: true): Include correlated Telegram messages
+- `min_similarity` (float, 0.0-1.0, default: 0.5): Minimum similarity score for correlations
+- `limit` (integer, 1-200, default: 50): Maximum number of articles
+
+Articles that have correlations are returned first, then recent articles without correlations fill the remaining slots.
 
 **Response**:
 ```json
 {
-  "items": [
+  "articles": [
     {
-      "type": "rss",
-      "id": 12345,
-      "title": "Article headline",
-      "published_at": "2024-12-09T10:00:00Z",
+      "id": 123,
+      "title": "Article title",
+      "content": "...",
+      "summary": "...",
       "source_name": "Kyiv Independent",
-      "trust_level": 5,
-      "correlation_count": 3,
-      "correlations": [...]
-    },
-    {
-      "type": "telegram",
-      "id": 67890,
-      "content": "Message content...",
-      "channel_name": "Ukraine News",
-      "telegram_date": "2024-12-09T10:05:00Z",
-      "validation_status": "confirmed"
+      "published_at": "2024-01-15T10:30:00Z",
+      "url": "https://...",
+      "correlations": [
+        {
+          "message_id": 456,
+          "similarity_score": 0.73,
+          "message": {
+            "id": 456,
+            "content": "...",
+            "content_translated": "...",
+            "channel_name": "...",
+            "channel_folder": "...",
+            "created_at": "..."
+          }
+        }
+      ]
     }
   ],
-  "total": 150,
-  "page": 1
+  "meta": {
+    "total_articles": 26,
+    "total_correlations": 35,
+    "hours": 24,
+    "generated_at": "..."
+  }
 }
 ```
 
 ### GET /timeline/stats
 
-Get news timeline statistics.
+Get news timeline counts.
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/timeline/stats` | Optional | Get timeline statistics |
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/timeline/stats` | `hours` (1-168, default: 24) | Get timeline statistics |
 
 **Response**:
 ```json
 {
-  "rss_articles_24h": 245,
-  "telegram_messages_24h": 1250,
-  "correlations_24h": 180,
-  "avg_correlation_confidence": 0.78,
-  "by_category": {
-    "military": 450,
-    "political": 200
-  }
+  "articles": 245,
+  "correlations": 180,
+  "hours": 24
 }
 ```
 
@@ -1119,16 +1150,13 @@ Get unified intelligence stream (RSS + Telegram correlated content).
 | GET | `/stream/unified` | See below | Get unified stream |
 
 **Query Parameters**:
-- `limit` (integer, 1-100, default: 50): Maximum items
-- `source_filter` (string, optional): Filter sources (rss, telegram, all)
+- `limit` (integer, 1-200, default: 50): Maximum items
+- `sources` (list of strings, default: `telegram`): Source types to include (`telegram`, `rss`); repeat the parameter, e.g. `sources=telegram&sources=rss`
+- `categories` (list of strings, optional): Channel folders or RSS feed categories
+- `importance_level` (string, optional): `high`, `medium` or `low` (applies to Telegram items only)
 - `hours` (integer, 1-168, default: 24): Time window
-- `min_importance` (string, optional): Minimum importance level
 
-**Response includes**:
-- RSS articles with telegram correlations
-- Telegram messages with RSS validations
-- Validation status (confirms, contradicts, context)
-- Confidence scores
+**Response**: a list of items, newest first, each with `type` (`telegram` or `rss`), `id`, `source_name`, `source_category`, `source_trust_level` (RSS only), `title`, `content`, `content_translated`, `importance_level`, `tags`, `published_at`, `url` and `correlation_count`.
 
 ### GET /stream/correlations/{message_id}
 
@@ -1136,29 +1164,29 @@ Get RSS correlations for a specific Telegram message.
 
 | Method | Path | Query Parameters | Description |
 |--------|------|------------------|-------------|
-| GET | `/stream/correlations/{message_id}` | `min_similarity`, `limit` | Get message correlations |
+| GET | `/stream/correlations/{message_id}` | `min_similarity` | Get message correlations |
 
 **Query Parameters**:
-- `min_similarity` (float, 0.0-1.0, default: 0.5): Minimum similarity score
-- `limit` (integer, 1-20, default: 10): Maximum correlations
+- `min_similarity` (float, 0.0-1.0, default: 0.7): Minimum similarity score
+
+Articles are grouped by similarity: `same_event` (0.85 and above), `related` (0.70 to 0.85) and `alternative_viewpoints`.
 
 **Response**:
 ```json
 {
   "message_id": 12345,
-  "correlations": [
+  "same_event": [
     {
       "article_id": 6789,
       "title": "Related article headline",
       "url": "https://example.com/article",
       "published_at": "2024-12-09T09:00:00Z",
-      "similarity_score": 0.82,
-      "validation_type": "confirms",
-      "confidence": 0.85,
-      "source_trust_level": 4
+      "similarity_score": 0.82
     }
   ],
-  "total_correlations": 3
+  "related": [],
+  "alternative_viewpoints": [],
+  "total_correlations": 1
 }
 ```
 
@@ -1168,39 +1196,51 @@ Get RSS correlations for a specific Telegram message.
 
 ### GET /messages/{message_id}/validation
 
-Get LLM-powered validation summary for a message.
+Get the pre-computed validation summary for a message. This endpoint takes no query parameters and returns cached results only: no LLM work happens on the request path. The `rss-validation` enrichment worker computes validations in the background.
 
 | Method | Path | Query Parameters | Description |
 |--------|------|------------------|-------------|
-| GET | `/messages/{message_id}/validation` | `refresh`, `min_similarity` | Get validation summary |
+| GET | `/messages/{message_id}/validation` | None | Get validation summary |
 
-**Query Parameters**:
-- `refresh` (boolean, default: false): Force regenerate validation (ignore cache)
-- `min_similarity` (float, 0.3-1.0, default: 0.5): Minimum article similarity
+**Responses**:
+- `200`: validation available (from cache), or zero results when the message has no RSS correlations
+- `202`: the message has correlations but no cached validation yet; it is queued and the body says to retry in 30-60 seconds
+- `404`: message not found
 
-**Response**:
+**Response (200)**:
 ```json
 {
   "message_id": 12345,
-  "validation_summary": "This message's claims about the strike in Kharkiv are confirmed by 3 independent news sources including Reuters and Kyiv Independent.",
-  "confidence_score": 0.89,
+  "summary": "The strike in Kharkiv is confirmed by 3 independent news sources.",
   "total_articles_found": 5,
-  "articles_analyzed": 3,
-  "validation_breakdown": {
+  "articles_by_type": {
     "confirms": 3,
     "contradicts": 0,
-    "provides_context": 2
+    "context": 2
   },
+  "overall_confidence": 0.89,
+  "article_validations": [...],
   "cached": true,
-  "cached_at": "2024-12-09T10:00:00Z",
-  "expires_at": "2024-12-09T22:00:00Z"
+  "cache_expires_at": "2024-12-09T22:00:00Z",
+  "processing_time_ms": 42
+}
+```
+
+**Response (202)**:
+```json
+{
+  "message_id": 12345,
+  "status": "pending",
+  "correlation_count": 3,
+  "message": "Validation is being computed in background. Please retry in 30-60 seconds.",
+  "retry_after": 30
 }
 ```
 
 **Notes**:
-- Validation summaries are cached for 12 hours
-- LLM generates human-readable synthesis of correlated articles
-- Uses RSS correlation + LLM analysis for classification
+- Only validations with confidence of 70% or more are included
+- The article similarity floor is the `validation_min_similarity` admin setting
+- Articles are classified as `confirms`, `contradicts`, `context` or `alternative`
 
 ---
 
@@ -1217,45 +1257,38 @@ Get comprehensive admin dashboard data.
 **Response**:
 ```json
 {
-  "platform_status": "healthy",
-  "overview": {
-    "total_messages": 1250000,
-    "total_channels": 254,
-    "active_channels": 245,
+  "stats": {
+    "messages_total": 1250000,
     "messages_today": 12500,
-    "messages_this_hour": 520
+    "messages_last_hour": 520,
+    "channels_active": 245,
+    "entities_count": 5400,
+    "storage_used_gb": 42.5,
+    "spam_rate_24h": 2.8,
+    "llm_calls_24h": 9800,
+    "avg_processing_ms": 1200
   },
-  "processing": {
-    "queue_depth": 45,
-    "messages_per_second": 2.5,
-    "spam_rate_percent": 2.8,
-    "llm_latency_ms": 1200
-  },
-  "enrichment": {
-    "pending_embedding": 150,
-    "pending_translation": 80,
-    "pending_tagging": 200
-  },
-  "storage": {
-    "database_size_gb": 45.6,
-    "media_size_gb": 42.5,
-    "redis_memory_mb": 128
-  }
+  "recent_activity": [
+    {"timestamp": "2024-12-09T12:00:00Z", "type": "message", "description": "..."}
+  ]
 }
 ```
 
 ### POST /admin/actions/{action}
 
-Trigger admin actions (clear cache, restart services, etc.).
+Quick actions from the dashboard.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/admin/actions/{action}` | Required (admin) | Trigger admin action |
+| POST | `/admin/actions/{action}` | Required (admin) | Queue a dashboard action |
 
-**Actions**:
-- `clear_cache`: Clear Redis cache
-- `refresh_materialized_views`: Refresh all materialized views
-- `trigger_enrichment`: Manually trigger enrichment cycle
+**Actions** (path values use hyphens):
+- `sync-folders`: Telegram folder sync
+- `clear-cache`: Clear Redis cache
+- `rebuild-embeddings`: Queue embedding regeneration
+
+!!! note "Stub"
+    The handler does not execute anything yet. For any `{action}` value it returns `{"action": "...", "status": "queued", "message": "..."}`. To clear the cache use `POST /admin/system/cache/clear`.
 
 ---
 
@@ -1270,41 +1303,49 @@ Get urgency-based kanban board for message prioritization.
 | GET | `/admin/kanban` | See below | Get kanban board |
 
 **Query Parameters**:
-- `channel_id` (integer, optional): Filter by channel
 - `days` (integer, 1-30, default: 7): Time window
+- `importance` (string, optional): Filter by importance level
+- `channel` (string, optional): Filter by channel
+- `limit_per_lane` (integer, 5-50, default: 20): Maximum cards per lane
+
+Lanes are `Critical`, `High`, `Medium`, `Low` and `Normal`, assigned from each message's `osint_topic`.
 
 **Response**:
 ```json
 {
-  "columns": {
-    "critical": {
-      "messages": [...],
-      "count": 5
-    },
-    "high": {
-      "messages": [...],
-      "count": 12
-    },
-    "medium": {
-      "messages": [...],
-      "count": 45
-    },
-    "low": {
-      "messages": [...],
-      "count": 200
+  "lanes": {
+    "Critical": {
+      "name": "Critical",
+      "count": 5,
+      "items": [
+        {
+          "message_id": 12345,
+          "date": "2024-12-09T10:30:00",
+          "title": "...",
+          "urgency_lane": "Critical",
+          "osint_topic": "combat",
+          "importance_level": "high",
+          "sentiment": "urgent",
+          "views": 1200,
+          "forwards": 40,
+          "channel": "Ukraine News",
+          "thumbnail_url": null,
+          "has_media": true
+        }
+      ]
     }
   },
-  "total": 262
+  "total_items": 262
 }
 ```
 
 ### GET /admin/kanban/stats
 
-Get kanban statistics.
+Get kanban statistics (`by_lane`, `by_sentiment`, `by_importance`, `avg_urgency`).
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/admin/kanban/stats` | Required (admin) | Get kanban stats |
+| Method | Path | Query Parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/admin/kanban/stats` | `days` (1-30, default: 7) | Get kanban stats |
 
 ---
 
@@ -1316,11 +1357,13 @@ List all platform configuration values.
 
 | Method | Path | Query Parameters | Description |
 |--------|------|------------------|-------------|
-| GET | `/admin/config` | `category`, `search` | List config values |
+| GET | `/admin/config` | `category`, `include_secrets` | List config values |
 
 **Query Parameters**:
-- `category` (string, optional): Filter by category (system, features, thresholds, etc.)
-- `search` (string, optional): Search in key/description
+- `category` (string, optional): Filter by category (for example `llm`, `telegram`, `storage`)
+- `include_secrets` (boolean, default: false): Return secret values unmasked (otherwise masked as `********`)
+
+The response groups items by category: `{"categories": {...}, "total": N}`.
 
 ### GET /admin/config/categories
 
@@ -1336,7 +1379,7 @@ Get a specific configuration value.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/admin/config/{key}` | Required (admin) | Get config value |
+| GET | `/admin/config/{key}` | Required (admin) | Get config value (`include_secret=true` unmasks a secret) |
 
 ### PUT /admin/config/{key}
 
@@ -1349,9 +1392,12 @@ Update a configuration value.
 **Request Body**:
 ```json
 {
-  "value": "new_value"
+  "value": "new_value",
+  "reason": "why it changed (kept in the audit log)"
 }
 ```
+
+`value: null` removes the override, so the `.env` value or default applies again.
 
 ### PUT /admin/config/bulk/update
 
@@ -1364,18 +1410,23 @@ Bulk update multiple configuration values.
 **Request Body**:
 ```json
 {
-  "updates": [
-    {"key": "features.spam_filter_enabled", "value": "true"},
-    {"key": "thresholds.min_importance", "value": "medium"}
-  ]
+  "updates": {
+    "features.spam_filter_enabled": "true",
+    "thresholds.min_importance": "medium"
+  },
+  "reason": "optional note for the audit log"
 }
 ```
+
+`updates` maps key to value; a `null` value removes the override.
 
 ### Model Configuration
 
 | Method | Path | Query Parameters | Description |
 |--------|------|------------------|-------------|
-| GET | `/admin/config/models` | None | List model configurations |
+| GET | `/admin/config/env` | None | Allowlisted environment variables (read-only, secrets masked) |
+| GET | `/admin/config/models` | `task` | List model configurations |
+| GET | `/admin/config/models/served` | None | Models the LLM gateway serves, per alias (realtime / audit / batch) and calling service. Empty when no gateway call has happened yet, Prometheus is unreachable, or `LLM_PROVIDER=ollama` |
 | GET | `/admin/config/models/tasks` | None | Get available tasks |
 | PUT | `/admin/config/models/{config_id}` | None | Update model config |
 | POST | `/admin/config/models` | None | Create model config |
@@ -1772,17 +1823,43 @@ Feeds can be protected by feed tokens (below).
 
 `POST /channel-submissions/{submission_id}/accept` returns `409` while the admin setting `channel_joins_enabled` is off (the default): nothing is queued and the submission stays `pending`. Joins stay paused until the Discovery redesign lets the operator pick the account that joins.
 
+### Admin: Side Reviews, Channel Move, Media Retention
+
+All admin only.
+
+**`GET /admin/side-reviews`**: proposed channel sides with their evidence (table `channel_side_reviews`), high confidence first.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `status` | string | `pending` (default), `accepted`, `rejected`, `superseded` |
+| `side` | string | `ukraine`, `russia`, `opposition`, `unknown`, `unrelated`, `neutral` |
+| `confidence` | string | `high`, `medium`, `low` |
+| `prompt_version` | string | Filter by prompt version |
+| `disagree` | boolean | Only proposals that contradict the channel's current side (default false) |
+| `page`, `page_size` | integer | Page (default 1), size 1-100 (default 25) |
+
+The response carries `items`, `total`, `page`, `page_size` and `pending_by_side`. Each evidence entry also gets the `message_id` of the quoted post.
+
+**`POST /admin/side-reviews/{review_id}/decision`**: body `{"decision": "accepted" | "rejected", "note": "..."}`. Accepting a `ukraine`, `russia` or `opposition` proposal sets the channel's side with `affiliation_source = 'review'` and recounts the affected clusters. A channel in a curated `Archive-*`/`Monitor-*` folder keeps the folder's side. Returns `404` when no pending proposal has that id. Every verdict is written to the admin audit log.
+
+**`POST /admin/side-reviews/bulk-decision`**: body `{"decision", "side", "confidence", "prompt_version", "note"}` decides every pending proposal that matches the side, confidence and prompt version. Returns `{"decided": N, "sides_set": N}`.
+
+**`POST /admin/channels/{channel_id}/move`**: the operator's promotion of a discovered channel. Body `{"to_folder": "Archive-UA" | "Archive-RU" | "Monitor-UA" | "Monitor-RU" | "Monitor-?" | null}`; `null` takes a `Discover-*`/`Rec-*` channel out of discovery. The request is queued as a `channel_move` task on the Telegram worker; Telegram moves the channel within a minute or two and the next folder sync updates folder, rule and side. Returns `{"queued": true, "channel_id", "from", "to", "note"}`. Errors: `422` for an unknown `to_folder`, `404` for an unknown channel, `409` when the channel is inactive or not followed by the connected account, is already in that folder, or is not in a discovery folder (for `null`). The discovery evaluator only sets `discovery_status` to `recommended` or `recommended_reject`; it never moves a channel.
+
+**`GET /admin/media/retention/report`**: media retention passes, newest first. Query `runs` (1-50, default 5). Returns `runs` (rows of `media_retention_runs`) and `files`, a map of state (`deleted`, `check_pending`, `live`, `gone`, `unchecked`) to `{files, bytes}`.
+
 ### Admin: Channels, Entities, Media, Users, Fact-check, Message Actions
 
 | Group | Endpoints (under `/admin`) |
 |-------|-----------------------------|
-| Channels | `GET /channels`, `/channels/folders`, `/channels/stats`, `GET, PUT /channels/{id}` |
+| Channels | `GET /channels` (filters include `affiliation`, `discovery_status`), `/channels/folders`, `/channels/stats`, `GET, PUT /channels/{id}`; `POST /channels/{id}/move` (see below) |
 | Entities | `GET /entities`, `/entities/sources`, `/entities/stats`, `/entities/types`, `/entities/{id}` |
-| Media | `GET /media`, `/media/stats`, `/media/topics` |
+| Media | `GET /media`, `/media/stats`, `/media/topics`, `/media/retention/report` (see below) |
+| Side reviews | `GET /side-reviews`; `POST /side-reviews/{id}/decision`, `/side-reviews/bulk-decision` (see below) |
 | Users (Kratos) | `GET, POST /users`; `GET, PUT, DELETE /users/{id}`; `POST /users/{id}/recovery-link`; `GET, DELETE /users/{id}/sessions`; `DELETE /users/{id}/sessions/{session_id}` |
 | Fact-check | `GET /fact-check/all`, `/pending`, `/reviewed`, `/stats`; `POST /fact-check/{id}/approve`, `/reject`, `/unhide`; `POST /fact-check/bulk-approve`, `/bulk-delete`; `DELETE /fact-check/{id}` |
 | Message actions | `POST /messages/{id}/hide`, `/unhide`, `/delete`, `/spam`, `/unspam`, `/quarantine`, `/reprocess`, `/importance`, `/topic`, `/note`, `/link-event`, `/mark-original`, `/geolocation`; `GET /messages/{id}/actions`, `/messages/{id}/duplicates`; `GET /messages/audit/actions`, `/messages/audit/actions/stats`; `GET /messages/duplicates/clusters`, `/messages/duplicates/stats`; `POST /messages/duplicates/clusters/{id}/review` |
-| Config (extra) | `GET /config/env` |
+| Config (extra) | `GET /config/env`, `GET /config/models/served` |
 | Auth helper | `POST /admin/check-role` (Oathkeeper role check, no auth) |
 
 ---
@@ -1810,6 +1887,13 @@ Allowed origins come from `API_CORS_ORIGINS` (comma-separated, default `http://l
 
 ## Changelog
 
+### 2026-11-14
+- Documented the side review endpoints (`/admin/side-reviews`), `POST /admin/channels/{id}/move`, `GET /admin/media/retention/report` and `GET /admin/config/models/served`
+- Corrected parameters for `/messages` (`side`, `spam_only`, `spam_review_status`, `cursor`), `/channels`, `/channels/{id}/network`, `/timeline`, `/stream/*`, `/search`, `/admin/kanban` and `/admin/config`
+- `/messages/{id}/validation` returns cached results only (`202` while pending)
+- `/admin/actions/{action}` is a stub that returns `queued`
+- `AUTH_PROVIDER` also supports `cloudron`; JWT `expires_in` defaults to 3600
+
 ### 2024-12-09
 - Added Wikidata relationship enrichment endpoint
 - Added on-demand comment translation
@@ -1819,4 +1903,4 @@ Allowed origins come from `API_CORS_ORIGINS` (comma-separated, default `http://l
 
 ---
 
-**Generated**: 2024-12-09 | **API Version**: 1.0 | **Platform**: OSINT Intelligence Platform
+**Last Updated**: 2026-11-14 | **API Version**: 1.0 | **Platform**: OSINT Intelligence Platform

@@ -6,7 +6,7 @@ Complete reference for the PostgreSQL database schema.
 
 ## Overview
 
-The database schema is defined in `infrastructure/postgres/init.sql` (about 7,200 lines) which serves as the source of truth for fresh installs; numbered SQL migrations in `infrastructure/postgres/migrations/` carry existing databases forward.
+The database schema is defined in `infrastructure/postgres/init.sql` (about 7,800 lines) which serves as the source of truth for fresh installs; numbered SQL migrations in `infrastructure/postgres/migrations/` carry existing databases forward.
 
 **Key Facts:**
 - **60+ tables** and 6 materialized views defined in `init.sql`
@@ -178,7 +178,8 @@ CREATE TABLE IF NOT EXISTS channels (
 
     -- Categorization (human-managed)
     source_type VARCHAR(30),      -- state_media, military_unit, journalist, osint_aggregator, ... unknown
-    affiliation VARCHAR(20),      -- russia, ukraine, neutral, unknown
+    affiliation VARCHAR(20),      -- ukraine, russia, opposition, unknown (neutral: legacy only)
+    affiliation_source VARCHAR(10), -- folder, review, admin: whose decision the side is ('admin' is never overwritten)
 
     -- Folder-based management
     folder VARCHAR(100),          -- Telegram folder name (e.g. Archive-UA)
@@ -192,11 +193,12 @@ CREATE TABLE IF NOT EXISTS channels (
     -- Backfill tracking
     backfill_status VARCHAR(20),  -- pending, in_progress, completed, failed
     backfill_from_date TIMESTAMP WITH TIME ZONE,
+    backfill_to_date TIMESTAMP WITH TIME ZONE,  -- end of a requested window (NULL = until now), migration 061
     backfill_messages_fetched INTEGER DEFAULT 0,
     backfill_completed_at TIMESTAMP WITH TIME ZONE,
 
     -- Discovery and retention
-    discovery_status VARCHAR(50), -- discovered, evaluating, promoted, rejected
+    discovery_status VARCHAR(50), -- discovered, evaluating, recommended, recommended_reject, promoted, removed (rejected: legacy)
     discovery_metadata JSONB DEFAULT '{}'::jsonb,
     quality_metrics JSONB,
     retention_policy VARCHAR(50) DEFAULT 'permanent',
@@ -205,8 +207,13 @@ CREATE TABLE IF NOT EXISTS channels (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     last_message_at TIMESTAMP WITH TIME ZONE
-);
+) WITH (fillfactor = 50);
 ```
+
+!!! note "Side and discovery semantics"
+    - `affiliation_source` records who decided the side. Only `Archive-*` / `Monitor-*` folders give a side; `Discover-*` / `Rec-*` folders give none.
+    - The discovery evaluator only **recommends** (`recommended`, `recommended_reject`). Promotion is a manual operator step (move the channel in Telegram or `POST /api/admin/channels/{id}/move`).
+    - `fillfactor = 50` and the dropped `last_message_at` index (migration 077) keep the heavily updated `channels` table from bloating; see `scripts/compact-channels.sh`.
 
 ---
 
@@ -477,8 +484,8 @@ erDiagram
 
 | Category | Tables |
 |----------|--------|
-| **Core** | users (legacy), channels, channel_submissions, messages, message_quarantine, telegram_accounts, shadow_account_state |
-| **Media** | storage_boxes, media_files, message_media, duplicate_clusters |
+| **Core** | users (legacy), channels, channel_side_reviews, channel_side_signals, channel_submissions, messages, message_quarantine, telegram_accounts, shadow_account_state |
+| **Media** | storage_boxes, media_files (retention columns `deleted_at`, `retention_state`, `retention_checked_at`: migration 060), message_media, message_media_expired, media_retention_runs, duplicate_clusters |
 | **Auth / access** | feed_tokens, feed_subscriptions, api_keys, export_jobs, user_roles |
 | **AI/LLM** | llm_prompts, model_configuration, message_tags, tag_stats, message_reclassifications, classification_fact_checks, enrichment_llm_attempts, geolocation_llm_attempts, decision_log |
 | **Entities** | curated_entities, opensanctions_entities, message_entities, opensanctions_message_entities, entity_relationships |
@@ -504,7 +511,7 @@ The exhaustive per-table reference is [Database Tables](../reference/database-ta
 | **RSS** | rss_feeds, news_sources, external_news, message_validations, message_news_correlations |
 | **Translation** | translation_config, translation_usage |
 | **Config** | platform_config, folder_rules, military_slang |
-| **Audit** | decision_logs |
+| **Audit** | decision_log |
 | **Comments** | message_comments, telegram_users |
 | **User Activity** | user_roles, user_bookmarks, user_comments, admin_audit_log, api_keys |
 

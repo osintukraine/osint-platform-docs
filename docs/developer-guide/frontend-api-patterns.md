@@ -133,24 +133,6 @@ frontend:
     - MINIO_URL=http://minio:9000/osint-media
 ```
 
-----------|---------|---------|---------|
-| `API_URL` | Server-side | `http://api:8000` | Internal Docker network |
-| `NEXT_PUBLIC_API_URL` | Client-side | `http://localhost:8000` | Browser access to API |
-| `MINIO_URL` | Server-side | `http://minio:9000/telegram-archive` | Internal media storage |
-| `NEXT_PUBLIC_MINIO_URL` | Client-side | `http://localhost:9000/telegram-archive` | Browser media access |
-
-### Docker Compose Configuration
-
-```yaml
-# docker-compose.yml
-frontend:
-  environment:
-    - API_URL=http://api:8000
-    - NEXT_PUBLIC_API_URL=http://localhost:8000
-    - MINIO_URL=http://minio:9000/telegram-archive
-    - NEXT_PUBLIC_MINIO_URL=http://localhost:9000/telegram-archive
-```
-
 ---
 
 ## fetchApi Helper
