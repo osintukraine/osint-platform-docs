@@ -149,7 +149,7 @@ SELECT * FROM sampled WHERE rn <= :per_topic LIMIT :batch_size
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `FACT_CHECK_SAMPLE_SIZE` | 50 | Total messages per cycle |
-| `FACT_CHECK_PER_TOPIC` | 5 in code, `3` in compose | Max messages per topic |
+| `FACT_CHECK_PER_TOPIC` | `3` | Max messages per topic |
 
 This ensures rare topics (e.g., `disinformation`) get checked alongside common ones (e.g., `combat`).
 
@@ -254,7 +254,7 @@ FACT_CHECK_CLASSIFIER_MODE=unified    # "unified" or "modular"
 # Sampling
 FACT_CHECK_LOOKBACK_DAYS=7            # only recent LLM-classified messages (not 'pending')
 FACT_CHECK_SAMPLE_SIZE=50             # Messages per cycle
-FACT_CHECK_PER_TOPIC=3                # Max per topic (compose default; code default is 5)
+FACT_CHECK_PER_TOPIC=3                # Max per topic (default 3 in both worker and compose)
 FACT_CHECK_COUNCIL_CONCURRENCY=       # empty = runtime default (2); admin page overrides
 
 # Action Thresholds

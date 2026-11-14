@@ -106,6 +106,9 @@ graph TD
 5. **Embedding Generation**: Create 384-dim semantic embeddings using sentence-transformers
 6. **Storage**: Store entity in `opensanctions_entities` and link to message via `opensanctions_message_entities`
 
+!!! note "Short transactions"
+    The batch read is committed before any matching call, and each message is committed after processing (matched or not). No database transaction stays open across the slow API/yente calls, so the service no longer holds locks on `messages` / `channels` while waiting on the network.
+
 ## Entity Matching
 
 ### Named Entity Recognition (NER)

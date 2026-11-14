@@ -11,7 +11,7 @@ graph LR
     A[PostgreSQL<br/>Messages] --> B[Router]
     B --> C[Redis Queues]
     C --> D[12 compose services<br/>router + 11 workers]
-    D --> E[38 Task Modules]
+    D --> E[42 Task Modules]
     E --> F[PostgreSQL<br/>Enriched Data]
 
     subgraph "Pipeline"
@@ -38,7 +38,7 @@ graph LR
 | **Resource Usage** | CPU/memory intensive | Bounded and predictable |
 
 !!! success "Production Stats"
-    - **38 task modules** in `src/tasks/`, run by 11 worker services plus the router (9 Redis queues, a pipeline worker for event detection and a fact-check auditor)
+    - **42 task modules** in `src/tasks/`, run by 11 worker services plus the router (9 Redis queues, a pipeline worker for event detection and a fact-check auditor)
     - **Background Processing**: Enriches ~50,000 messages/day
     - **LLM Tasks**: Dedicated workers keep slow LLM tasks from blocking each other
     - **LLM backends**: fact-check and RSS validation run on the LLM gateway (`llm-gateway` profile); AI tagging, event detection, geolocation and cluster validation default to the CPU-era Ollama endpoint (`OLLAMA_BATCH_URL`) and its small models, and are not part of the production profile set (`enrichment-lite`). See [LLM Gateway and Providers](../../operator-guide/external-llm.md) and [LLM_GATEWAY.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_GATEWAY.md).
@@ -136,7 +136,7 @@ for msg in messages:
 | **Fast Pool** | `enrich:fast` | Embedding, translation, entity matching, geolocation, RSS correlation | ❌ | ❌ |
 | **Telegram** | `enrich:telegram` (one stream per account in multi mode, see [Telegram Worker](#4-telegram-worker)) | Engagement polling, social graph, comments, forward discovery | ❌ | ✅ (20 req/s) |
 | **Decision** | `enrich:decision` | Decision verification, reprocessing | ❌ | ❌ |
-| **Maintenance** | `enrich:maintenance` | Channel cleanup, quarantine, discovery eval, Wikidata | ❌ | ❌ |
+| **Maintenance** | `enrich:maintenance` | Channel cleanup, quarantine, Wikidata, duplicate detection / pHash | ❌ | ❌ |
 | **Event Detection** | *Pipeline (DB-scan)* | RSS event creator, Telegram matcher, status updater | ✅ | ❌ |
 | **Fact-Check** | *Pipeline (DB-scan)* | Classification audit and council votes (see [Fact-Check](fact-check.md)) | ✅ (audit lane) | ❌ |
 | **Geolocation LLM** | `enrich:geolocation_llm` | LLM-based location extraction | ✅ | ❌ |
@@ -412,13 +412,13 @@ LIMIT :batch_size;
 **Metrics**:
 
 ```prometheus
-# Router cycle metrics
-enrichment_router_cycle_duration_seconds 2.5
-enrichment_router_messages_routed_total{queue="ai_tagging"} 1500
+# Cycle metrics
+enrichment_cycle_duration_seconds_bucket{le="5.0"} 1200
+enrichment_messages_processed_total{task="ai_tagging"} 1500
 
 # Backpressure metrics
-enrichment_backpressure_active{queue="ai_tagging"} 0
-enrichment_queue_depth{queue="ai_tagging"} 150
+enrichment_backpressure_ratio 0.3
+enrichment_queue_depth{task="ai_tagging"} 150
 ```
 
 ---
@@ -503,7 +503,7 @@ The similarity floor is the admin setting `validation_min_similarity` (default 0
 
 **Queue**: `enrich:fast`
 **File**: `/services/enrichment/src/workers/fast_worker.py`
-**Tasks**: `embedding`, `translation`, `entity_matching`, `rss_correlation`
+**Tasks**: `embedding`, `translation`, `entity_matching`, `rss_correlation`, `geolocation`
 
 **Configuration**:
 
@@ -526,6 +526,7 @@ TASK_CLASSES = {
     "translation": TranslationTask,       # DeepL/Google Translate
     "entity_matching": EntityMatchingTask, # Knowledge graph matching
     "rss_correlation": RSSCorrelationTask, # Vector similarity search
+    "geolocation": GeolocationTask,       # Gazetteer coordinates (Event Detection V3)
 }
 ```
 
@@ -544,7 +545,7 @@ TASK_CLASSES = {
 
 **Queue**: `enrich:telegram` (default account); `enrich:telegram:russia` and `enrich:telegram:ukraine` in multi mode
 **File**: `/services/enrichment/src/workers/telegram_worker.py`
-**Tasks**: `engagement_polling`, `social_graph_extraction`, `comment_fetcher`, `comment_realtime`, `comment_backfill`, `comment_ondemand`, `forward_discovery`
+**Tasks**: `engagement_polling`, `social_graph_extraction`, `comment_fetcher`, `comment_realtime`, `comment_backfill`, `comment_ondemand`, `content_backfill`, `forward_discovery`, `discovery_metrics_collector`, `discovery_evaluator`, `channel_join`, `channel_move`, `media_retention_check`, `side_signal_fetch`
 
 **Configuration**:
 
@@ -591,11 +592,11 @@ async def _rate_limit(self):
 
 ### 5. Decision Worker
 
-**Purpose**: Verify LLM decision quality
+**Purpose**: Re-run the LLM on flagged classification decisions
 
 **Queue**: `enrich:decision`
 **File**: `/services/enrichment/src/workers/decision_worker.py`
-**Tasks**: `decision_verifier`, `decision_reprocessor`
+**Tasks**: `decision_reprocessor`
 
 **Configuration**:
 
@@ -608,8 +609,7 @@ METRICS_PORT=9201
 
 **Use Cases**:
 
-- **decision_verifier**: Flag low-confidence classifications
-- **decision_reprocessor**: Re-run LLM on flagged messages
+- **decision_reprocessor**: Re-run LLM on flagged messages (the only task in this worker)
 
 ### 6. Maintenance Worker
 
@@ -617,7 +617,7 @@ METRICS_PORT=9201
 
 **Queue**: `enrich:maintenance`
 **File**: `/services/enrichment/src/workers/maintenance_worker.py`
-**Tasks**: `channel_cleanup`, `quarantine_processor`, `discovery_evaluator`, `wikidata_enrichment`
+**Tasks**: `channel_cleanup`, `quarantine_processor`, `wikidata_enrichment`, `wikidata_opensanctions`, `duplicate_detection`, `phash_backfill`, `phash_stats`, `review_flag_cleanup`
 
 **Configuration**:
 
@@ -634,8 +634,13 @@ METRICS_PORT=9202
 
 - **channel_cleanup**: Remove stale/inactive channels
 - **quarantine_processor**: Review quarantined messages
-- **discovery_evaluator**: Score channel quality for recommendations
 - **wikidata_enrichment**: Enrich entities with Wikidata metadata
+- **wikidata_opensanctions**: Link entities to OpenSanctions via Wikidata
+- **duplicate_detection** / **phash_backfill** / **phash_stats**: perceptual-hash duplicate detection and coverage
+- **review_flag_cleanup**: night-only cleanup of stale review flags
+
+!!! note
+    Channel discovery tasks (`discovery_metrics_collector`, `discovery_evaluator`, `forward_discovery`) run in the **Telegram worker** (they need a Telegram session), not here.
 
 ### 7. Event Detection Worker (V2)
 
@@ -977,14 +982,9 @@ $$ LANGUAGE plpgsql;
 
 ```prometheus
 # Stage metrics
-enrichment_event_stage_duration_seconds{stage="rss_event_creator"} 45.2
-enrichment_event_stage_duration_seconds{stage="telegram_matcher"} 38.1
-enrichment_event_stage_duration_seconds{stage="status_updater"} 5.3
-
-# Event metrics
-enrichment_events_created_total 150
-enrichment_events_matched_messages_total 1250
-enrichment_events_tier_transitions_total{from="1", to="2"} 45
+# Event detection reuses the shared enrichment metrics (no dedicated enrichment_event* series):
+enrichment_cycle_duration_seconds_bucket{le="60.0"} 40
+enrichment_messages_processed_total{task="rss_event_creator"} 150
 ```
 
 ### Geolocation Task
@@ -1123,10 +1123,24 @@ NOMINATIM_URL=https://nominatim.openstreetmap.org
 
 ---
 
+### Side Signal Fetch Task
+
+**File**: `/services/enrichment/src/tasks/side_signal_fetch.py`
+**Worker**: Telegram Worker (database-scan, one worker per Telegram account)
+
+Collects evidence for the owner's side review (`/admin/side-review`) on channels that have no side yet. It never sets a side itself; it writes to `channel_side_signals`, which the review tooling reads.
+
+For each unsided channel of the worker's account it stores:
+
+- **posts**: recent readable posts (up to 20, text only, newest first)
+- **similar channels**: Telegram's "similar channels" list (audience overlap)
+
+Channels the account no longer follows are reached without the account where possible: their posts are read from Telegram's public web preview (`https://t.me/s/<username>`), and only the similar-channels list goes through the API via a username lookup, capped at `USERNAME_LOOKUPS_PER_DAY = 100` (a fixed constant, about half of Telegram's ~200/day limit). A run handles 24 channels (`scan_batch_size`), pauses on Telegram `FloodWait`, backs off 15 minutes on a `t.me` 429, and retries a channel that could not be read after 30 days.
+
 ### Discovery Metrics Collector Task
 
 **File**: `/services/enrichment/src/tasks/discovery_metrics_collector.py`
-**Worker**: Maintenance Worker (`enrich:maintenance` queue)
+**Worker**: Telegram Worker (database-scan)
 **Priority**: 50
 **Dependencies**: Telegram client (passed from main.py)
 
@@ -1137,7 +1151,7 @@ Polls discovery channels via Telegram API to collect quality metrics WITHOUT arc
 ```
 1. ForwardDiscoveryTask → Joins channels (adds to channels table)
 2. THIS TASK → Polls and analyzes messages (updates quality_metrics)
-3. DiscoveryEvaluatorTask → Promotes/rejects based on metrics
+3. DiscoveryEvaluatorTask → RECOMMENDS promotion/rejection based on metrics (an operator promotes manually)
 ```
 
 **Why This Matters**: Enables evaluation of channels BEFORE committing to archive them. Channels in probation (~7 days after 30+ messages) are monitored but not archived until quality is proven.
@@ -1217,7 +1231,7 @@ Creates correlation records between Telegram messages and RSS articles for:
 #### Configuration
 
 ```bash
-# Defaults (can be overridden in platform_config table)
+# runtime_config keys (admin settings / platform_config table), not environment variables
 RSS_CORRELATION_SIMILARITY_THRESHOLD=0.40  # Lower for cross-lingual
 RSS_CORRELATION_TIME_WINDOW_HOURS=24       # News often lags Telegram
 MAX_ARTICLES_PER_MESSAGE=10
@@ -1655,17 +1669,9 @@ Translates non-English messages to English.
 **Translation Services**:
 
 1. **DeepL Pro** (primary): Superior RU/UK quality, 500k chars/month free
-2. **Google Translate** (fallback): Unlimited free tier
+2. **Google Translate** (fallback): used when DeepL fails with an error other than quota/rate-limit ("wait"); a quota or rate-limit error is not sent to Google
 
-```python
-# DeepL
-translator = deepl.Translator(auth_key)
-result = translator.translate_text(text, target_lang="EN-US")
-
-# Google Translate (fallback)
-translator = GoogleTranslator(source='auto', target='en')
-result = translator.translate(text)
-```
+Both go through the shared `translation/deepl_client.py` (`deepl_translate`, `google_translate`), the same client the other services use.
 
 **Query**:
 
@@ -1906,7 +1912,7 @@ SET discovery_count = channel_discovery_queue.discovery_count + 1,
 ```
 
 **Priority**: 50 (background maintenance)
-**Worker**: Maintenance Worker (database-scan pattern)
+**Worker**: Telegram Worker (database-scan pattern)
 
 #### Comment On-Demand
 
@@ -2485,7 +2491,7 @@ curl https://api-free.deepl.com/v2/usage \
 
 **Fallback**:
 
-- DeepL fails → Google Translate (unlimited free)
+- DeepL fails (non-quota error) → Google Translate; DeepL quota/rate-limit → wait, no Google
 - Both fail → Skip translation, log error
 
 ### Database Connection Pool Exhausted
@@ -2533,7 +2539,7 @@ MAX_OVERFLOW=10
 | `/services/enrichment/src/workers/cluster_detection_worker.py` | Cluster detection + archiver + tier updater (V3) |
 | `/services/enrichment/src/workers/cluster_validation_worker.py` | LLM cluster validation (V3) |
 
-### Task Files (38 modules)
+### Task Files (42 modules)
 
 | Task | File | Type |
 |------|------|------|
@@ -2560,8 +2566,12 @@ MAX_OVERFLOW=10
 | Forward Discovery | `/services/enrichment/src/tasks/forward_discovery.py` | Telegram |
 | Discovery Metrics Collector | `/services/enrichment/src/tasks/discovery_metrics_collector.py` | Telegram |
 | Discovery Evaluator | `/services/enrichment/src/tasks/discovery_evaluator.py` | Telegram |
+| Channel Join | `/services/enrichment/src/tasks/channel_join.py` | Telegram |
+| Channel Move | `/services/enrichment/src/tasks/channel_move.py` | Telegram |
+| Content Backfill | `/services/enrichment/src/tasks/content_backfill.py` | Telegram |
+| Media Retention Check | `/services/enrichment/src/tasks/media_retention_check.py` | Telegram |
+| Side Signal Fetch | `/services/enrichment/src/tasks/side_signal_fetch.py` | Telegram |
 | Event Status Updater | `/services/enrichment/src/tasks/event_status_updater.py` | CPU |
-| Decision Verifier | `/services/enrichment/src/tasks/decision_verifier.py` | CPU |
 | Decision Reprocessor | `/services/enrichment/src/tasks/decision_reprocessor.py` | CPU |
 | Channel Cleanup | `/services/enrichment/src/tasks/channel_cleanup.py` | CPU |
 | Quarantine Processor | `/services/enrichment/src/tasks/quarantine_processor.py` | CPU |

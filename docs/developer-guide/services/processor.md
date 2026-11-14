@@ -39,10 +39,9 @@ graph LR
 |------|------|---------|
 | `main.py` | - | Worker initialization and Redis consumer loop |
 | `redis_consumer.py` | - | Consumer-group reader over the realtime, backfill and legacy streams; auto-claim, dead letter queue (`dead_letter_queue.py`) |
-| `message_processor.py` | ~2,000 lines | Main orchestrator for the pipeline (with sub-steps) |
-| `llm_classifier.py` | ~1,750 lines | Unified (and modular) LLM classification: spam + topic + importance + enrichment fields |
+| `message_processor.py` | ~2,190 lines | Main orchestrator for the pipeline (with sub-steps) |
+| `llm_classifier.py` | ~1,900 lines | Unified (and modular) LLM classification: spam + topic + importance + enrichment fields |
 | `embedding_spam_filter.py` | - | Embedding spam / off-topic filter and LLM pre-filter |
-| `media_archiver.py` | - | Content-addressed storage with SHA-256 deduplication |
 | `media_lane.py`, `media_worker.py` | - | Optional background media download (`media-worker` service) |
 | `entity_matcher.py` | - | Semantic entity matching against `curated_entities` |
 | `entity_extractor.py` | - | Regex-based extraction (hashtags, mentions, coordinates) |
@@ -171,8 +170,11 @@ Results stored in `message_entities` junction table for network graph.
 2. Calculate SHA-256 hash
 3. Check if hash exists in `media_files` table
 4. **If exists**: Increment `reference_count`, skip upload (deduplication)
-5. **If new**: Upload to MinIO, create `MediaFile` record
+5. **If new**: Move the file into the local buffer, pick a storage box, compute the perceptual hash (dHash, at archive time), create the `MediaFile` record and queue a sync job; `media-sync` uploads it to the storage box (see [Media Sync](media-sync.md))
 6. Create `MessageMedia` relationship
+
+!!! note "Shared archiver"
+    `MediaArchiver` lives in `shared/python/media_archiver.py` (imported with `from media_archiver import MediaArchiver`), not in `services/processor/src/`. The processor and the `media-worker` use the same class. The storage box is the fixed `storage_box_id` when one is configured, otherwise `BoxSelector` picks one (round-robin within a usage band, capacity reserved per file); it falls back to `default`.
 
 **Storage Path**:
 
@@ -188,6 +190,8 @@ For grouped messages (Telegram albums), all media files are downloaded and linke
 **Video Processing**:
 
 Videos are processed with `ffmpeg -movflags +faststart` to enable progressive playback in browsers (moves moov atom to start).
+
+**Poster frame**: for every new video the archiver also writes a poster frame next to it, `{sha256}.poster.jpg` (`make_poster`). It is the `og:image` of the message's link-preview page and travels with the video: `media-sync` copies it right after the video, and media retention removes it with the video.
 
 ### 8. Database Persistence
 

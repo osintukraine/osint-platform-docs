@@ -64,10 +64,10 @@ PostgreSQL Database
 
 | File | Purpose | Lines |
 |------|---------|-------|
-| `src/main.py` | Service entry point, scheduler setup | 322 |
-| `src/engagement_poller.py` | Hourly engagement metric polling | 420 |
+| `src/main.py` | Service entry point, scheduler setup | 330 |
+| `src/engagement_poller.py` | Hourly engagement metric polling | 422 |
 | `src/view_refresher.py` | Daily aggregate rebuild and materialized view refresh | 295 |
-| `src/telethon_client.py` | Shared Telegram client (singleton, dedicated `analytics` / `analytics-<account>` session) | 132 |
+| `src/telethon_client.py` | Shared Telegram client (singleton, dedicated `analytics` / `analytics-<account>` session) | 134 |
 | `Dockerfile` | Container image definition | |
 | `requirements.txt` | Python dependencies | |
 

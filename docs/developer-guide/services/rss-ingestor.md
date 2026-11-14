@@ -319,7 +319,7 @@ CREATE INDEX idx_external_news_category ON external_news(source_category, publis
 
 !!! warning "Separation of Concerns"
 
-    The RSS-Ingestor **does not** perform correlations. This is handled by the **Enrichment Service** (`services/enrichment/src/tasks/rss_correlation_task.py`) for:
+    The RSS-Ingestor **does not** perform correlations. This is handled by the **Enrichment Service** (`services/enrichment/src/tasks/rss_correlation.py`) for:
 
     - **Proper separation**: Ingestion vs. analysis
     - **Bidirectional matching**: Messages can arrive after articles

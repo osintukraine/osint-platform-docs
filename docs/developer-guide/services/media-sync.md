@@ -68,6 +68,9 @@ graph TB
 | File | Purpose |
 |------|---------|
 | `src/worker.py` | Main worker implementation, queue processing |
+| `src/poster.py` | Video poster frames (`{sha256}.poster.jpg`): copied to the box right after the video |
+| `src/retention.py` | Daily media retention loop (age rotation and storage budget) |
+| `src/repair.py` | Operator repair CLI (`requeue-failed`, `buffer-reconcile`) |
 | `Dockerfile` | Container build definition |
 | `requirements.txt` | Python dependencies |
 
@@ -107,6 +110,8 @@ sequenceDiagram
 | `SYNC_MODE` | `filesystem` (copy to Hetzner mount) or `minio` (legacy). Compose sets it from `MEDIA_SYNC_MODE` | `filesystem` | No |
 | `HETZNER_MEDIA_PATH` | Destination mount (filesystem mode); the worker refuses to start if it is missing | `/mnt/hetzner-media/osint-media` | filesystem mode |
 | `WORKER_ID` | Worker identifier in logs | `sync-worker-<pid>` (compose: `media-sync-1`) | No |
+| `MEDIA_SYNC_ALLOW_LOCAL_BOX` | Allow the box path to sit on the same filesystem as the buffer. Off by default: the worker compares device ids and refuses to copy into a bare directory left behind by an unmounted box. Enable only when the "box" is deliberately a local disk | `false` | No |
+| `MEDIA_RETENTION_REPORT_DIR` | Where retention writes its CSV report | `/var/cache/osint-media-buffer/media-retention` | No |
 | `MINIO_ENDPOINT` | MinIO endpoint | `localhost:9000` | minio mode |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | MinIO credentials | `minioadmin` | minio mode |
 | `MINIO_BUCKET` | Target bucket (compose: `MINIO_BUCKET_NAME`) | `osint-media` | minio mode |
@@ -139,6 +144,40 @@ services:
 
 !!! danger "Critical: Same Buffer Path as Processor"
     The media-sync service MUST mount the same buffer path as the processor service.
+
+## Poster Frames
+
+For every new video the archiver writes a poster frame next to the buffer file, `{sha256}.poster.jpg` (see [Processor](processor.md)). It has no `media_files` row and no sync job of its own: `src/poster.py` (`carry_poster`) copies it to the storage box right after its video and drops the buffer copy. A poster failure is logged, never raised, because the video is already safe. Retention removes the poster together with its video.
+
+## Media Retention
+
+In `filesystem` mode the worker starts a retention loop (`src/retention.py`) that runs one pass a day at `media_retention_hour_utc` (UTC, default 3). Settings are admin runtime keys, re-read on every pass:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `media_retention_mode` | `off` | `off`, `dry_run` (report only) or `delete` |
+| `media_retention_hour_utc` | `3` | Hour of the daily pass |
+| `media_retention_max_age_days` | `365` | Remove files whose newest post is older than this (0 = no age rule) |
+| `media_retention_min_age_days` | `180` | Floor: the budget rule never removes younger media |
+| `media_storage_budget_gb` | `0` | Over this budget, remove the oldest eligible files down to 98 % (0 = age rule only) |
+
+Protected files are kept (private channels, posts in events or validated clusters, high importance, human-reviewed, bookmarked or commented, posts gone from Telegram, channels no account follows). Unless `media_retention_require_telegram_check` is off, a file is only removed after the Telegram worker of the owning account confirmed the post still carries its media.
+
+Each pass is a row in `media_retention_runs` plus a CSV of the removable files in `MEDIA_RETENTION_REPORT_DIR`. A removal moves the links to `message_media_expired`, marks the post's media `expired` (the frontend then shows the Telegram embed), sets `media_files.deleted_at` and unlinks the file (and its poster) from the box. Run `python -m src.retention --now` for an immediate report-only pass (nothing is deleted; it does nothing while the mode is `off`). Read a `dry_run` report before switching to `delete`.
+
+## Repair CLI
+
+Run inside the `media-sync` container (the only one with the buffer and the box mounted). Without `--apply` both commands only report:
+
+```bash
+# Jobs parked in media:sync:failed go back to media:sync:pending
+docker compose exec media-sync python -m src.repair requeue-failed [--apply]
+
+# Buffer files that never left the buffer: mark synced if already on the box, otherwise queue a sync job
+docker compose exec media-sync python -m src.repair buffer-reconcile [--min-age-hours 24] [--apply]
+```
+
+Run `requeue-failed` first and let `media:sync:pending` drain before `buffer-reconcile`.
 
 ## Multi-Box Storage Support
 
