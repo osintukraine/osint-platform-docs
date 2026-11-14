@@ -72,24 +72,26 @@ To save GPU time, the processor also skips the LLM for obvious spam: when a mess
 
 ## Prompt versions
 
-The classifier prompt lives in the `llm_prompts` table. Production runs **v12**, which asks the model for structured JSON output. Never edit a prompt in place: add a version, then flip `is_active`.
+The classifier prompt lives in the `llm_prompts` table. Production runs **v13** (migration 044: v12's structured JSON output plus keywords, entities, locations, urgency and sentiment in the same call). Never edit a prompt in place: add a version, then flip `is_active`.
 
-Activate v12 (migration 037 inserts it inactive) or roll back to v11:
+Activate v13 (migration 044 inserts it inactive) or roll back to v12:
 
 ```sql
--- activate v12
-UPDATE llm_prompts SET is_active = (version = 12)
+-- activate v13
+UPDATE llm_prompts SET is_active = (version = 13)
  WHERE task = 'message_classification' AND prompt_type = 'system';
 
--- roll back to v11
-UPDATE llm_prompts SET is_active = (version = 11)
+-- roll back to v12
+UPDATE llm_prompts SET is_active = (version = 12)
  WHERE task = 'message_classification' AND prompt_type = 'system';
 ```
 
 Run it with `docker compose exec postgres psql -U osint_user -d osint_platform`. Prompt history and design notes: [LLM_PROMPTS.md](https://github.com/osintukraine/osint-intelligence-platform/blob/master/docs/architecture/LLM_PROMPTS.md).
 
 !!! warning
-    v12 is written for a large model behind the gateway. Do not activate it with a small Ollama model.
+    v13 is written for a large model behind the gateway. Do not activate it with a small Ollama model.
+
+The modular classifier prompts (migration 048) and the v3 council prompts (migration 062 and the 063-067 follow-ups: classify_shared, screen/assess/enrich, narrative) are separate prompt sets, also inserted into `llm_prompts`; the single `message_classification` prompt above is the one this section switches.
 
 ## Using Ollama instead (no GPU)
 

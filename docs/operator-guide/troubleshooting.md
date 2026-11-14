@@ -1220,7 +1220,7 @@ docker compose exec postgres psql -U osint_user -d osint_platform -c "
    WHERE task = 'message_classification' AND is_active = true;
 "
 
-# Prompt v12 expects a large model with structured output; with a small Ollama model use an
+# Prompt v13 expects a large model with structured output; with a small Ollama model use an
 # older version. Switching: see "Prompt versions" in LLM Gateway and Providers.
 # Prompt design: docs/architecture/LLM_PROMPTS.md in the platform repo.
 

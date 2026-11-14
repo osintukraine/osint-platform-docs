@@ -202,9 +202,8 @@ docker compose exec postgres psql -U osint_user -d osint_platform
 # Check Redis queue depth
 docker compose exec redis redis-cli XLEN telegram:messages:realtime
 
-# Update and restart all services
-git pull origin master
-docker compose up -d --build
+# Update (pull, migrate, restart, health check)
+./scripts/deploy.sh --build                      # or --build-service NAME
 ```
 
 ## Support Resources

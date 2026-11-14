@@ -74,7 +74,7 @@ Each storage box has:
 #    the first box, /mnt/hetznerstorage)
 
 # 4. Start the new MinIO container(s) and reload Caddy
-docker-compose -f docker-compose.yml -f docker-compose.storage.yml up -d
+docker-compose -f docker-compose.yml -f docker-compose.storage.yml --profile multi-storage up -d
 docker-compose exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
@@ -223,8 +223,8 @@ df -h /mnt/hetzner/russia-2
 ### Step 6: Start New MinIO Container
 
 ```bash
-# Start with multi-storage profile
-docker-compose -f docker-compose.yml -f docker-compose.storage.yml up -d
+# Start with multi-storage profile (the generated MinIO services only start with --profile multi-storage)
+docker-compose -f docker-compose.yml -f docker-compose.storage.yml --profile multi-storage up -d
 
 # Verify container is running
 docker-compose -f docker-compose.yml -f docker-compose.storage.yml ps minio-russia-2
@@ -344,7 +344,7 @@ The enrichment service runs a storage health check every 5 minutes (`STORAGE_HEA
 
 ```bash
 # View health check logs
-docker-compose logs enrichment | grep storage_health
+docker-compose logs | grep storage_health  # there is no service named 'enrichment'; StorageHealthTask runs from the enrichment image
 
 # Check in database
 SELECT id, last_health_check,

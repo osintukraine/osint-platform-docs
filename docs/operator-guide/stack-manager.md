@@ -159,6 +159,8 @@ The authoritative list is in [Docker Services](../reference/docker-services.md#p
 | `tools` | NocoDB, MkDocs |
 | `multi-account` | Per Telegram account (russia, ukraine): listener, media-worker, enrichment-telegram, analytics (use `TELEGRAM_MODE=multi` / `scripts/switch-telegram-mode.sh`) |
 | `dr` | shadow-sync (disaster recovery) |
+| `backfill` | Backfill and gap-fill services (`processor-worker-backfill` and friends); required when `BACKFILL_ENABLED` or `GAP_DETECTION_ENABLED` is on |
+| `cloudflare` | CrowdSec Cloudflare bouncer |
 
 ## Environment Modes
 

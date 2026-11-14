@@ -33,6 +33,7 @@ Production updates use the deploy script, which pulls the code, applies pending 
 # --build-pytorch and --build-service can be combined: both sets are built
 ./scripts/deploy.sh --skip-health                      # skip the final health check
 ./scripts/deploy.sh --force-recreate                   # recreate containers even if nothing changed
+./scripts/deploy.sh --recreate-service prometheus      # also recreate named services (repeatable), e.g. after a bind-mounted config changed
 ./scripts/deploy.sh --quick      # pull and restart, skip migrations
 ```
 
@@ -86,7 +87,7 @@ Check what is applied:
 ./scripts/migrate.sh --status
 ```
 
-Migrations are numbered sequentially (currently up to the 058 series). `./scripts/migrate.sh --status` is the source of truth for what your database has; read the header of any pending migration before applying it, as large index builds are called out there. Migrations that insert a new classifier prompt version leave it inactive until you activate it (see [LLM Gateway](external-llm.md#prompt-versions)).
+Migrations are numbered sequentially (currently up to 078). `./scripts/migrate.sh --status` is the source of truth for what your database has; read the header of any pending migration before applying it, as large index builds are called out there. Migrations that insert a new classifier prompt version leave it inactive until you activate it (see [LLM Gateway](external-llm.md#prompt-versions)).
 
 ---
 
@@ -222,17 +223,14 @@ docker compose logs --tail=50 listener | grep -i "connected"
 
 ### Quick Rollback (Code Only)
 
+Roll back by reverting the release on `master` (a pull request, never a direct push), then deploying the result:
+
 ```bash
-# 1. Identify previous commit
-git log --oneline -10
-
-# 2. Revert to previous version
-git checkout <commit-hash>
-
-# 3. Rebuild and restart
-docker compose build
-docker compose up -d
+./scripts/deploy.sh --quick
 ```
+
+!!! warning "Do not `git checkout <hash>` on the server"
+    A detached HEAD breaks the next `deploy.sh` pull, and running bare `docker compose build/up` skips the deploy script's crash check.
 
 ### Full Rollback (With Data)
 
@@ -246,32 +244,39 @@ docker compose up -d postgres
 # Restore the dump made by backup.sh (see Backup & Restore)
 ./scripts/restore.sh backups/<timestamp>
 
-# 3. Revert code
-git checkout <previous-commit>
-
-# 4. Restart
-docker compose build
-docker compose up -d
+# 3. Revert the release on master (PR), then redeploy
+./scripts/deploy.sh --quick
 ```
 
 ### Emergency Procedures
 
-If upgrade causes critical failure:
+If an upgrade causes a critical failure:
 
 ```bash
-# 1. Immediate: Stop broken services
+# 1. Immediate: stop broken services
 docker compose stop
 
-# 2. Restore from backup
-git checkout <last-known-good>
-docker compose build
-docker compose up -d
+# 2. Revert the release on master (PR), then redeploy
+./scripts/deploy.sh --quick
 
 # 3. Investigate logs
 docker compose logs --tail=200 > incident-$(date +%Y%m%d).log
 
-# 4. Post-mortem: Document what went wrong
+# 4. Post-mortem: document what went wrong
 ```
+
+---
+
+## Compacting the Channels Table (Migration 077)
+
+Migration 077 sets `fillfactor=50` on `channels` and drops the `last_message_at` index to stop heap bloat. The already-bloated table is rewritten once with `scripts/compact-channels.sh` (`VACUUM FULL`, exclusive lock; messages wait in Redis, nothing is lost). Run it only with the owner's OK.
+
+```bash
+./scripts/compact-channels.sh            # up to 5 attempts, 20 s lock wait each
+./scripts/compact-channels.sh --pause    # stop lock-holding services first, restart on exit
+```
+
+`--pause` stops `processor-worker`, `processor-worker-backfill`, `enrichment-telegram` and `enrichment-cluster-detection` (long transactions on `channels`) so the lock is granted at once, and starts them again when the script exits.
 
 ---
 
