@@ -445,6 +445,21 @@ docker-compose logs media-sync | grep ERROR
 | `HETZNER_MOUNT_PATH` | empty (`./data/minio`) | MinIO data path on the box, e.g. `/mnt/hetznerstorage/osint-platform/minio`; the SSHFS mount itself is `/mnt/hetznerstorage` (no dashes!) |
 | `MEDIA_SYNC_MODE` | `filesystem` | media-sync destination: `filesystem` or `minio` |
 | `MEDIA_BUFFER_PATH` | `/var/cache/osint-media-buffer` | Local SSD buffer path |
+| `MEDIA_SYNC_ALLOW_LOCAL_BOX` | `false` | media-sync refuses to copy when the box path is on the same filesystem as the buffer (an unmounted box leaves a bare directory on the buffer's disk and would fill it). Set `true` only if the box path is deliberately local |
+
+### Media Retention Settings
+
+media-sync also runs a daily media retention pass, configured as admin settings (runtime keys, each with a `MEDIA_RETENTION_*` / `MEDIA_STORAGE_BUDGET_GB` environment fallback):
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `MEDIA_RETENTION_MODE` | `off` | `off`, `dry_run` (daily report only, nothing deleted) or `delete`. Read the latest dry-run report before switching to `delete` |
+| `MEDIA_RETENTION_MAX_AGE_DAYS` | `365` | Remove media whose newest post is older than this (if confirmed on Telegram and not protected); `0` = no age rule |
+| `MEDIA_RETENTION_MIN_AGE_DAYS` | `180` | Floor: the storage budget never removes media of younger posts |
+| `MEDIA_STORAGE_BUDGET_GB` | `0` | Platform media budget; above it the oldest media is removed first, down to 98 %. `0` = age rotation only |
+| `MEDIA_RETENTION_MAX_FILES_PER_RUN` | `2000` | Maximum files removed per daily pass |
+| `MEDIA_RETENTION_REQUIRE_TELEGRAM_CHECK` | `true` | Remove a file only after its posts were confirmed on Telegram with their media |
+| `MEDIA_RETENTION_HOUR_UTC` | `3` | Hour (UTC) of the daily pass |
 
 ## Security Considerations
 

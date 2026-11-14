@@ -105,7 +105,7 @@ http://localhost:3001
 Username: GRAFANA_ADMIN_USER (default: admin)
 Password: GRAFANA_ADMIN_PASSWORD (required; compose refuses to start without it)
 
-# The port is GRAFANA_PORT: .env.example sets 3001, the compose default is 3000
+# The port is GRAFANA_PORT (default 3001)
 ```
 
 **First Login Checklist:**
@@ -196,7 +196,7 @@ curl http://localhost:9100/metrics   # Node Exporter (host stats)
 curl http://localhost:9090/metrics   # Prometheus
 ```
 
-Which of these Prometheus actually scrapes is defined in `infrastructure/prometheus/prometheus.yml`: listener, processor (all replicas, via DNS discovery), processor-backfill, api, postgres, redis, minio, cadvisor, node, ntfy, alertmanager, notifier, and the enrichment workers ai-tagging, rss-validation, router, fast-pool, telegram, decision, maintenance and fact-check. The event-detection, geolocation-llm and cluster workers, and the extra listeners (`listener-russia`, `listener-ukraine`), are not in the file; add a `job_name` for any you want in Grafana. Check **Status -> Targets** in Prometheus.
+Which of these Prometheus actually scrapes is defined in `infrastructure/prometheus/prometheus.yml`: listener, processor (all replicas, via DNS discovery), processor-backfill, api, postgres, redis, minio, cadvisor, node, ntfy, alertmanager, notifier, enrichment workers ai-tagging, rss-validation, router, fast-pool, telegram, decision, maintenance and fact-check, the event-detection (9099), geolocation-llm (9210), cluster-detection (9211) and cluster-validation (9212) workers, `media-worker` (8003, also the `-russia`/`-ukraine` variants), `backlog-worker` (8004) and `backlog-enrich` / `backlog-reprocess` (8005). The `listener` job covers `listener`, `listener-russia` and `listener-ukraine` via DNS discovery. Check **Status -> Targets** in Prometheus.
 
 ---
 
@@ -673,10 +673,10 @@ increase(enrichment_messages_processed_total[30m]) == 0 and enrichment_queue_dep
 
 ## Alert Rules
 
-Alert rules are defined in `infrastructure/prometheus/rules/alerting_rules.yml` (about 90 alerts: service availability, pipeline, LLM, database, Redis, media, API, host, SLO burn rate, enrichment backlog, DLQ and Telegram account alerts). Recording rules (`osint:*` series) are in `recording_rules.yml`. Only files under `rules/` are loaded.
+Alert rules are defined in `infrastructure/prometheus/rules/alerting_rules.yml` (about 97 alerts: service availability, pipeline, LLM, database, Redis, media, API, host, SLO burn rate, enrichment backlog, DLQ and Telegram account alerts). Recording rules (`osint:*` series) are in `recording_rules.yml`. Only files under `rules/` are loaded.
 
-!!! warning "Known gap"
-    `RedisQueueDepthHigh/Critical` and `DLQGrowing/SizeHigh` query `redis_stream_length{stream="telegram_messages"}`, but the streams are named `telegram:messages:realtime` / `:backfill` and the Redis exporter is not started with stream checking. These alerts do not fire; `RedisQueueBacklog` and `RedisQueueGrowing` (on `osint_queue_messages_pending`) are the working queue alerts.
+!!! note "Redis stream alerts"
+    The Redis exporter runs with `REDIS_EXPORTER_CHECK_SINGLE_STREAMS` set to the realtime, backfill and DLQ streams, so `redis_stream_length` is exported. `RedisRealtimeBacklogHigh` / `RedisRealtimeBacklogCritical` watch the realtime stream, and `DLQGrowing` / `DLQSizeHigh` watch `stream="telegram:messages:dlq"`. `RedisQueueBacklog` and `RedisQueueGrowing` (on `osint_queue_messages_pending`) are the other queue alerts.
 
 ### Viewing Active Alerts
 

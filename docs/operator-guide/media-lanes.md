@@ -31,7 +31,7 @@ The `messages` rows are the queue; there is no separate Redis stream, so no job 
 
 ## Telegram embeds
 
-When a message has media that is not archived (pending, failed, unavailable, or lost with old storage) and its channel is public, the feed shows the original post as an embedded Telegram post instead of "No media", with a link to open it on Telegram. Embeds load content from `t.me` in the viewer's browser. The reverse proxy must allow framing it: the Caddyfiles in `infrastructure/caddy/` already include `https://t.me` in `frame-src`.
+When a message has media that is not archived (pending, failed, unavailable, or lost with old storage) and its channel is public, the feed shows the original post as an embedded Telegram post instead of "No media", with a link to open it on Telegram. Embeds load content from `t.me` in the viewer's browser. The reverse proxy must allow framing it: `Caddyfile.production` and `Caddyfile.security` in `infrastructure/caddy/` already include `https://t.me` in `frame-src`; the `.ory` and `.local` variants do not, so add it there if you embed posts.
 
 ## Checking the queue
 
