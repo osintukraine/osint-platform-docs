@@ -125,7 +125,7 @@ Browser Request: GET /media/ab/cd/abcd1234.jpg
 - Instant browser access for newly uploaded media
 - Staging area before async sync to Hetzner
 
-**Code** (`services/processor/src/media_archiver.py`):
+**Code** (`shared/python/media_archiver.py`):
 ```python
 # Constants
 MEDIA_BUFFER_PATH = os.environ.get("MEDIA_BUFFER_PATH", "/var/cache/osint-media-buffer")
@@ -156,15 +156,16 @@ def _get_local_buffer_path(self, sha256: str, extension: str) -> Path:
 
 **Failed Queue**: `media:sync:failed` (after 3 retries, or immediately on a storage configuration error). `retry_count` is added by the worker when it re-queues a job.
 
-**Code** (`services/processor/src/media_archiver.py`):
+**Code** (`shared/python/media_archiver.py`):
 ```python
-async def _queue_sync_job(self, sha256: str, s3_key: str, local_path: str, file_size: int):
+async def _queue_sync_job(self, sha256: str, s3_key: str, local_path: str, file_size: int,
+                          storage_box_id: Optional[str] = None):
     """Queue a media file for background sync to Hetzner storage."""
     job = {
         "sha256": sha256,
         "s3_key": s3_key,
         "local_path": local_path,
-        "storage_box_id": self.storage_box_id,
+        "storage_box_id": storage_box_id or self.storage_box_id or "default",
         "file_size": file_size,
         "queued_at": datetime.utcnow().isoformat(),
     }
@@ -317,11 +318,27 @@ local_path TEXT,                             -- Path in local buffer (until sync
 last_accessed_at TIMESTAMP WITHOUT TIME ZONE,
 access_count INTEGER DEFAULT 0,
 phash_image BIGINT, phash_video BIGINT,      -- perceptual hashes for duplicate detection
+-- Media retention (migration 060)
+deleted_at TIMESTAMP WITH TIME ZONE,         -- removed from the storage box; row kept (dedup, history)
+retention_state VARCHAR(20),                 -- check_pending | live | gone | unchecked
+retention_checked_at TIMESTAMP WITH TIME ZONE,
 
 -- Indexes
 CREATE INDEX idx_media_files_pending_sync ON media_files(synced_at) WHERE synced_at IS NULL;
 CREATE INDEX idx_media_files_storage_box ON media_files(storage_box_id);
 ```
+
+### Media retention
+
+The media-sync service (`services/media-sync/src/retention.py`) runs a daily retention pass: files whose newest post is older than `media_retention_max_age_days`, or the oldest files once platform media exceeds `media_storage_budget_gb`, become removable. Protected files are kept (private channels, posts in events or validated clusters, high importance, human-reviewed, bookmarked or commented, gone from Telegram). Before deleting, the Telegram worker of the owning account checks that the newest post still carries its media (`media_files.retention_state`: `check_pending`, `live`, `gone`, `unchecked`).
+
+- `media_retention_mode` is `off`, `dry_run` (selection, checks and report only) or `delete`.
+- Every pass is a row in `media_retention_runs` plus a CSV report (`GET /api/admin/media/retention/report`).
+- Removed files get `media_files.deleted_at`; their `message_media` links move to `message_media_expired`, and the frontend shows the Telegram embed instead.
+
+### Video poster frames
+
+`make_poster()` in `shared/python/media_archiver.py` writes a `<name>.poster.jpg` frame next to each archived video (ffmpeg) before the sync job is queued, so it travels with the video. Message pages use it as the `og:image` for link previews.
 
 ## API Endpoints
 
@@ -597,7 +614,7 @@ storage_boxes_unhealthy_total
 
 ### Custom Storage Box Selection
 
-`MediaArchiver._select_storage_box(session, file_size)` (`services/processor/src/media_archiver.py`) returns a fixed box when `storage_box_id` is set, otherwise asks `BoxSelector.get_box_for_file(session, file_size, region=self.account_region)` and falls back to `"default"` on error. To change the policy, adjust `BoxSelector` (`shared/python/storage/box_selector.py`) rather than the archiver.
+`MediaArchiver._select_storage_box(session, file_size)` (`shared/python/media_archiver.py`) returns a fixed box when `storage_box_id` is set, otherwise asks `BoxSelector.get_box_for_file(session, file_size, region=self.account_region)` and falls back to `"default"` on error. To change the policy, adjust `BoxSelector` (`shared/python/storage/box_selector.py`) rather than the archiver.
 
 ### Cache Warming
 

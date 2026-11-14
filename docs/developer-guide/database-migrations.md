@@ -40,7 +40,7 @@ This mirrors industry standards used by GitLab, Mastodon, and other mature platf
 - Creates all tables, indexes, constraints
 - Defines all functions and triggers
 - Inserts seed data (prompts, slang, etc.)
-- ~7,200 lines (complete schema)
+- ~7,800 lines (complete schema)
 - Used for fresh deployments
 
 ### Migration Files
@@ -48,7 +48,7 @@ This mirrors industry standards used by GitLab, Mastodon, and other mature platf
 **`infrastructure/postgres/migrations/`**
 
 - `000_template.sql` - Template for new migrations
-- `001_*.sql` ... `058_*.sql` (and counting) - Incremental migrations. Numeric prefixes are not unique (there are several `002_*` and `012_*` files), so the *file name* is the identity
+- `001_*.sql` ... `078_*.sql` (and counting) - Incremental migrations. Numeric prefixes are not unique (there are several `002_*` and `012_*` files), so the *file name* is the identity
 - `README.md` - Migration workflow documentation
 
 ### Migration Tracking
@@ -57,7 +57,7 @@ This mirrors industry standards used by GitLab, Mastodon, and other mature platf
 
 ```sql
 CREATE TABLE schema_migrations (
-    version VARCHAR(50) PRIMARY KEY,      -- file name without .sql, e.g. '058_messages_pending_enrichment_indexes'
+    version VARCHAR(50) PRIMARY KEY,      -- file name without .sql, e.g. '078_decision_log_keeps_dropped_posts'
     description TEXT NOT NULL,            -- Human-readable description
     applied_at TIMESTAMPTZ DEFAULT NOW(), -- When applied
     checksum VARCHAR(64),                 -- Optional integrity check
@@ -107,15 +107,15 @@ Use the migration system:
 
 ```bash
 cd infrastructure/postgres/migrations
-# Take the next free number: ls | tail -3  (currently 058, so use 059)
-cp 000_template.sql 059_add_user_preferences.sql
+# Take the next free number: ls | tail -3  (currently 078, so use 079)
+cp 000_template.sql 079_add_user_preferences.sql
 ```
 
 ### Step 2: Edit the Migration
 
 ```sql
 -- ============================================================================
--- Migration: 059 - Add user preferences table
+-- Migration: 079 - Add user preferences table
 -- ============================================================================
 -- Date: 2026-10-28
 -- Author: your name
@@ -162,7 +162,7 @@ COMMIT;
 --
 -- DROP TABLE IF EXISTS user_preferences;
 --
--- DELETE FROM schema_migrations WHERE version = '059_add_user_preferences';
+-- DELETE FROM schema_migrations WHERE version = '079_add_user_preferences';
 --
 -- COMMIT;
 ```
@@ -227,10 +227,10 @@ docker-compose up -d postgres
 
 # Test migration path (simulate production)
 docker-compose exec postgres psql -U osint_user -d osint_platform \
-  -c "DELETE FROM schema_migrations WHERE version = '059_add_user_preferences'"
-./scripts/migrate.sh --dry-run  # Should list 059
+  -c "DELETE FROM schema_migrations WHERE version = '079_add_user_preferences'"
+./scripts/migrate.sh --dry-run  # Should list 079
 ./scripts/migrate.sh            # Apply it
-./scripts/migrate.sh --status   # Should list 059 again
+./scripts/migrate.sh --status   # Should list 079 again
 ```
 
 ---
@@ -434,9 +434,9 @@ docker-compose up -d
 Use the next three-digit number (check `ls infrastructure/postgres/migrations | tail`). Early migrations reused prefixes; do not.
 
 ```
-057_analytics_daily_summary_unique.sql
-058_messages_pending_enrichment_indexes.sql
-059_your_change.sql
+077_channels_table_bloat.sql
+078_decision_log_keeps_dropped_posts.sql
+079_your_change.sql
 ```
 
 ### Naming Conventions

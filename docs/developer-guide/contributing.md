@@ -280,7 +280,7 @@ Documentation lives in the `osint-platform-docs` repository; code-adjacent notes
 
 ### Automated Checks
 
-Run these locally before opening a PR (the repository has no CI workflow checked in):
+`.github/workflows/tests.yml` runs five test jobs on every pull request and push (see [Testing Guide](testing-guide.md#continuous-integration)). CI runs **tests only**: there is no lint or type-check job, so run these locally before opening a PR:
 
 - Linting (`ruff`, ESLint)
 - Type checking (`mypy`, `tsc --noEmit`)

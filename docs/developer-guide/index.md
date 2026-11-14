@@ -175,7 +175,7 @@ async def process_message(
 
 ### TypeScript
 
-- **Style**: ESLint + Prettier
+- **Style**: `next lint` (ESLint); types checked with `tsc --noEmit`
 - **Types**: Strict mode enabled
 - **Components**: Functional with hooks
 
@@ -199,7 +199,7 @@ refactor(enrichment): simplify task registration
 **IDE**: VS Code with extensions:
 - Python (ms-python.python)
 - Pylance (type checking)
-- ESLint + Prettier (frontend)
+- ESLint (frontend)
 - Docker (ms-azuretools.vscode-docker)
 
 ### Environment Variables
