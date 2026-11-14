@@ -127,7 +127,7 @@ All Telegram messages after spam filtering.
 - `admin_hidden`, `admin_importance_override`, `admin_topic_override`, `admin_notes` (+ `*_at`/`*_by`): moderator actions from the admin sidebar (migration 027)
 - `duplicate_of_message_id`, `duplicate_confidence`, `duplicate_reason`: perceptual-hash duplicate detection (migration 028; see `duplicate_clusters`)
 - `deleted_at`, `deleted_by`, `deletion_reason`: soft delete
-- `is_hidden`, `hidden_reason`, `hidden_at`, `hidden_by`: hide state used by fact-check and the spam re-check (`off_topic`); defined in `init.sql` (partial index `idx_messages_hidden`)
+- `is_hidden`, `hidden_reason`, `hidden_at`, `hidden_by`: hide state set by fact-check's off-topic auto-hide (`admin_hidden` is the separate owner-moderation flag). The backlog spam re-check no longer hides off-topic posts — it drops them (owner 2026-11-14, a post is archived or dropped, never hidden). Defined in `init.sql` (partial index `idx_messages_hidden`)
 
 **Important Indexes**:
 - `idx_messages_topic_pending` (partial, `WHERE osint_topic = 'pending'`) - backlog worker (migration 038)

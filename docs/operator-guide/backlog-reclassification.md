@@ -29,10 +29,13 @@ Two passes, each newest first:
 1. **Spam re-check** (when `backlog_spam_first` is on). Each message flagged as spam is judged again and the verdict is applied:
     - still spam: stays spam;
     - not spam and Ukraine-relevant: `spam_review_status` is set to `requeued` and the post is sent back through the whole pipeline (backfill stream: classified again, translated, media queued, tagged), so it needs the [`backfill` profile](processing-modes.md#backfill-processing) to be running;
-    - not spam and not Ukraine-relevant: `is_spam` is cleared and the message is hidden with reason `off_topic`.
+    - not spam and not Ukraine-relevant: the archived post is **dropped** (deleted). Owner decision (2026-11-14): a post is archived or dropped, never kept hidden. The verdict is still recorded in `message_reclassifications`, and the post's `decision_log` rows survive the delete (`message_id` FK `ON DELETE SET NULL`, migration 078).
 2. **Pending pass.** Messages with `osint_topic = 'pending'` get a topic and importance. It is skipped while `backlog_reprocess_enabled` is on (the reprocess job covers it); the spam re-check then runs every 10 minutes.
 
-Every verdict (spam, relevance, archive decision, analysis text, model, prompt) is stored in the `message_reclassifications` table, so you can review what the LLM decided. Apart from the cases above, already archived posts are not hidden or un-hidden by this worker.
+Every verdict (spam, relevance, archive decision, analysis text, model, prompt) is stored in the `message_reclassifications` table, so you can review what the LLM decided. This worker never hides posts: its only removal is the off-topic drop above; otherwise an already-archived post is left in place.
+
+!!! note "One-time cleanup of posts hidden under the old policy"
+    Posts the platform kept hidden before this policy change (system "don't archive" hides and low-value Discover/Rec posts) are removed once with `./scripts/drop-posts.sh` (`--apply` after a dry run; it backs up the list and deletes in resumable batches). Protected posts — owner-moderated (`admin_hidden`), human-hidden, human-reviewed, in a validated event, bookmarked or commented — are never dropped. Fact-check's off-topic auto-hide and admin moderation still use `is_hidden`.
 
 If the LLM is unavailable the worker writes nothing; the chunk is retried and skipped after three tries.
 
