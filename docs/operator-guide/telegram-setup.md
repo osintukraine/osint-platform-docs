@@ -344,15 +344,17 @@ The platform uses Telegram app folders to organize and manage channels. No datab
 - `Archive-Ukraine` - 15 chars ❌
 - `Monitor-Important` - 17 chars ❌
 
-### Channel affiliation from the folder suffix
+### Channel affiliation (side) — owner-decided, from curated folders
 
-The suffix after the tier sets the channel's **side**. On every folder sync the suffix writes `channels.affiliation` (migration 070, #511):
+A channel's **side** (`channels.affiliation`) is the owner's decision, not discovery's guess (side model v2, migrations 071–073). Only the **curated** `Archive-*` and `Monitor-*` folders set it, by their suffix, on every folder sync:
 
-- `-RU` → `russia` (e.g. `Archive-RU`, `Monitor-RU`, `Discover-RU`)
-- `-UA` → `ukraine` (e.g. `Archive-UA`, `Monitor-UA`, `Discover-UA`)
-- no side (`-?`, e.g. `Discover-?`, `Rec-?`) → the channel keeps whatever affiliation the admin UI has set; the sync does not overwrite it.
+- `-RU` → `russia` (e.g. `Archive-RU`, `Monitor-RU`)
+- `-UA` → `ukraine` (e.g. `Archive-UA`, `Monitor-UA`)
+- `-?` (e.g. `Monitor-?`) → no side
 
-Affiliation is what the map colours a channel by, and it drives the **cross-affiliation** step in event-cluster tiers (a cluster seen from both `russia` and `ukraine` channels reaches `unconfirmed`; see [Map API](../developer-guide/map-api.md)). Because the folder is the source of truth, moving a channel between `-RU` and `-UA` folders re-sides it on the next sync.
+`Discover-*` and `Rec-*` folders are discovery's **guess**, not an attribution — they set **no** side. A channel stays side-less until the owner curates it (moves it into an `Archive-*`/`Monitor-*` folder) or accepts a proposal on the **Side Review** admin page (`/admin/side-review`). Where a side came from is recorded in `channels.affiliation_source` (`folder` | `review` | `admin`), and an owner-decided side (`review`/`admin`) is **never** overwritten by a folder sync. Migration 071 cleared all previously-guessed sides.
+
+The side values are `ukraine`, `russia`, `opposition` (anti-Kremlin Russian or Belarusian sources — not Ukrainian, not Kremlin) and `unknown` (`neutral` is a legacy value, dropped from new side reviews). Side drives the map's channel colours and the **cross-affiliation** step in event-cluster tiers (a cluster seen from both `russia` and `ukraine` channels reaches `unconfirmed`; `opposition` is not counted there — see [Map API](../developer-guide/map-api.md)).
 
 ### Creating Folders in Telegram
 
@@ -511,8 +513,9 @@ flowchart LR
 
 - **Auto-join**: from forward chains, only when `channel_joins_enabled` is on
 - **Probation period**: 7 days, started once the channel has 30+ messages
-- **Auto-promotion** (to a `Monitor-<country>` folder): 100+ messages, under 15% spam and under 30% off-topic
-- **Auto-rejection** (channel left): over 50% spam or over 70% off-topic
+- **Evaluation is a recommendation only** (manual promotion, migration 075): after probation the evaluator sets `discovery_status` to `recommended` (passed) or `recommended_reject` (failed). **Nothing moves automatically.**
+- **Promotion** is the operator's manual step — move the channel in Telegram to an `Archive-*`/`Monitor-*` folder, or call `POST /api/admin/channels/{id}/move` (targets `Archive-UA/RU`, `Monitor-UA/RU/?`). The move is queued on the Telegram worker (`channel_move`); the next folder sync then sets the folder, rule, active flag and side. Only channels the connected account follows can be moved.
+- **Removal** of a `recommended_reject` channel is likewise manual (take it out of its Discover folder).
 
 **Discovery Sources**:
 
@@ -547,6 +550,9 @@ The platform discovers new channels through two mechanisms:
 | `Rec-RU` | Recommendations | Russian channels |
 | `Rec-?` | Recommendations | Uncertain - needs human review |
 
+!!! note "The Discover-/Rec- suffix is a guess, not a side"
+    The `-UA`/`-RU` suffix on a `Discover-*`/`Rec-*` folder is the 3-round detector's **guess**, used only to route the channel for review — it is **not** an attribution and sets no `channels.affiliation`. A channel only gets a side once the owner curates it into an `Archive-*`/`Monitor-*` folder or accepts a Side Review proposal (see [Channel affiliation](#channel-affiliation-side-owner-decided-from-curated-folders)).
+
 !!! warning "Recommendation Discovery is One-Time"
     When a channel is discovered via forwards, the platform fetches up to **3 recommendations** from Telegram's "Similar Channels" feature. This is a one-time expansion - recommendations don't trigger more recommendations (prevents infinite loops).
 
@@ -558,9 +564,9 @@ The platform discovers new channels through two mechanisms:
 4. Fetches top 3 Telegram recommendations for that channel
 5. For each recommendation: runs 3-round detection → adds to `Rec-{country}` folder
 6. Monitors with the Monitor-tier importance floor; probation (7 days) starts once the channel has 30+ messages
-7. **Decision after probation**:
-   - **Active + valuable**: Promoted to a `Monitor-<country>` folder (or move it to `Archive-*` yourself)
-   - **Spam or off-topic**: Channel is left and marked for removal
+7. **Decision after probation** (recommendation only — the operator acts):
+   - **Active + valuable**: marked `recommended`; you promote it by moving it to an `Archive-*`/`Monitor-*` folder (or `POST /api/admin/channels/{id}/move`)
+   - **Spam or off-topic**: marked `recommended_reject`; you remove it from its Discover folder
 
 **View discovery candidates**:
 

@@ -20,7 +20,7 @@ A **Telegram channel** is a broadcast medium where administrators post messages 
 **Processing Rules**:
 - `Archive-*` folders → Archive all messages (after spam filter)
 - `Monitor-*` folders → Archive only more important messages (low importance is never archived)
-- `Discover-*` folders → Channels found through forwards; evaluated for about a week, then promoted to a Monitor folder or dropped
+- `Discover-*` folders → Channels found through forwards; evaluated for about a week, after which the evaluator **recommends** keeping or dropping them — the operator then promotes (moves to a Monitor/Archive folder) or removes them by hand
 
 ### Message
 
@@ -109,7 +109,7 @@ An **entity** is a named thing extracted from messages: person, organization, lo
 : Folder pattern: `Monitor-*`
 
 **discovery**
-: Auto-joined channels on probation (about a week once 30+ messages have arrived). Promoted or rejected based on spam and off-topic rate.
+: Auto-joined channels on probation (about a week once 30+ messages have arrived). After probation the evaluator **recommends** (keep or drop) based on spam and off-topic rate; the operator makes the actual promotion or removal.
 : Folder pattern: `Discover-*`
 
 ### Content-Addressed Storage
