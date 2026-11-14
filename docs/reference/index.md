@@ -228,14 +228,15 @@ Settings with a runtime key (admin page **Admin, Config, Platform Settings**) ar
 
 ## Schema Management
 
-**No Alembic migrations.** Fresh installs build the schema from `infrastructure/postgres/init.sql`. Running databases are updated with numbered SQL files in `infrastructure/postgres/migrations/` (applied by hand with `psql`, recorded in `schema_migrations`). Every schema change goes into both places:
+**No Alembic migrations.** Fresh installs build the schema from `infrastructure/postgres/init.sql`. Running databases are updated with numbered SQL files in `infrastructure/postgres/migrations/` (applied with `scripts/migrate.sh`, which `scripts/deploy.sh` runs for you, and recorded in `schema_migrations`). Every schema change goes into both places:
 
 1. Add `infrastructure/postgres/migrations/NNN_description.sql` (UP and DOWN sections)
 2. Mirror the change in `init.sql` for future installs
 3. Apply to an existing database:
    ```bash
-   docker compose exec -T postgres psql -U osint_user -d osint_platform \
-     < infrastructure/postgres/migrations/NNN_description.sql
+   ./scripts/migrate.sh --dry-run   # list pending migrations
+   ./scripts/migrate.sh             # apply them
+   ./scripts/migrate.sh --status    # show migration status
    ```
 
 Recreating the database (`docker compose down`, remove the `postgres_data` volume) is only for throwaway development setups.
