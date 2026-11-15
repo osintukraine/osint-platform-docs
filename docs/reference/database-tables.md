@@ -585,7 +585,7 @@ Configurable thresholds for event detection.
 **Default Values**:
 - `breaking_to_developing_hours`: 2
 - `developing_to_confirmed_rss`: 1
-- `confirmed_to_verified_rss`: 3 (legacy value; the tier functions promote to verified at 2+ independent RSS sources, see Tiered Event Validation)
+- `confirmed_to_verified_rss`: 3 (legacy key; `event_status_updater` maps it to `confirmed_to_verified_sources`, the **event** verified threshold for `events.tier_status` — code default 5 when unset). Telegram clusters are promoted separately (verified at 2+ independent RSS outlets or a human; see Tiered Event Validation)
 - `auto_archive_inactive_days`: 7
 - `cluster_min_channels`: 3
 - `cluster_time_window_hours`: 2
